@@ -13,10 +13,11 @@ __all__ = [
     "flutter_version",
     "from_git",
     "pyodide_version",
+    "version",
 ]
 
-# set by CI
-flet_version = ""
+# set by CI in official builds; overridden locally for development/testing
+flet_version = "0.69.0+epyx-dev"
 """
 The Flet version in use.
 
@@ -138,4 +139,6 @@ def get_flutter_version() -> str:
 flutter_version = get_flutter_version()
 pyodide_version = PYODIDE_VERSION
 flet_version = get_flet_version()
+# Backwards-compatible name expected by callers: ft.version.version
+version = flet_version
 __version__ = flet_version
