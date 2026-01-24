@@ -73,7 +73,11 @@ dependencies:
   flet_charts:
     path: ../sdk/python/packages/flet-charts/src/flutter/flet_charts
 
+  flet_supertab:
+    path: ../sdk/python/packages/flet-supertab/src/flutter/flet_supertab
+
   cupertino_icons: ^1.0.6
+  syncfusion_flutter_core: any
   wakelock_plus: ^1.4.0
   package_info_plus: ^9.0.0
 

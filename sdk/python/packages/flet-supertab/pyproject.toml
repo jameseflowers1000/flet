@@ -1,0 +1,36 @@
+[project]
+name = "flet-supertab"
+version = "0.1.0"
+description = "SuperTab control for Flet"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [
+    { name = "Flet contributors", email = "you@example.com" }
+]
+dependencies = [
+    "flet",
+]
+
+[dependency-groups]
+dev = [
+    "flet[all]",
+    "mkdocs", 
+    "mkdocs-material",
+    "mkdocstrings[python]"
+]
+
+[project.urls]
+Homepage = "https://mydomain.dev"
+Documentation = "https://github.com/MyGithubAccount/flet-supertab"
+Repository = "https://github.com/MyGithubAccount/flet-supertab"
+Issues = "https://github.com/MyGithubAccount/flet-supertab/issues"
+
+[tool.setuptools.package-data]
+"flutter.flet_supertab" = ["**/*"]
+
+[tool.setuptools]
+license-files = []
+
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"

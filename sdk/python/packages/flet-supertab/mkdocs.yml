@@ -1,0 +1,7 @@
+site_name: SuperTab
+
+theme:
+  name: "material"
+
+plugins:
+  - mkdocstrings

@@ -21,6 +21,8 @@ import 'package:flet_webview/flet_webview.dart' as flet_webview;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_web_plugins/url_strategy.dart';
+import 'package:flet_supertab/flet_supertab.dart' as flet_supertab;
+import 'package:syncfusion_flutter_core/core.dart';
 
 const bool isProduction = bool.fromEnvironment('dart.vm.product');
 
@@ -35,6 +37,8 @@ void main([List<String>? args]) async {
   await setupDesktop();
 
   WidgetsFlutterBinding.ensureInitialized();
+  // Ignore for now,  Syncfusion docs say no key is needed here
+  // SyncfusionLicense.registerLicense("<YOUR LICENSE KEY>");
   List<FletExtension> extensions = [
     flet_audio_recorder.Extension(),
     flet_geolocator.Extension(),
@@ -47,6 +51,8 @@ void main([List<String>? args]) async {
     flet_flashlight.Extension(),
     flet_datatable2.Extension(),
     flet_charts.Extension(),
+    // NEW:
+    flet_supertab.Extension(),
   ];
 
   // --FAT_CLIENT_START--

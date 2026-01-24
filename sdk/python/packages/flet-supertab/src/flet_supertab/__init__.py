@@ -1,0 +1,1 @@
+from flet_supertab.flet_supertab import SuperTab
