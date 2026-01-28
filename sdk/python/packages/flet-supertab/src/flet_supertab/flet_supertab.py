@@ -8,13 +8,21 @@ import flet as ft
 @ft.control("flet_supertab")
 class SuperTab(ft.LayoutControl):
     """
-    Read-only Supertab DataGrid-like control powered by Syncfusion under the hood.
+    Supertab DataGrid-like control powered by Syncfusion under the hood.
+
+    Supports inline cell editing when `editable=True`.
     """
 
     # JSON-encoded column definitions
     columns: Optional[str] = field(default=None, metadata={"data_field": "columns"})
     # JSON-encoded rows
     rows: Optional[str] = field(default=None, metadata={"data_field": "rows"})
+    # Enable inline editing
+    editable: bool = False
+
+    # Event: called when a cell is edited
+    # Event data (in e.data as JSON): {"row_index": int, "column_name": str, "old_value": str, "new_value": str}
+    on_cell_edit: Optional[ft.ControlEventHandler["SuperTab"]] = None
 
     # Internal storage for the actual list data
     _columns_data: list[dict[str, Any]] = field(default_factory=list, repr=False, metadata={"skip": True})
