@@ -8,7 +8,6 @@ readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
     "flet-cli; extra == 'cli'",
-    "flet-desktop; extra == 'desktop' and (platform_system == 'Darwin' or platform_system == 'Windows')",
     "flet-web; extra == 'web'",
     "oauthlib >=3.2.2; platform_system != 'Pyodide'",
     "httpx >=0.28.1; platform_system != 'Pyodide'",
@@ -23,9 +22,17 @@ Repository = "https://github.com/flet-dev/flet"
 Documentation = "https://docs.flet.dev/"
 
 [project.optional-dependencies]
-all = ["flet-cli", "flet-desktop", "flet-web"]
+all = [
+    "flet-cli",
+    "flet-web",
+    "flet-desktop; platform_system == 'Darwin' or platform_system == 'Windows'",
+    "flet-desktop-light; platform_system == 'Linux'",
+]
 cli = ["flet-cli"]
-desktop = ["flet-desktop"]
+desktop = [
+    "flet-desktop; platform_system == 'Darwin' or platform_system == 'Windows'",
+    "flet-desktop-light; platform_system == 'Linux'",
+]
 web = ["flet-web"]
 
 [project.scripts]
@@ -44,6 +51,7 @@ extensions = [
     "flet-map",
     "flet-permission-handler",
     "flet-rive",
+    "flet-secure-storage",
     "flet-video",
     "flet-webview",
 ]
@@ -99,6 +107,14 @@ all = [
 [build-system]
 requires = ["setuptools"]
 build-backend = "setuptools.build_meta"
+
+[tool.setuptools.package-data]
+flet = [
+    "controls/material/icons.json",
+    "controls/material/icons.pyi",
+    "controls/cupertino/cupertino_icons.json",
+    "controls/cupertino/cupertino_icons.pyi",
+]
 
 [tool.uv.sources]
 mkdocs-external-images = { git = "https://github.com/flet-dev/mkdocs-external-images", tag = "v0.2.0" }
