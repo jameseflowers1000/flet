@@ -1,4 +1,5 @@
 import 'dart:math' as math;
+import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
@@ -288,13 +289,27 @@ class ChartPainter extends CustomPainter {
       paint.isAntiAlias = true;
     }
 
-    // Build path from data points
+    // Apply LTTB decimation when point count exceeds threshold.
+    // Target ~2x chart pixel width for high visual fidelity.
+    final targetPoints = (_chartClip.width * 2).toInt().clamp(100, 10000);
+    final xValues = data.xValues;
+    final yValues = data.yValues;
+    final int pointCount = data.length;
+
+    // Get decimated indices (or null if no decimation needed)
+    final indices = pointCount > targetPoints
+        ? _lttbDecimate(xValues, yValues, pointCount, targetPoints)
+        : null;
+    final int drawCount = indices?.length ?? pointCount;
+
+    // Build path from (decimated) data points
     final path = Path();
     bool started = false;
 
-    for (int i = 0; i < data.length; i++) {
-      final x = _dataToScreenX(data.xValues[i]);
-      final y = _dataToScreenY(data.yValues[i]);
+    for (int i = 0; i < drawCount; i++) {
+      final idx = indices?[i] ?? i;
+      final x = _dataToScreenX(xValues[idx]);
+      final y = _dataToScreenY(yValues[idx]);
 
       // Skip points outside plot area (basic culling)
       if (x < _plotArea.left - 10 || x > _plotArea.right + 10) continue;
@@ -312,6 +327,82 @@ class ChartPainter extends CustomPainter {
     canvas.clipRect(_chartClip);
     canvas.drawPath(path, paint);
     canvas.restore();
+  }
+
+  /// LTTB (Largest Triangle Three Buckets) downsampling algorithm.
+  ///
+  /// Reduces [dataLength] points to [targetCount] while preserving visual shape.
+  /// Returns a list of indices into the original data arrays.
+  /// Reference: Steinarsson 2013 MSc thesis.
+  List<int> _lttbDecimate(
+    Float64List xValues,
+    Float64List yValues,
+    int dataLength,
+    int targetCount,
+  ) {
+    if (targetCount >= dataLength || targetCount < 3) {
+      return List<int>.generate(dataLength, (i) => i);
+    }
+
+    final result = List<int>.filled(targetCount, 0);
+    result[0] = 0; // Always keep first point
+    result[targetCount - 1] = dataLength - 1; // Always keep last point
+
+    // Bucket size for the middle points
+    final double bucketSize = (dataLength - 2) / (targetCount - 2);
+
+    int prevSelectedIndex = 0;
+
+    for (int bucket = 1; bucket < targetCount - 1; bucket++) {
+      // Current bucket range
+      final int bucketStart = ((bucket - 1) * bucketSize).floor() + 1;
+      final int bucketEnd = (bucket * bucketSize).floor() + 1;
+      final int actualEnd = bucketEnd < dataLength ? bucketEnd : dataLength - 1;
+
+      // Calculate average point of the NEXT bucket (for triangle area)
+      final int nextBucketStart = (bucket * bucketSize).floor() + 1;
+      final int nextBucketEnd = ((bucket + 1) * bucketSize).floor() + 1;
+      final int actualNextEnd =
+          nextBucketEnd < dataLength ? nextBucketEnd : dataLength - 1;
+
+      double avgX = 0;
+      double avgY = 0;
+      int nextCount = 0;
+      for (int j = nextBucketStart; j <= actualNextEnd && j < dataLength; j++) {
+        avgX += xValues[j];
+        avgY += yValues[j];
+        nextCount++;
+      }
+      if (nextCount > 0) {
+        avgX /= nextCount;
+        avgY /= nextCount;
+      }
+
+      // Find the point in the current bucket that forms the largest triangle
+      final double prevX = xValues[prevSelectedIndex];
+      final double prevY = yValues[prevSelectedIndex];
+
+      double maxArea = -1;
+      int bestIndex = bucketStart;
+
+      for (int j = bucketStart; j <= actualEnd && j < dataLength; j++) {
+        // Triangle area = 0.5 * |x1(y2-y3) + x2(y3-y1) + x3(y1-y2)|
+        // We skip the 0.5 since we're just comparing relative areas
+        final double area = ((prevX - avgX) * (yValues[j] - prevY) -
+                (prevX - xValues[j]) * (avgY - prevY))
+            .abs();
+
+        if (area > maxArea) {
+          maxArea = area;
+          bestIndex = j;
+        }
+      }
+
+      result[bucket] = bestIndex;
+      prevSelectedIndex = bestIndex;
+    }
+
+    return result;
   }
 
   void _drawXAxis(Canvas canvas, Size size) {
