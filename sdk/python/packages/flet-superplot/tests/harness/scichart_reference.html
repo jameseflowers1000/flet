@@ -71,7 +71,7 @@
         }
 
         async function initSciChart() {
-            const { SciChartSurface, NumericAxis, FastLineRenderableSeries, XyDataSeries, SciChartJsNavyTheme } = SciChart;
+            const { SciChartSurface, NumericAxis, FastLineRenderableSeries, XyDataSeries, SciChartJsNavyTheme, EWatermarkPosition } = SciChart;
 
             // Load WASM from CDN
             SciChartSurface.useWasmFromCDN();
@@ -87,6 +87,9 @@
                         minorGridLineBrush: "#222222",
                     }
                 });
+
+                // Move watermark to top-right corner (away from axis origin)
+                sciChartSurface.watermarkPosition = EWatermarkPosition.TopRight;
 
                 // X Axis
                 sciChartSurface.xAxes.add(new NumericAxis(wasmContext, {
