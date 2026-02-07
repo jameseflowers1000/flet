@@ -17,7 +17,7 @@ import 'package:flet_secure_storage/flet_secure_storage.dart'
     as flet_secure_storage;
 // --FAT_CLIENT_START--
 // --RIVE_IMPORT_START--
-import 'package:flet_rive/flet_rive.dart' as flet_rive;
+// import 'package:flet_rive/flet_rive.dart' as flet_rive;
 // --RIVE_IMPORT_END--
 import 'package:flet_video/flet_video.dart' as flet_video;
 // --FAT_CLIENT_END--
@@ -26,6 +26,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_web_plugins/url_strategy.dart';
 import 'package:flet_supertab/flet_supertab.dart' as flet_supertab;
+import 'package:flet_superplot/flet_superplot.dart' as flet_superplot;
 import 'package:syncfusion_flutter_core/core.dart';
 
 const bool isProduction = bool.fromEnvironment('dart.vm.product');
@@ -56,10 +57,11 @@ void main([List<String>? args]) async {
     flet_charts.Extension(),
     // NEW:
     flet_supertab.Extension(),
+    flet_superplot.Extension(),
     flet_secure_storage.Extension(),
     // --FAT_CLIENT_START--
     // --RIVE_EXTENSION_START--
-    flet_rive.Extension(),
+    // flet_rive.Extension(),
     // --RIVE_EXTENSION_END--
     flet_audio.Extension(),
     flet_video.Extension(),

@@ -41,12 +41,12 @@ class SuperPlot(ft.LayoutControl):
         ```
     """
     
-    # JSON-encoded axis configuration
-    x_axis_json: Optional[str] = field(default=None, metadata={"data_field": "x_axis"})
-    y_axis_json: Optional[str] = field(default=None, metadata={"data_field": "y_axis"})
+    # JSON-encoded axis configuration - field names must match Flutter property names
+    x_axis: Optional[str] = None
+    y_axis: Optional[str] = None
     
     # JSON-encoded series list
-    series_json: Optional[str] = field(default=None, metadata={"data_field": "series"})
+    series: Optional[str] = None
     
     # Chart title
     title: Optional[str] = None
@@ -62,10 +62,10 @@ class SuperPlot(ft.LayoutControl):
     major_grid_line_color: str = "#333333"
     minor_grid_line_color: str = "#222222"
     
-    # Internal storage
-    _x_axis: Optional[NumericAxis] = field(default=None, repr=False, metadata={"skip": True})
-    _y_axis: Optional[NumericAxis] = field(default=None, repr=False, metadata={"skip": True})
-    _series: List[FastLineSeries] = field(default_factory=list, repr=False, metadata={"skip": True})
+    # Internal storage (renamed to avoid conflict with JSON property names)
+    _x_axis_obj: Optional[NumericAxis] = field(default=None, repr=False, metadata={"skip": True})
+    _y_axis_obj: Optional[NumericAxis] = field(default=None, repr=False, metadata={"skip": True})
+    _series_list: List[FastLineSeries] = field(default_factory=list, repr=False, metadata={"skip": True})
     
     def __post_init__(self, ref=None):
         super().__post_init__(ref)
@@ -73,52 +73,53 @@ class SuperPlot(ft.LayoutControl):
     
     def _serialize_config(self):
         """Serialize axis and series configuration to JSON for Flutter."""
-        if self._x_axis:
-            self.x_axis_json = json.dumps(self._x_axis.to_dict())
-        if self._y_axis:
-            self.y_axis_json = json.dumps(self._y_axis.to_dict())
-        if self._series:
-            self.series_json = json.dumps([s.to_dict() for s in self._series])
+        if self._x_axis_obj:
+            self.x_axis = json.dumps(self._x_axis_obj.to_dict())
+            print(f"[SuperPlot Python] x_axis set: {len(self.x_axis)} chars")
+        if self._y_axis_obj:
+            self.y_axis = json.dumps(self._y_axis_obj.to_dict())
+            print(f"[SuperPlot Python] y_axis set: {len(self.y_axis)} chars")
+        if self._series_list:
+            self.series = json.dumps([s.to_dict() for s in self._series_list])
+            print(f"[SuperPlot Python] series set: {len(self.series)} chars")
+            for i, s in enumerate(self._series_list):
+                data = s.data_series
+                if data:
+                    print(f"[SuperPlot Python] Series {i}: {data.count} points")
     
-    @property
-    def x_axis(self) -> Optional[NumericAxis]:
-        return self._x_axis
-    
-    @x_axis.setter
-    def x_axis(self, value: NumericAxis):
-        self._x_axis = value
+    def set_x_axis(self, value: NumericAxis):
+        """Set the X axis configuration."""
+        self._x_axis_obj = value
         if value:
-            self.x_axis_json = json.dumps(value.to_dict())
+            self.x_axis = json.dumps(value.to_dict())
+            print(f"[SuperPlot] x_axis set: range {value.visible_range_min} to {value.visible_range_max}")
     
-    @property
-    def y_axis(self) -> Optional[NumericAxis]:
-        return self._y_axis
-    
-    @y_axis.setter
-    def y_axis(self, value: NumericAxis):
-        self._y_axis = value
+    def set_y_axis(self, value: NumericAxis):
+        """Set the Y axis configuration."""
+        self._y_axis_obj = value
         if value:
-            self.y_axis_json = json.dumps(value.to_dict())
+            self.y_axis = json.dumps(value.to_dict())
+            print(f"[SuperPlot] y_axis set: range {value.visible_range_min} to {value.visible_range_max}")
     
-    @property
-    def series(self) -> List[FastLineSeries]:
-        return self._series
-    
-    @series.setter
-    def series(self, value: List[FastLineSeries]):
-        self._series = value
+    def set_series(self, value: List[FastLineSeries]):
+        """Set the series list."""
+        self._series_list = value
         if value:
-            self.series_json = json.dumps([s.to_dict() for s in value])
+            self.series = json.dumps([s.to_dict() for s in value])
+            print(f"[SuperPlot] series set: {len(value)} series")
+            for i, s in enumerate(value):
+                if s.data_series:
+                    print(f"[SuperPlot]   Series {i}: {s.data_series.count} points")
     
-    def add_series(self, series: FastLineSeries):
+    def add_series(self, new_series: FastLineSeries):
         """Add a renderable series to the chart."""
-        self._series.append(series)
-        self.series_json = json.dumps([s.to_dict() for s in self._series])
+        self._series_list.append(new_series)
+        self.series = json.dumps([s.to_dict() for s in self._series_list])
     
     def clear_series(self):
         """Remove all series from the chart."""
-        self._series.clear()
-        self.series_json = json.dumps([])
+        self._series_list.clear()
+        self.series = json.dumps([])
     
     def update_data(self):
         """Trigger re-serialization and update after data changes."""
@@ -138,7 +139,7 @@ def create_surface(
     Mirrors SciChart's SciChartSurface.create() pattern.
     """
     plot = SuperPlot(**kwargs)
-    plot.x_axis = x_axis
-    plot.y_axis = y_axis
-    plot.series = series
+    plot.set_x_axis(x_axis)
+    plot.set_y_axis(y_axis)
+    plot.set_series(series)
     return plot

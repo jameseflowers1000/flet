@@ -43,16 +43,19 @@ class ChartPainter extends CustomPainter {
     required this.minorGridLineColor,
   });
 
+  // Performance tracking - set _profileFrames > 0 to enable
+  static int _frameCount = 0;
+  static const int _profileFrames = 0; // Set to 10 to enable profiling
+
   @override
   void paint(Canvas canvas, Size size) {
+    final sw = Stopwatch()..start();
+
     // Fill background
     canvas.drawRect(
       Rect.fromLTWH(0, 0, size.width, size.height),
       Paint()..color = backgroundColor,
     );
-
-    // Compute data ranges (need these before calculating plot area)
-    _computeRanges();
 
     // Chart clip rect: visible area excluding axis label areas
     _chartClip = Rect.fromLTRB(
@@ -61,26 +64,76 @@ class ChartPainter extends CustomPainter {
       size.height - _bottomAxisHeight,
     );
 
-    // Compute plot area to match SciChart's gridline positioning.
-    // SciChart extends the plot area beyond the canvas due to grow-by,
-    // so gridlines for the data range appear inset from the chart edges.
-    _computePlotArea();
-
-    // Draw grid lines first (behind data)
-    if (showMajorGridLines || showMinorGridLines) {
-      _drawGridLines(canvas, size);
+    final swRanges = Stopwatch()..start();
+    try {
+      _computeRanges();
+    } catch (e) {
+      debugPrint('SuperPlot _computeRanges error: $e');
+      _xMin = 0; _xMax = 1; _yMin = 0; _yMax = 1;
+      _xDataMin = 0; _xDataMax = 1; _yDataMin = 0; _yDataMax = 1;
     }
+    swRanges.stop();
+
+    final swPlot = Stopwatch()..start();
+    try {
+      _computePlotArea();
+    } catch (e) {
+      debugPrint('SuperPlot _computePlotArea error: $e');
+      _plotArea = _chartClip;
+    }
+    swPlot.stop();
+
+    // Draw grid lines
+    final swGrid = Stopwatch()..start();
+    try {
+      _drawGridLines(canvas, size);
+    } catch (e) {
+      print('SuperPlot _drawGridLines error: $e');
+    }
+    swGrid.stop();
 
     // Draw series data
+    int totalPoints = 0;
+    final swSeries = Stopwatch()..start();
     for (final s in series) {
       if (s.isVisible && s.data != null && s.data!.length > 0) {
-        _drawSeries(canvas, s);
+        totalPoints += s.data!.length;
+        try {
+          _drawSeries(canvas, s);
+        } catch (e) {
+          debugPrint('SuperPlot _drawSeries error: $e');
+        }
       }
     }
+    swSeries.stop();
 
     // Draw axes on top
-    _drawXAxis(canvas, size);
-    _drawYAxis(canvas, size);
+    final swAxes = Stopwatch()..start();
+    try {
+      _drawXAxis(canvas, size);
+    } catch (e) {
+      debugPrint('SuperPlot _drawXAxis error: $e');
+    }
+
+    try {
+      _drawYAxis(canvas, size);
+    } catch (e) {
+      debugPrint('SuperPlot _drawYAxis error: $e');
+    }
+    swAxes.stop();
+
+    sw.stop();
+    if (_frameCount < _profileFrames) {
+      final targetPts = (_chartClip.width * 2).toInt().clamp(100, 10000);
+      print('[PERF] frame=${_frameCount} total=${sw.elapsedMicroseconds}us '
+          'ranges=${swRanges.elapsedMicroseconds}us '
+          'plotArea=${swPlot.elapsedMicroseconds}us '
+          'grid=${swGrid.elapsedMicroseconds}us '
+          'series=${swSeries.elapsedMicroseconds}us '
+          'axes=${swAxes.elapsedMicroseconds}us '
+          'points=$totalPoints lttb=${totalPoints > targetPts ? "ON" : "OFF"}');
+      _frameCount++;
+    }
   }
 
   void _computeRanges() {
@@ -198,6 +251,26 @@ class ChartPainter extends CustomPainter {
     return _plotArea.bottom - ratio * _plotArea.height;
   }
 
+  /// Simple grid that always works regardless of data
+  void _drawSimpleGrid(Canvas canvas, Size size) {
+    final gridPaint = Paint()
+      ..color = const Color(0xFF00FF00)  // Bright green for visibility
+      ..strokeWidth = 1.0;
+    
+    // Draw 10 vertical lines
+    final chartWidth = size.width - _rightAxisWidth;
+    final chartHeight = size.height - _bottomAxisHeight;
+    for (int i = 0; i <= 10; i++) {
+      final x = (chartWidth * i / 10);
+      canvas.drawLine(Offset(x, 0), Offset(x, chartHeight), gridPaint);
+    }
+    // Draw 10 horizontal lines
+    for (int i = 0; i <= 10; i++) {
+      final y = (chartHeight * i / 10);
+      canvas.drawLine(Offset(0, y), Offset(chartWidth, y), gridPaint);
+    }
+  }
+
   void _drawGridLines(Canvas canvas, Size size) {
     final majorPaint = Paint()
       ..color = majorGridLineColor
@@ -262,7 +335,7 @@ class ChartPainter extends CustomPainter {
     } else {
       niceStep = 10;
     }
-    niceStep *= magnitude as double;
+    niceStep *= magnitude.toDouble();
 
     final firstTick = (min / niceStep).ceil() * niceStep;
     final ticks = <double>[];
@@ -297,12 +370,15 @@ class ChartPainter extends CustomPainter {
     final int pointCount = data.length;
 
     // Get decimated indices (or null if no decimation needed)
+    final lttbSw = Stopwatch()..start();
     final indices = pointCount > targetPoints
         ? _lttbDecimate(xValues, yValues, pointCount, targetPoints)
         : null;
+    lttbSw.stop();
     final int drawCount = indices?.length ?? pointCount;
 
     // Build path from (decimated) data points
+    final pathSw = Stopwatch()..start();
     final path = Path();
     bool started = false;
 
@@ -321,12 +397,22 @@ class ChartPainter extends CustomPainter {
         path.lineTo(x, y);
       }
     }
+    pathSw.stop();
 
     // Clip to visible chart area and draw
+    final drawSw = Stopwatch()..start();
     canvas.save();
     canvas.clipRect(_chartClip);
     canvas.drawPath(path, paint);
     canvas.restore();
+    drawSw.stop();
+
+    if (_frameCount < _profileFrames) {
+      print('[PERF:series] pts=$pointCount drawn=$drawCount '
+          'lttb=${lttbSw.elapsedMicroseconds}us '
+          'path=${pathSw.elapsedMicroseconds}us '
+          'draw=${drawSw.elapsedMicroseconds}us');
+    }
   }
 
   /// LTTB (Largest Triangle Three Buckets) downsampling algorithm.
@@ -406,10 +492,10 @@ class ChartPainter extends CustomPainter {
   }
 
   void _drawXAxis(Canvas canvas, Size size) {
-    if (xAxis == null) return;
+    // Draw even without axis config using defaults
 
     final axisPaint = Paint()
-      ..color = xAxis!.axisLineColor
+      ..color = xAxis?.axisLineColor ?? const Color(0xFFAAAAAA)
       ..strokeWidth = 1.0;
 
     // Draw axis line at bottom of chart area
@@ -420,14 +506,14 @@ class ChartPainter extends CustomPainter {
     );
 
     // Draw ticks and labels
-    final ticks = _calculateTicks(_xDataMin, _xDataMax, xAxis!.majorTickCount ?? 10);
+    final ticks = _calculateTicks(_xDataMin, _xDataMax, xAxis?.majorTickCount ?? 10);
     final tickPaint = Paint()
-      ..color = xAxis!.majorTickColor
+      ..color = xAxis?.majorTickColor ?? const Color(0xFFAAAAAA)
       ..strokeWidth = 1.0;
 
     final textStyle = TextStyle(
-      color: xAxis!.axisLabelColor,
-      fontSize: xAxis!.axisLabelFontSize,
+      color: xAxis?.axisLabelColor ?? const Color(0xFFCCCCCC),
+      fontSize: xAxis?.axisLabelFontSize ?? 12.0,
     );
 
     for (final tick in ticks) {
@@ -435,35 +521,31 @@ class ChartPainter extends CustomPainter {
       if (x < _chartClip.left || x > _chartClip.right) continue;
 
       // Draw tick
-      if (xAxis!.drawMajorTicks) {
-        canvas.drawLine(
-          Offset(x, _chartClip.bottom),
-          Offset(x, _chartClip.bottom + 6),
-          tickPaint,
-        );
-      }
+      canvas.drawLine(
+        Offset(x, _chartClip.bottom),
+        Offset(x, _chartClip.bottom + 6),
+        tickPaint,
+      );
 
       // Draw label
-      if (xAxis!.drawAxisLabels) {
-        final label = _formatNumber(tick);
-        final textSpan = TextSpan(text: label, style: textStyle);
-        final textPainter = TextPainter(
-          text: textSpan,
-          textDirection: TextDirection.ltr,
-        );
-        textPainter.layout();
-        textPainter.paint(
-          canvas,
-          Offset(x - textPainter.width / 2, _chartClip.bottom + 8),
-        );
-      }
+      final label = _formatNumber(tick);
+      final textSpan = TextSpan(text: label, style: textStyle);
+      final textPainter = TextPainter(
+        text: textSpan,
+        textDirection: TextDirection.ltr,
+      );
+      textPainter.layout();
+      textPainter.paint(
+        canvas,
+        Offset(x - textPainter.width / 2, _chartClip.bottom + 8),
+      );
     }
 
     // Draw axis title centered below chart area
-    if (xAxis!.axisTitle != null) {
+    if (xAxis?.axisTitle != null) {
       final titleStyle = TextStyle(
-        color: xAxis!.axisTitleColor,
-        fontSize: xAxis!.axisTitleFontSize,
+        color: xAxis?.axisTitleColor ?? const Color(0xFFCCCCCC),
+        fontSize: xAxis?.axisTitleFontSize ?? 14.0,
       );
       final textSpan = TextSpan(text: xAxis!.axisTitle, style: titleStyle);
       final textPainter = TextPainter(
@@ -482,10 +564,9 @@ class ChartPainter extends CustomPainter {
   }
 
   void _drawYAxis(Canvas canvas, Size size) {
-    if (yAxis == null) return;
-
+    // Draw even without axis config using defaults
     final axisPaint = Paint()
-      ..color = yAxis!.axisLineColor
+      ..color = yAxis?.axisLineColor ?? const Color(0xFFAAAAAA)
       ..strokeWidth = 1.0;
 
     // Draw axis line at right edge of chart area
@@ -496,54 +577,50 @@ class ChartPainter extends CustomPainter {
     );
 
     // Draw ticks and labels
-    final ticks = _calculateTicks(_yDataMin, _yDataMax, yAxis!.majorTickCount ?? 10);
+    final ticks = _calculateTicks(_yDataMin, _yDataMax, yAxis?.majorTickCount ?? 10);
     final tickPaint = Paint()
-      ..color = yAxis!.majorTickColor
+      ..color = yAxis?.majorTickColor ?? const Color(0xFFAAAAAA)
       ..strokeWidth = 1.0;
 
     final textStyle = TextStyle(
-      color: yAxis!.axisLabelColor,
-      fontSize: yAxis!.axisLabelFontSize,
+      color: yAxis?.axisLabelColor ?? const Color(0xFFCCCCCC),
+      fontSize: yAxis?.axisLabelFontSize ?? 12.0,
     );
 
     for (final tick in ticks) {
       final y = _dataToScreenY(tick);
       if (y < _chartClip.top || y > _chartClip.bottom) continue;
 
-      // Draw tick to the right of axis line
-      if (yAxis!.drawMajorTicks) {
-        canvas.drawLine(
-          Offset(_chartClip.right, y),
-          Offset(_chartClip.right + 6, y),
-          tickPaint,
-        );
-      }
+      // Draw tick
+      canvas.drawLine(
+        Offset(_chartClip.right, y),
+        Offset(_chartClip.right + 6, y),
+        tickPaint,
+      );
 
-      // Draw label to the right of tick
-      if (yAxis!.drawAxisLabels) {
-        final label = _formatNumber(tick);
-        final textSpan = TextSpan(text: label, style: textStyle);
-        final textPainter = TextPainter(
-          text: textSpan,
-          textDirection: TextDirection.ltr,
-        );
-        textPainter.layout();
-        textPainter.paint(
-          canvas,
-          Offset(_chartClip.right + 8, y - textPainter.height / 2),
-        );
-      }
+      // Draw label
+      final label = _formatNumber(tick);
+      final textSpan = TextSpan(text: label, style: textStyle);
+      final textPainter = TextPainter(
+        text: textSpan,
+        textDirection: TextDirection.ltr,
+      );
+      textPainter.layout();
+      textPainter.paint(
+        canvas,
+        Offset(_chartClip.right + 8, y - textPainter.height / 2),
+      );
     }
 
     // Draw axis title (rotated) on right side
-    if (yAxis!.axisTitle != null) {
+    if (yAxis?.axisTitle != null) {
       canvas.save();
       canvas.translate(size.width - 14, _chartClip.top + _chartClip.height / 2);
       canvas.rotate(math.pi / 2);
 
       final titleStyle = TextStyle(
-        color: yAxis!.axisTitleColor,
-        fontSize: yAxis!.axisTitleFontSize,
+        color: yAxis?.axisTitleColor ?? const Color(0xFFCCCCCC),
+        fontSize: yAxis?.axisTitleFontSize ?? 14.0,
       );
       final textSpan = TextSpan(text: yAxis!.axisTitle, style: titleStyle);
       final textPainter = TextPainter(

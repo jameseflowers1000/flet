@@ -43,8 +43,8 @@ dependencies:
     path: ../sdk/python/packages/flet-video/src/flutter/flet_video
 
   # --RIVE_CLIENT_START--
-  flet_rive:
-    path: ../sdk/python/packages/flet-rive/src/flutter/flet_rive
+  # flet_rive:
+  #   path: ../sdk/python/packages/flet-rive/src/flutter/flet_rive
   # --RIVE_CLIENT_END--
 
 # --FAT_CLIENT_END--
@@ -82,7 +82,10 @@ dependencies:
   flet_supertab:
     path: ../sdk/python/packages/flet-supertab/src/flutter/flet_supertab
 
-  cupertino_icons: ^1.0.6
+  flet_superplot:
+    path: ../sdk/python/packages/flet-superplot/src/flutter/flet_superplot
+
+  cupertino_icons:
   syncfusion_flutter_core: any
   wakelock_plus: ^1.4.0
   package_info_plus: ^9.0.0
