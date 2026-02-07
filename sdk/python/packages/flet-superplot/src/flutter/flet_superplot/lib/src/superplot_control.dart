@@ -49,55 +49,35 @@ class _SuperPlotControlState extends State<SuperPlotControl> {
   }
 
   void _parseConfig() {
-    // Debug: use print() since debugPrint is disabled in Release builds
-    print('[SuperPlot Flutter] Parsing config for control: ${widget.control.id}');
-    print('[SuperPlot Flutter] Control type: ${widget.control.type}');
-    
     // Parse X axis
     final xAxisJson = widget.control.getString("x_axis");
-    print('[SuperPlot Flutter] x_axis: ${xAxisJson == null ? "NULL" : "${xAxisJson.length} chars"}');
     if (xAxisJson != null && xAxisJson.isNotEmpty) {
       try {
         _xAxis = AxisModel.fromJson(jsonDecode(xAxisJson));
-        print('[SuperPlot Flutter] Parsed X axis: range ${_xAxis?.visibleRangeMin} to ${_xAxis?.visibleRangeMax}');
       } catch (e) {
-        print('[SuperPlot Flutter] ERROR parsing x_axis: $e');
+        debugPrint('[SuperPlot] ERROR parsing x_axis: $e');
       }
-    } else {
-      print('[SuperPlot Flutter] x_axis is null or empty!');
     }
 
     // Parse Y axis
     final yAxisJson = widget.control.getString("y_axis");
-    print('[SuperPlot Flutter] y_axis: ${yAxisJson == null ? "NULL" : "${yAxisJson.length} chars"}');
     if (yAxisJson != null && yAxisJson.isNotEmpty) {
       try {
         _yAxis = AxisModel.fromJson(jsonDecode(yAxisJson));
-        print('[SuperPlot Flutter] Parsed Y axis: range ${_yAxis?.visibleRangeMin} to ${_yAxis?.visibleRangeMax}');
       } catch (e) {
-        print('[SuperPlot Flutter] ERROR parsing y_axis: $e');
+        debugPrint('[SuperPlot] ERROR parsing y_axis: $e');
       }
-    } else {
-      print('[SuperPlot Flutter] y_axis is null or empty!');
     }
 
     // Parse series
     final seriesJson = widget.control.getString("series");
-    print('[SuperPlot Flutter] series: ${seriesJson == null ? "NULL" : "${seriesJson.length} chars"}');
     if (seriesJson != null && seriesJson.isNotEmpty) {
       try {
         final seriesList = jsonDecode(seriesJson) as List;
         _series = seriesList.map((s) => SeriesModel.fromJson(s)).toList();
-        print('[SuperPlot Flutter] Parsed ${_series.length} series');
-        for (int i = 0; i < _series.length; i++) {
-          final s = _series[i];
-          print('[SuperPlot Flutter] Series $i: ${s.data?.length ?? 0} points');
-        }
       } catch (e) {
-        print('[SuperPlot Flutter] ERROR parsing series: $e');
+        debugPrint('[SuperPlot] ERROR parsing series: $e');
       }
-    } else {
-      print('[SuperPlot Flutter] series is null or empty!');
     }
 
     // Parse styling
@@ -135,13 +115,10 @@ class _SuperPlotControlState extends State<SuperPlotControl> {
 
   @override
   Widget build(BuildContext context) {
-    print('[SuperPlot Flutter] build() called, xAxis: $_xAxis, yAxis: $_yAxis, series: ${_series.length}');
-    
     return ConstrainedControl(
       control: widget.control,
       child: LayoutBuilder(
         builder: (context, constraints) {
-          print('[SuperPlot Flutter] LayoutBuilder constraints: $constraints');
           return ClipRect(
             child: CustomPaint(
               painter: ChartPainter(

@@ -75,41 +75,28 @@ class SuperPlot(ft.LayoutControl):
         """Serialize axis and series configuration to JSON for Flutter."""
         if self._x_axis_obj:
             self.x_axis = json.dumps(self._x_axis_obj.to_dict())
-            print(f"[SuperPlot Python] x_axis set: {len(self.x_axis)} chars")
         if self._y_axis_obj:
             self.y_axis = json.dumps(self._y_axis_obj.to_dict())
-            print(f"[SuperPlot Python] y_axis set: {len(self.y_axis)} chars")
         if self._series_list:
             self.series = json.dumps([s.to_dict() for s in self._series_list])
-            print(f"[SuperPlot Python] series set: {len(self.series)} chars")
-            for i, s in enumerate(self._series_list):
-                data = s.data_series
-                if data:
-                    print(f"[SuperPlot Python] Series {i}: {data.count} points")
     
     def set_x_axis(self, value: NumericAxis):
         """Set the X axis configuration."""
         self._x_axis_obj = value
         if value:
             self.x_axis = json.dumps(value.to_dict())
-            print(f"[SuperPlot] x_axis set: range {value.visible_range_min} to {value.visible_range_max}")
     
     def set_y_axis(self, value: NumericAxis):
         """Set the Y axis configuration."""
         self._y_axis_obj = value
         if value:
             self.y_axis = json.dumps(value.to_dict())
-            print(f"[SuperPlot] y_axis set: range {value.visible_range_min} to {value.visible_range_max}")
     
     def set_series(self, value: List[FastLineSeries]):
         """Set the series list."""
         self._series_list = value
         if value:
             self.series = json.dumps([s.to_dict() for s in value])
-            print(f"[SuperPlot] series set: {len(value)} series")
-            for i, s in enumerate(value):
-                if s.data_series:
-                    print(f"[SuperPlot]   Series {i}: {s.data_series.count} points")
     
     def add_series(self, new_series: FastLineSeries):
         """Add a renderable series to the chart."""

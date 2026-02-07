@@ -50,14 +50,8 @@ class ChartPainter extends CustomPainter {
     required this.minorGridLineColor,
   });
 
-  // Performance tracking - set _profileFrames > 0 to enable
-  static int _frameCount = 0;
-  static const int _profileFrames = 0; // Set to 10 to enable profiling
-
   @override
   void paint(Canvas canvas, Size size) {
-    final sw = Stopwatch()..start();
-
     // Fill background
     canvas.drawRect(
       Rect.fromLTWH(0, 0, size.width, size.height),
@@ -71,24 +65,20 @@ class ChartPainter extends CustomPainter {
       size.height - _bottomAxisHeight,
     );
 
-    final swRanges = Stopwatch()..start();
     try {
       _computeRanges();
     } catch (e) {
-      debugPrint('SuperPlot _computeRanges error: $e');
+      debugPrint('[SuperPlot] _computeRanges error: $e');
       _xMin = 0; _xMax = 1; _yMin = 0; _yMax = 1;
       _xDataMin = 0; _xDataMax = 1; _yDataMin = 0; _yDataMax = 1;
     }
-    swRanges.stop();
 
-    final swPlot = Stopwatch()..start();
     try {
       _computePlotArea();
     } catch (e) {
-      debugPrint('SuperPlot _computePlotArea error: $e');
+      debugPrint('[SuperPlot] _computePlotArea error: $e');
       _plotArea = _chartClip;
     }
-    swPlot.stop();
 
     // Build cache key from size + visible ranges
     final cacheKey = '${size.width},${size.height},'
@@ -97,7 +87,6 @@ class ChartPainter extends CustomPainter {
     final bool cacheHit = (_gridCache != null && _chromeCacheKey == cacheKey);
 
     // Build or replay cached grid + axes pictures
-    final swChrome = Stopwatch()..start();
     if (!cacheHit) {
       // Record grid into its own Picture (drawn behind data)
       final gridRec = ui.PictureRecorder();
@@ -105,7 +94,7 @@ class ChartPainter extends CustomPainter {
       try {
         _drawGridLines(gridCanvas, size);
       } catch (e) {
-        print('SuperPlot _drawGridLines error: $e');
+        debugPrint('[SuperPlot] _drawGridLines error: $e');
       }
       _gridCache = gridRec.endRecording();
 
@@ -115,52 +104,34 @@ class ChartPainter extends CustomPainter {
       try {
         _drawXAxis(axesCanvas, size);
       } catch (e) {
-        debugPrint('SuperPlot _drawXAxis error: $e');
+        debugPrint('[SuperPlot] _drawXAxis error: $e');
       }
       try {
         _drawYAxis(axesCanvas, size);
       } catch (e) {
-        debugPrint('SuperPlot _drawYAxis error: $e');
+        debugPrint('[SuperPlot] _drawYAxis error: $e');
       }
       _axesCache = axesRec.endRecording();
 
       _chromeCacheKey = cacheKey;
     }
-    swChrome.stop();
 
     // Draw grid behind data
     canvas.drawPicture(_gridCache!);
 
     // Draw series data
-    int totalPoints = 0;
-    final swSeries = Stopwatch()..start();
     for (final s in series) {
       if (s.isVisible && s.data != null && s.data!.length > 0) {
-        totalPoints += s.data!.length;
         try {
           _drawSeries(canvas, s);
         } catch (e) {
-          debugPrint('SuperPlot _drawSeries error: $e');
+          debugPrint('[SuperPlot] _drawSeries error: $e');
         }
       }
     }
-    swSeries.stop();
 
     // Draw axes on top of data
     canvas.drawPicture(_axesCache!);
-
-    sw.stop();
-    if (_frameCount < _profileFrames) {
-      final targetPts = (_chartClip.width * 2).toInt().clamp(100, 10000);
-      print('[PERF] frame=${_frameCount} total=${sw.elapsedMicroseconds}us '
-          'ranges=${swRanges.elapsedMicroseconds}us '
-          'plotArea=${swPlot.elapsedMicroseconds}us '
-          'chrome=${swChrome.elapsedMicroseconds}us '
-          'chromeHit=$cacheHit '
-          'series=${swSeries.elapsedMicroseconds}us '
-          'points=$totalPoints lttb=${totalPoints > targetPts ? "ON" : "OFF"}');
-      _frameCount++;
-    }
   }
 
   void _computeRanges() {
@@ -397,15 +368,12 @@ class ChartPainter extends CustomPainter {
     final int pointCount = data.length;
 
     // Get decimated indices (or null if no decimation needed)
-    final lttbSw = Stopwatch()..start();
     final indices = pointCount > targetPoints
         ? _lttbDecimate(xValues, yValues, pointCount, targetPoints)
         : null;
-    lttbSw.stop();
     final int drawCount = indices?.length ?? pointCount;
 
     // Build path from (decimated) data points
-    final pathSw = Stopwatch()..start();
     final path = Path();
     bool started = false;
 
@@ -424,22 +392,12 @@ class ChartPainter extends CustomPainter {
         path.lineTo(x, y);
       }
     }
-    pathSw.stop();
 
     // Clip to visible chart area and draw
-    final drawSw = Stopwatch()..start();
     canvas.save();
     canvas.clipRect(_chartClip);
     canvas.drawPath(path, paint);
     canvas.restore();
-    drawSw.stop();
-
-    if (_frameCount < _profileFrames) {
-      print('[PERF:series] pts=$pointCount drawn=$drawCount '
-          'lttb=${lttbSw.elapsedMicroseconds}us '
-          'path=${pathSw.elapsedMicroseconds}us '
-          'draw=${drawSw.elapsedMicroseconds}us');
-    }
   }
 
   /// LTTB (Largest Triangle Three Buckets) downsampling algorithm.
