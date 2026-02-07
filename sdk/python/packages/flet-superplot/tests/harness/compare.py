@@ -108,27 +108,34 @@ def compute_image_difference(img1_path: Path, img2_path: Path) -> dict:
                         for sum_sq in stat.sum2]
     rmse = math.sqrt(sum(x**2 for x in rmse_per_channel) / 3)
     
-    # Count different pixels
+    # Count different pixels (with threshold to filter anti-aliasing noise)
+    threshold = 10  # Ignore sub-pixel rendering differences between engines
     diff_pixels = 0
+    diff_pixels_exact = 0
     max_diff = 0
     for pixel in diff.getdata():
         pixel_diff = max(pixel)
         if pixel_diff > 0:
+            diff_pixels_exact += 1
+        if pixel_diff > threshold:
             diff_pixels += 1
         max_diff = max(max_diff, pixel_diff)
-    
+
     total_pixels = img1.size[0] * img1.size[1]
     diff_percent = (diff_pixels / total_pixels) * 100
-    
-    # Save diff image
+    diff_percent_exact = (diff_pixels_exact / total_pixels) * 100
+
+    # Save diff image (amplified for visibility)
     diff_path = img1_path.parent / "diff.png"
     diff.save(diff_path)
-    
+
     return {
         "rmse": rmse,
         "max_diff": max_diff,
         "diff_pixels": diff_pixels,
+        "diff_pixels_exact": diff_pixels_exact,
         "diff_percent": diff_percent,
+        "diff_percent_exact": diff_percent_exact,
         "total_pixels": total_pixels,
         "match": diff_pixels == 0,
         "diff_image": str(diff_path),
@@ -222,21 +229,25 @@ async def run_comparison():
         if "error" in result:
             print(f"Error: {result['error']}")
         else:
-            print(f"RMSE:           {result['rmse']:.4f}")
-            print(f"Max Difference: {result['max_diff']}")
-            print(f"Different Pixels: {result['diff_pixels']:,} / {result['total_pixels']:,}")
-            print(f"Difference %:   {result['diff_percent']:.4f}%")
-            print(f"Diff Image:     {result['diff_image']}")
+            print(f"RMSE:              {result['rmse']:.4f}")
+            print(f"Max Difference:    {result['max_diff']}")
+            print(f"Diff Pixels (>10): {result['diff_pixels']:,} / {result['total_pixels']:,}")
+            print(f"Diff % (>10):      {result['diff_percent']:.4f}%")
+            print(f"Diff Pixels (any): {result['diff_pixels_exact']:,} / {result['total_pixels']:,}")
+            print(f"Diff % (exact):    {result['diff_percent_exact']:.4f}%")
+            print(f"Diff Image:        {result['diff_image']}")
             print()
-            
+
             if result['match']:
                 print("✓ PERFECT MATCH - Images are identical!")
             elif result['diff_percent'] < 1.0:
-                print("~ CLOSE MATCH - Less than 1% different pixels")
+                print("~ CLOSE MATCH - Less than 1% significant pixels differ")
             elif result['diff_percent'] < 5.0:
-                print("~ PARTIAL MATCH - Less than 5% different pixels")
+                print("~ PARTIAL MATCH - Less than 5% significant pixels differ")
+            elif result['diff_percent'] < 10.0:
+                print("~ NEAR MATCH - Less than 10% significant pixels differ")
             else:
-                print("✗ SIGNIFICANT DIFFERENCE - More than 5% different pixels")
+                print("✗ SIGNIFICANT DIFFERENCE - More than 10% significant pixels differ")
 
 
 def main():

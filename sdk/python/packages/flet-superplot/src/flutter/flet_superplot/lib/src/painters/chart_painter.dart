@@ -22,13 +22,14 @@ class ChartPainter extends CustomPainter {
 
   // Computed during paint
   late Rect _plotArea;
+  late Rect _chartClip;  // Visible chart area (for clipping)
   late double _xMin, _xMax, _yMin, _yMax;
+  // Original ranges before grow-by (used for tick generation)
+  late double _xDataMin, _xDataMax, _yDataMin, _yDataMax;
 
   // Layout constants (matching SciChart defaults)
-  static const double _leftAxisWidth = 60.0;
-  static const double _bottomAxisHeight = 40.0;
-  static const double _rightPadding = 10.0;
-  static const double _topPadding = 10.0;
+  static const double _rightAxisWidth = 70.0;
+  static const double _bottomAxisHeight = 52.0;
 
   ChartPainter({
     this.xAxis,
@@ -49,16 +50,20 @@ class ChartPainter extends CustomPainter {
       Paint()..color = backgroundColor,
     );
 
-    // Calculate plot area
-    _plotArea = Rect.fromLTRB(
-      _leftAxisWidth,
-      _topPadding,
-      size.width - _rightPadding,
+    // Compute data ranges (need these before calculating plot area)
+    _computeRanges();
+
+    // Chart clip rect: visible area excluding axis label areas
+    _chartClip = Rect.fromLTRB(
+      0, 0,
+      size.width - _rightAxisWidth,
       size.height - _bottomAxisHeight,
     );
 
-    // Compute data ranges
-    _computeRanges();
+    // Compute plot area to match SciChart's gridline positioning.
+    // SciChart extends the plot area beyond the canvas due to grow-by,
+    // so gridlines for the data range appear inset from the chart edges.
+    _computePlotArea();
 
     // Draw grid lines first (behind data)
     if (showMajorGridLines || showMinorGridLines) {
@@ -106,6 +111,12 @@ class ChartPainter extends CustomPainter {
       }
     }
 
+    // Save original data ranges (before grow-by) for tick generation
+    _xDataMin = _xMin.isFinite ? _xMin : 0;
+    _xDataMax = _xMax.isFinite ? _xMax : 1;
+    _yDataMin = _yMin.isFinite ? _yMin : 0;
+    _yDataMax = _yMax.isFinite ? _yMax : 1;
+
     // Apply grow-by padding
     if (_xMin.isFinite && _xMax.isFinite) {
       final xRange = _xMax - _xMin;
@@ -136,6 +147,45 @@ class ChartPainter extends CustomPainter {
     }
   }
 
+  void _computePlotArea() {
+    // Compute ticks to determine gridline positions
+    final xTicks = _calculateTicks(_xDataMin, _xDataMax, xAxis?.majorTickCount ?? 10);
+    final yTicks = _calculateTicks(_yDataMin, _yDataMax, yAxis?.majorTickCount ?? 10);
+
+    // SciChart uses asymmetric insets from chart edges to first/last gridlines.
+    // Top/left: ~10px, bottom: ~3px (axis border), right: ~11px.
+    const leftInset = 10.0;
+    const topInset = 10.0;
+    const rightInset = 11.0;
+    const bottomInset = 3.0;
+
+    if (xTicks.length >= 2 && yTicks.length >= 2) {
+      final xTickSpan = xTicks.last - xTicks.first;
+      final yTickSpan = yTicks.last - yTicks.first;
+
+      // Pixel span available for gridlines
+      final xPixelSpan = _chartClip.width - leftInset - rightInset;
+      final yPixelSpan = _chartClip.height - topInset - bottomInset;
+
+      // Pixels per data unit
+      final xPPU = xTickSpan > 0 ? xPixelSpan / xTickSpan : 1.0;
+      final yPPU = yTickSpan > 0 ? yPixelSpan / yTickSpan : 1.0;
+
+      // Plot area: maps the full grow-by range
+      // First X tick at chartClip.left + leftInset
+      final plotLeft = _chartClip.left + leftInset - (xTicks.first - _xMin) * xPPU;
+      final plotRight = plotLeft + (_xMax - _xMin) * xPPU;
+
+      // Y is inverted: highest data value at top
+      final plotTop = _chartClip.top + topInset - (_yMax - yTicks.last) * yPPU;
+      final plotBottom = plotTop + (_yMax - _yMin) * yPPU;
+
+      _plotArea = Rect.fromLTRB(plotLeft, plotTop, plotRight, plotBottom);
+    } else {
+      _plotArea = _chartClip;
+    }
+  }
+
   double _dataToScreenX(double dataX) {
     final ratio = (dataX - _xMin) / (_xMax - _xMin);
     return _plotArea.left + ratio * _plotArea.width;
@@ -156,32 +206,32 @@ class ChartPainter extends CustomPainter {
       ..color = minorGridLineColor
       ..strokeWidth = 0.5;
 
-    // Calculate nice tick values
-    final xTicks = _calculateTicks(_xMin, _xMax, xAxis?.majorTickCount ?? 5);
-    final yTicks = _calculateTicks(_yMin, _yMax, yAxis?.majorTickCount ?? 5);
+    // Calculate nice tick values (using original data range, not grow-by range)
+    final xTicks = _calculateTicks(_xDataMin, _xDataMax, xAxis?.majorTickCount ?? 10);
+    final yTicks = _calculateTicks(_yDataMin, _yDataMax, yAxis?.majorTickCount ?? 10);
 
-    // Draw vertical grid lines (X axis)
+    // Draw vertical grid lines (X axis) - clipped to chart area
     if (showMajorGridLines) {
       for (final tick in xTicks) {
         final x = _dataToScreenX(tick);
-        if (x >= _plotArea.left && x <= _plotArea.right) {
+        if (x >= _chartClip.left && x <= _chartClip.right) {
           canvas.drawLine(
-            Offset(x, _plotArea.top),
-            Offset(x, _plotArea.bottom),
+            Offset(x, _chartClip.top),
+            Offset(x, _chartClip.bottom),
             majorPaint,
           );
         }
       }
     }
 
-    // Draw horizontal grid lines (Y axis)
+    // Draw horizontal grid lines (Y axis) - clipped to chart area
     if (showMajorGridLines) {
       for (final tick in yTicks) {
         final y = _dataToScreenY(tick);
-        if (y >= _plotArea.top && y <= _plotArea.bottom) {
+        if (y >= _chartClip.top && y <= _chartClip.bottom) {
           canvas.drawLine(
-            Offset(_plotArea.left, y),
-            Offset(_plotArea.right, y),
+            Offset(_chartClip.left, y),
+            Offset(_chartClip.right, y),
             majorPaint,
           );
         }
@@ -257,9 +307,9 @@ class ChartPainter extends CustomPainter {
       }
     }
 
-    // Clip to plot area and draw
+    // Clip to visible chart area and draw
     canvas.save();
-    canvas.clipRect(_plotArea);
+    canvas.clipRect(_chartClip);
     canvas.drawPath(path, paint);
     canvas.restore();
   }
@@ -271,15 +321,15 @@ class ChartPainter extends CustomPainter {
       ..color = xAxis!.axisLineColor
       ..strokeWidth = 1.0;
 
-    // Draw axis line
+    // Draw axis line at bottom of chart area
     canvas.drawLine(
-      Offset(_plotArea.left, _plotArea.bottom),
-      Offset(_plotArea.right, _plotArea.bottom),
+      Offset(_chartClip.left, _chartClip.bottom),
+      Offset(_chartClip.right, _chartClip.bottom),
       axisPaint,
     );
 
     // Draw ticks and labels
-    final ticks = _calculateTicks(_xMin, _xMax, xAxis!.majorTickCount ?? 5);
+    final ticks = _calculateTicks(_xDataMin, _xDataMax, xAxis!.majorTickCount ?? 10);
     final tickPaint = Paint()
       ..color = xAxis!.majorTickColor
       ..strokeWidth = 1.0;
@@ -291,13 +341,13 @@ class ChartPainter extends CustomPainter {
 
     for (final tick in ticks) {
       final x = _dataToScreenX(tick);
-      if (x < _plotArea.left || x > _plotArea.right) continue;
+      if (x < _chartClip.left || x > _chartClip.right) continue;
 
       // Draw tick
       if (xAxis!.drawMajorTicks) {
         canvas.drawLine(
-          Offset(x, _plotArea.bottom),
-          Offset(x, _plotArea.bottom + 6),
+          Offset(x, _chartClip.bottom),
+          Offset(x, _chartClip.bottom + 6),
           tickPaint,
         );
       }
@@ -313,12 +363,12 @@ class ChartPainter extends CustomPainter {
         textPainter.layout();
         textPainter.paint(
           canvas,
-          Offset(x - textPainter.width / 2, _plotArea.bottom + 8),
+          Offset(x - textPainter.width / 2, _chartClip.bottom + 8),
         );
       }
     }
 
-    // Draw axis title
+    // Draw axis title centered below chart area
     if (xAxis!.axisTitle != null) {
       final titleStyle = TextStyle(
         color: xAxis!.axisTitleColor,
@@ -333,7 +383,7 @@ class ChartPainter extends CustomPainter {
       textPainter.paint(
         canvas,
         Offset(
-          _plotArea.left + (_plotArea.width - textPainter.width) / 2,
+          _chartClip.left + (_chartClip.width - textPainter.width) / 2,
           size.height - textPainter.height - 2,
         ),
       );
@@ -347,15 +397,15 @@ class ChartPainter extends CustomPainter {
       ..color = yAxis!.axisLineColor
       ..strokeWidth = 1.0;
 
-    // Draw axis line
+    // Draw axis line at right edge of chart area
     canvas.drawLine(
-      Offset(_plotArea.left, _plotArea.top),
-      Offset(_plotArea.left, _plotArea.bottom),
+      Offset(_chartClip.right, _chartClip.top),
+      Offset(_chartClip.right, _chartClip.bottom),
       axisPaint,
     );
 
     // Draw ticks and labels
-    final ticks = _calculateTicks(_yMin, _yMax, yAxis!.majorTickCount ?? 5);
+    final ticks = _calculateTicks(_yDataMin, _yDataMax, yAxis!.majorTickCount ?? 10);
     final tickPaint = Paint()
       ..color = yAxis!.majorTickColor
       ..strokeWidth = 1.0;
@@ -367,18 +417,18 @@ class ChartPainter extends CustomPainter {
 
     for (final tick in ticks) {
       final y = _dataToScreenY(tick);
-      if (y < _plotArea.top || y > _plotArea.bottom) continue;
+      if (y < _chartClip.top || y > _chartClip.bottom) continue;
 
-      // Draw tick
+      // Draw tick to the right of axis line
       if (yAxis!.drawMajorTicks) {
         canvas.drawLine(
-          Offset(_plotArea.left - 6, y),
-          Offset(_plotArea.left, y),
+          Offset(_chartClip.right, y),
+          Offset(_chartClip.right + 6, y),
           tickPaint,
         );
       }
 
-      // Draw label
+      // Draw label to the right of tick
       if (yAxis!.drawAxisLabels) {
         final label = _formatNumber(tick);
         final textSpan = TextSpan(text: label, style: textStyle);
@@ -389,16 +439,16 @@ class ChartPainter extends CustomPainter {
         textPainter.layout();
         textPainter.paint(
           canvas,
-          Offset(_plotArea.left - textPainter.width - 8, y - textPainter.height / 2),
+          Offset(_chartClip.right + 8, y - textPainter.height / 2),
         );
       }
     }
 
-    // Draw axis title (rotated)
+    // Draw axis title (rotated) on right side
     if (yAxis!.axisTitle != null) {
       canvas.save();
-      canvas.translate(14, _plotArea.top + _plotArea.height / 2);
-      canvas.rotate(-math.pi / 2);
+      canvas.translate(size.width - 14, _chartClip.top + _chartClip.height / 2);
+      canvas.rotate(math.pi / 2);
 
       final titleStyle = TextStyle(
         color: yAxis!.axisTitleColor,
@@ -417,15 +467,13 @@ class ChartPainter extends CustomPainter {
   }
 
   String _formatNumber(double value) {
-    // Simple formatting - can be enhanced based on labelFormat
+    // Always show 1 decimal place to match SciChart default formatting
     if (value.abs() >= 1000000) {
       return '${(value / 1000000).toStringAsFixed(1)}M';
     } else if (value.abs() >= 1000) {
       return '${(value / 1000).toStringAsFixed(1)}K';
-    } else if (value == value.roundToDouble()) {
-      return value.toInt().toString();
     } else {
-      return value.toStringAsFixed(2);
+      return value.toStringAsFixed(1);
     }
   }
 
