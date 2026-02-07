@@ -139,10 +139,10 @@ async def capture_scichart(output_path: Path) -> bool:
     """Capture screenshot from SciChart reference page."""
     async with async_playwright() as p:
         browser = await p.chromium.launch()
-        page = await browser.new_page(viewport={"width": 820, "height": 640})
+        page = await browser.new_page(viewport={"width": 800, "height": 600})
         
         # Load the SciChart reference page
-        await page.goto("http://localhost:8080/scichart_reference.html")
+        await page.goto("http://localhost:9080/scichart_reference.html")
         
         # Wait for chart to be ready
         await page.wait_for_function("window.chartReady === true", timeout=30000)
@@ -150,42 +150,34 @@ async def capture_scichart(output_path: Path) -> bool:
         # Small delay for rendering to complete
         await asyncio.sleep(0.5)
         
-        # Capture screenshot of chart container only
-        chart = await page.query_selector("#chart-container")
-        if chart:
-            await chart.screenshot(path=str(output_path))
-            print(f"✓ SciChart screenshot saved to {output_path}")
-            await browser.close()
-            return True
-        else:
-            print("✗ Could not find chart container")
-            await browser.close()
-            return False
+        # Capture full page screenshot
+        await page.screenshot(path=str(output_path))
+        print(f"✓ SciChart screenshot saved to {output_path}")
+        await browser.close()
+        return True
 
 
 async def capture_superplot(output_path: Path, flutter_url: str) -> bool:
     """Capture screenshot from SuperPlot Flutter web build."""
-    async with async_playwright() as p:
-        browser = await p.chromium.launch()
-        page = await browser.new_page(viewport={"width": 820, "height": 640})
-        
-        await page.goto(flutter_url)
-        
-        # Wait for Flutter to initialize
-        await page.wait_for_function(
-            "document.querySelector('flt-glass-pane') !== null",
-            timeout=30000
-        )
-        
-        # Wait for chart to render
-        await asyncio.sleep(1.0)
-        
-        # Capture screenshot
-        await page.screenshot(path=str(output_path))
-        print(f"✓ SuperPlot screenshot saved to {output_path}")
-        
-        await browser.close()
-        return True
+    try:
+        async with async_playwright() as p:
+            browser = await p.chromium.launch()
+            page = await browser.new_page(viewport={"width": 800, "height": 600})
+            
+            await page.goto(flutter_url, wait_until="networkidle")
+            
+            # Give Flutter time to render
+            await asyncio.sleep(2.0)
+            
+            # Capture screenshot
+            await page.screenshot(path=str(output_path))
+            print(f"✓ SuperPlot screenshot saved to {output_path}")
+            
+            await browser.close()
+            return True
+    except Exception as e:
+        print(f"✗ Failed to capture SuperPlot: {e}")
+        return False
 
 
 async def run_comparison():
@@ -206,17 +198,20 @@ async def run_comparison():
     
     if not scichart_ok:
         print("\n✗ Failed to capture SciChart. Make sure the server is running:")
-        print("  cd tests/harness && python -m http.server 8080")
+        print("  cd tests/harness && python -m http.server 9080")
         return
     
-    # For now, we'll just capture SciChart to establish the reference
-    # The SuperPlot capture requires a running Flutter web build
-    print("\n2. SuperPlot capture requires Flutter web build.")
-    print("   Run: cd src/flutter/flet_superplot && flutter build web")
-    print("   Then serve at http://localhost:8081")
+    # Capture SuperPlot from Flutter web build
+    print("\n2. Capturing SuperPlot...")
+    superplot_ok = await capture_superplot(superplot_img, "http://localhost:9081")
     
-    # If superplot image exists, run comparison
-    if superplot_img.exists():
+    if not superplot_ok:
+        print("\n✗ Failed to capture SuperPlot. Make sure the server is running:")
+        print("  cd src/flutter/flet_superplot/build/web && python -m http.server 9081")
+        return
+    
+    # Run comparison
+    if scichart_ok and superplot_ok:
         print("\n3. Computing difference...")
         result = compute_image_difference(scichart_img, superplot_img)
         
@@ -242,11 +237,6 @@ async def run_comparison():
                 print("~ PARTIAL MATCH - Less than 5% different pixels")
             else:
                 print("✗ SIGNIFICANT DIFFERENCE - More than 5% different pixels")
-    else:
-        print(f"\n✓ SciChart reference captured. To compare:")
-        print(f"   1. Build SuperPlot Flutter web")
-        print(f"   2. Place screenshot at: {superplot_img}")
-        print(f"   3. Re-run this script")
 
 
 def main():
