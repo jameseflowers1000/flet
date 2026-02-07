@@ -32,6 +32,13 @@ class ChartPainter extends CustomPainter {
   static const double _rightAxisWidth = 70.0;
   static const double _bottomAxisHeight = 52.0;
 
+  // Cached pictures for grid and axes (expensive TextPainter work).
+  // Invalidated when size or visible ranges change.
+  // Split into two layers: grid (behind data) and axes (on top of data).
+  static ui.Picture? _gridCache;
+  static ui.Picture? _axesCache;
+  static String _chromeCacheKey = '';
+
   ChartPainter({
     this.xAxis,
     this.yAxis,
@@ -83,14 +90,46 @@ class ChartPainter extends CustomPainter {
     }
     swPlot.stop();
 
-    // Draw grid lines
-    final swGrid = Stopwatch()..start();
-    try {
-      _drawGridLines(canvas, size);
-    } catch (e) {
-      print('SuperPlot _drawGridLines error: $e');
+    // Build cache key from size + visible ranges
+    final cacheKey = '${size.width},${size.height},'
+        '$_xMin,$_xMax,$_yMin,$_yMax,'
+        '$_xDataMin,$_xDataMax,$_yDataMin,$_yDataMax';
+    final bool cacheHit = (_gridCache != null && _chromeCacheKey == cacheKey);
+
+    // Build or replay cached grid + axes pictures
+    final swChrome = Stopwatch()..start();
+    if (!cacheHit) {
+      // Record grid into its own Picture (drawn behind data)
+      final gridRec = ui.PictureRecorder();
+      final gridCanvas = Canvas(gridRec);
+      try {
+        _drawGridLines(gridCanvas, size);
+      } catch (e) {
+        print('SuperPlot _drawGridLines error: $e');
+      }
+      _gridCache = gridRec.endRecording();
+
+      // Record axes into their own Picture (drawn on top of data)
+      final axesRec = ui.PictureRecorder();
+      final axesCanvas = Canvas(axesRec);
+      try {
+        _drawXAxis(axesCanvas, size);
+      } catch (e) {
+        debugPrint('SuperPlot _drawXAxis error: $e');
+      }
+      try {
+        _drawYAxis(axesCanvas, size);
+      } catch (e) {
+        debugPrint('SuperPlot _drawYAxis error: $e');
+      }
+      _axesCache = axesRec.endRecording();
+
+      _chromeCacheKey = cacheKey;
     }
-    swGrid.stop();
+    swChrome.stop();
+
+    // Draw grid behind data
+    canvas.drawPicture(_gridCache!);
 
     // Draw series data
     int totalPoints = 0;
@@ -107,20 +146,8 @@ class ChartPainter extends CustomPainter {
     }
     swSeries.stop();
 
-    // Draw axes on top
-    final swAxes = Stopwatch()..start();
-    try {
-      _drawXAxis(canvas, size);
-    } catch (e) {
-      debugPrint('SuperPlot _drawXAxis error: $e');
-    }
-
-    try {
-      _drawYAxis(canvas, size);
-    } catch (e) {
-      debugPrint('SuperPlot _drawYAxis error: $e');
-    }
-    swAxes.stop();
+    // Draw axes on top of data
+    canvas.drawPicture(_axesCache!);
 
     sw.stop();
     if (_frameCount < _profileFrames) {
@@ -128,9 +155,9 @@ class ChartPainter extends CustomPainter {
       print('[PERF] frame=${_frameCount} total=${sw.elapsedMicroseconds}us '
           'ranges=${swRanges.elapsedMicroseconds}us '
           'plotArea=${swPlot.elapsedMicroseconds}us '
-          'grid=${swGrid.elapsedMicroseconds}us '
+          'chrome=${swChrome.elapsedMicroseconds}us '
+          'chromeHit=$cacheHit '
           'series=${swSeries.elapsedMicroseconds}us '
-          'axes=${swAxes.elapsedMicroseconds}us '
           'points=$totalPoints lttb=${totalPoints > targetPts ? "ON" : "OFF"}');
       _frameCount++;
     }
