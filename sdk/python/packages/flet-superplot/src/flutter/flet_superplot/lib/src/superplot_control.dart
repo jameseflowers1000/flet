@@ -4,9 +4,9 @@ import 'dart:typed_data';
 import 'package:flet/flet.dart';
 import 'package:flutter/material.dart';
 
+import 'interactive_chart.dart';
 import 'models/axis_model.dart';
 import 'models/series_model.dart';
-import 'painters/chart_painter.dart';
 
 /// Main SuperPlot control widget.
 /// 
@@ -133,25 +133,17 @@ class _SuperPlotControlState extends State<SuperPlotControl> {
     
     return ConstrainedControl(
       control: widget.control,
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          return ClipRect(
-            child: CustomPaint(
-              painter: ChartPainter(
-                xAxis: _xAxis,
-                yAxis: _yAxis,
-                series: _series,
-                backgroundColor: _backgroundColor,
-                showMajorGridLines: _showMajorGridLines,
-                showMinorGridLines: _showMinorGridLines,
-                majorGridLineColor: _majorGridLineColor,
-                minorGridLineColor: _minorGridLineColor,
-              ),
-              // Use SizedBox.expand() to fill available space
-              child: const SizedBox.expand(),
-            ),
-          );
-        },
+      child: ClipRect(
+        child: InteractiveChart(
+          xAxis: _xAxis,
+          yAxis: _yAxis,
+          series: _series,
+          backgroundColor: _backgroundColor,
+          showMajorGridLines: _showMajorGridLines,
+          showMinorGridLines: _showMinorGridLines,
+          majorGridLineColor: _majorGridLineColor,
+          minorGridLineColor: _minorGridLineColor,
+        ),
       ),
     );
   }

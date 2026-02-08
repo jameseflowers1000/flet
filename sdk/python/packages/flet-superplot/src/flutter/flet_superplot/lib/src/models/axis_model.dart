@@ -97,4 +97,40 @@ class AxisModel {
 
   bool get isHorizontal => axisAlignment == 'top' || axisAlignment == 'bottom';
   bool get isLogarithmic => type == 'logarithmic';
+
+  /// Create a copy with selected fields overridden.
+  AxisModel copyWith({
+    double? visibleRangeMin,
+    double? visibleRangeMax,
+    String? autoRange,
+    double? growByMin,
+    double? growByMax,
+  }) {
+    return AxisModel(
+      type: type,
+      axisTitle: axisTitle,
+      visibleRangeMin: visibleRangeMin ?? this.visibleRangeMin,
+      visibleRangeMax: visibleRangeMax ?? this.visibleRangeMax,
+      autoRange: autoRange ?? this.autoRange,
+      growByMin: growByMin ?? this.growByMin,
+      growByMax: growByMax ?? this.growByMax,
+      axisAlignment: axisAlignment,
+      labelFormat: labelFormat,
+      majorTickCount: majorTickCount,
+      minorTickCount: minorTickCount,
+      axisTitleColor: axisTitleColor,
+      axisLabelColor: axisLabelColor,
+      axisLineColor: axisLineColor,
+      majorTickColor: majorTickColor,
+      minorTickColor: minorTickColor,
+      axisTitleFontSize: axisTitleFontSize,
+      axisLabelFontSize: axisLabelFontSize,
+      drawMajorTicks: drawMajorTicks,
+      drawMinorTicks: drawMinorTicks,
+      drawMajorGridLines: drawMajorGridLines,
+      drawMinorGridLines: drawMinorGridLines,
+      drawAxisLabels: drawAxisLabels,
+      logarithmicBase: logarithmicBase,
+    );
+  }
 }

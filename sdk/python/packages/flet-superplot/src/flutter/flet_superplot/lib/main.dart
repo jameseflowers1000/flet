@@ -3,9 +3,9 @@ import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 
+import 'src/interactive_chart.dart';
 import 'src/models/axis_model.dart';
 import 'src/models/series_model.dart';
-import 'src/painters/chart_painter.dart';
 
 /// Standalone test app for SuperPlot visual comparison with SciChart.
 /// 
@@ -179,18 +179,15 @@ class _SuperPlotTestPageState extends State<SuperPlotTestPage> {
         child: SizedBox(
           width: 800,
           height: 600,
-          child: CustomPaint(
-            painter: ChartPainter(
-              xAxis: _xAxis,
-              yAxis: _yAxis,
-              series: _series,
-              backgroundColor: const Color(0xFF1c1c1e),
-              showMajorGridLines: true,
-              showMinorGridLines: false,
-              majorGridLineColor: const Color(0xFF333333),
-              minorGridLineColor: const Color(0xFF222222),
-            ),
-            child: Container(),
+          child: InteractiveChart(
+            xAxis: _xAxis,
+            yAxis: _yAxis,
+            series: _series,
+            backgroundColor: const Color(0xFF1c1c1e),
+            showMajorGridLines: true,
+            showMinorGridLines: false,
+            majorGridLineColor: const Color(0xFF333333),
+            minorGridLineColor: const Color(0xFF222222),
           ),
         ),
       ),
