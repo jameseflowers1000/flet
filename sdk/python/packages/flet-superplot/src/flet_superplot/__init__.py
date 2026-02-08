@@ -4,7 +4,7 @@ SuperPlot - High-performance charting for Flet.
 API compatible with SciChart for easy migration and side-by-side comparison.
 """
 
-from .superplot import SuperPlot, create_surface
+from .superplot import SuperPlot, create_surface, SOURCE_VERSION, print_version_once
 from .axis import NumericAxis, LogarithmicAxis, AxisAlignment, AutoRange
 from .series import (
     FastLineSeries,
@@ -19,6 +19,8 @@ __all__ = [
     # Main control
     "SuperPlot",
     "create_surface",
+    "SOURCE_VERSION",
+    "print_version_once",
     # Axes
     "NumericAxis",
     "LogarithmicAxis",

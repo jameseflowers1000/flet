@@ -14,6 +14,25 @@ from .axis import NumericAxis, LogarithmicAxis
 from .series import FastLineSeries, XyScatterSeries
 from .data import XyDataSeries
 
+# Source version - must match Flutter SuperPlotControl.version
+SOURCE_VERSION = '0.1.0'
+
+# Track whether we've printed version info
+_version_printed = False
+
+def print_version_once(runtime_version: Optional[str] = None):
+    """Print SuperPlot version info once."""
+    global _version_printed
+    if _version_printed:
+        return
+    _version_printed = True
+    
+    if runtime_version:
+        match = "✓" if runtime_version == SOURCE_VERSION else f"✗ (source: {SOURCE_VERSION})"
+        print(f"[SuperPlot] Runtime v{runtime_version} {match}")
+    else:
+        print(f"[SuperPlot] Source v{SOURCE_VERSION} (runtime version pending)")
+
 
 @ft.control("flet_superplot")
 class SuperPlot(ft.LayoutControl):
@@ -61,6 +80,9 @@ class SuperPlot(ft.LayoutControl):
     # Grid line colors
     major_grid_line_color: str = "#333333"
     minor_grid_line_color: str = "#222222"
+    
+    # Runtime version - set by Flutter after render
+    runtime_version: Optional[str] = None
     
     # Internal storage (renamed to avoid conflict with JSON property names)
     _x_axis_obj: Optional[NumericAxis] = field(default=None, repr=False, metadata={"skip": True})

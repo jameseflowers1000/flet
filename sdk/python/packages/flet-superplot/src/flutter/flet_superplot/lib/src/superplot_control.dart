@@ -13,6 +13,10 @@ import 'painters/chart_painter.dart';
 /// Parses configuration from Flet control properties and renders
 /// using CustomPainter for GPU-accelerated drawing.
 class SuperPlotControl extends StatefulWidget {
+  /// SuperPlot version - update this when making changes.
+  /// Format: major.minor.patch
+  static const String version = '0.1.02';
+  
   final Control control;
 
   const SuperPlotControl({
@@ -28,6 +32,7 @@ class _SuperPlotControlState extends State<SuperPlotControl> {
   AxisModel? _xAxis;
   AxisModel? _yAxis;
   List<SeriesModel> _series = [];
+  bool _versionSent = false;
   
   // Chart styling from control
   Color _backgroundColor = const Color(0xFF1c1c1e);
@@ -115,6 +120,17 @@ class _SuperPlotControlState extends State<SuperPlotControl> {
 
   @override
   Widget build(BuildContext context) {
+    // Send version to Python once
+    if (!_versionSent) {
+      _versionSent = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        FletBackend.of(context).updateControl(
+          widget.control.id,
+          {'runtime_version': SuperPlotControl.version},
+        );
+      });
+    }
+    
     return ConstrainedControl(
       control: widget.control,
       child: LayoutBuilder(
