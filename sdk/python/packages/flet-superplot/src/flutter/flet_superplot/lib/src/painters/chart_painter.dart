@@ -163,15 +163,31 @@ class ChartPainter extends CustomPainter {
 
   /// Convert screen X coordinate to data X value.
   static double screenToDataX(
-      double screenX, Rect plotArea, double xMin, double xMax) {
+      double screenX, Rect plotArea, double xMin, double xMax,
+      {bool isLogarithmic = false, double logarithmicBase = 10.0}) {
     final ratio = (screenX - plotArea.left) / plotArea.width;
+    if (isLogarithmic) {
+      final logBase = math.log(logarithmicBase);
+      final logMin = math.log(xMin.clamp(1e-100, double.infinity)) / logBase;
+      final logMax = math.log(xMax.clamp(1e-100, double.infinity)) / logBase;
+      final logVal = logMin + ratio * (logMax - logMin);
+      return math.pow(logarithmicBase, logVal).toDouble();
+    }
     return xMin + ratio * (xMax - xMin);
   }
 
   /// Convert screen Y coordinate to data Y value (Y is inverted).
   static double screenToDataY(
-      double screenY, Rect plotArea, double yMin, double yMax) {
+      double screenY, Rect plotArea, double yMin, double yMax,
+      {bool isLogarithmic = false, double logarithmicBase = 10.0}) {
     final ratio = (plotArea.bottom - screenY) / plotArea.height;
+    if (isLogarithmic) {
+      final logBase = math.log(logarithmicBase);
+      final logMin = math.log(yMin.clamp(1e-100, double.infinity)) / logBase;
+      final logMax = math.log(yMax.clamp(1e-100, double.infinity)) / logBase;
+      final logVal = logMin + ratio * (logMax - logMin);
+      return math.pow(logarithmicBase, logVal).toDouble();
+    }
     return yMin + ratio * (yMax - yMin);
   }
 
@@ -210,6 +226,32 @@ class ChartPainter extends CustomPainter {
     return ticks;
   }
 
+  /// Calculate tick values for a logarithmic axis.
+  /// Ticks at each power of the base AND at 3× each power (matching SciChart
+  /// default behavior: 1, 3, 10, 30, 100, 300, ...).
+  static List<double> calculateLogTicks(double min, double max, double base) {
+    if (min <= 0) min = 1e-100;
+    if (max <= min) return [min];
+
+    final logBase = math.log(base);
+    final logMin = (math.log(min) / logBase).floor();
+    final logMax = (math.log(max) / logBase).ceil();
+    final ticks = <double>[];
+    for (int p = logMin; p <= logMax; p++) {
+      final tick = math.pow(base, p).toDouble();
+      if (tick >= min * 0.999 && tick <= max * 1.001) {
+        ticks.add(tick);
+      }
+      // Intermediate tick at 3× (half-decade in log space)
+      final midTick = 3 * tick;
+      if (midTick >= min * 0.999 && midTick <= max * 1.001) {
+        ticks.add(midTick);
+      }
+    }
+    ticks.sort();
+    return ticks;
+  }
+
   // ---------------------------------------------------------------------------
   // Internal methods
   // ---------------------------------------------------------------------------
@@ -245,31 +287,55 @@ class ChartPainter extends CustomPainter {
     _yDataMax = _yMax.isFinite ? _yMax : 1;
 
     if (_xMin.isFinite && _xMax.isFinite) {
-      final xRange = _xMax - _xMin;
-      if (xRange > 0) {
-        _xMin -= xRange * (xAxis?.growByMin ?? 0.1);
-        _xMax += xRange * (xAxis?.growByMax ?? 0.1);
+      if (xAxis?.isLogarithmic == true) {
+        // Multiplicative grow-by in log space
+        final base = xAxis!.logarithmicBase ?? 10.0;
+        if (_xMin > 0 && _xMax > _xMin) {
+          _xMin = _xMin / math.pow(base, xAxis!.growByMin);
+          _xMax = _xMax * math.pow(base, xAxis!.growByMax);
+        } else {
+          _xMin = 0.1;
+          _xMax = 10;
+        }
       } else {
-        _xMin -= 1;
-        _xMax += 1;
+        final xRange = _xMax - _xMin;
+        if (xRange > 0) {
+          _xMin -= xRange * (xAxis?.growByMin ?? 0.1);
+          _xMax += xRange * (xAxis?.growByMax ?? 0.1);
+        } else {
+          _xMin -= 1;
+          _xMax += 1;
+        }
       }
     } else {
-      _xMin = 0;
-      _xMax = 1;
+      _xMin = xAxis?.isLogarithmic == true ? 0.1 : 0;
+      _xMax = xAxis?.isLogarithmic == true ? 10 : 1;
     }
 
     if (_yMin.isFinite && _yMax.isFinite) {
-      final yRange = _yMax - _yMin;
-      if (yRange > 0) {
-        _yMin -= yRange * (yAxis?.growByMin ?? 0.1);
-        _yMax += yRange * (yAxis?.growByMax ?? 0.1);
+      if (yAxis?.isLogarithmic == true) {
+        // Multiplicative grow-by in log space
+        final base = yAxis!.logarithmicBase ?? 10.0;
+        if (_yMin > 0 && _yMax > _yMin) {
+          _yMin = _yMin / math.pow(base, yAxis!.growByMin);
+          _yMax = _yMax * math.pow(base, yAxis!.growByMax);
+        } else {
+          _yMin = 0.1;
+          _yMax = 10;
+        }
       } else {
-        _yMin -= 1;
-        _yMax += 1;
+        final yRange = _yMax - _yMin;
+        if (yRange > 0) {
+          _yMin -= yRange * (yAxis?.growByMin ?? 0.1);
+          _yMax += yRange * (yAxis?.growByMax ?? 0.1);
+        } else {
+          _yMin -= 1;
+          _yMax += 1;
+        }
       }
     } else {
-      _yMin = 0;
-      _yMax = 1;
+      _yMin = yAxis?.isLogarithmic == true ? 0.1 : 0;
+      _yMax = yAxis?.isLogarithmic == true ? 10 : 1;
     }
   }
 
@@ -287,11 +353,29 @@ class ChartPainter extends CustomPainter {
   }
 
   double _dataToScreenX(double dataX) {
+    if (xAxis?.isLogarithmic == true) {
+      final base = xAxis!.logarithmicBase ?? 10.0;
+      final logBase = math.log(base);
+      final logMin = math.log(_xMin.clamp(1e-100, double.infinity)) / logBase;
+      final logMax = math.log(_xMax.clamp(1e-100, double.infinity)) / logBase;
+      final logVal = math.log(dataX.clamp(1e-100, double.infinity)) / logBase;
+      final ratio = (logVal - logMin) / (logMax - logMin);
+      return _plotArea.left + ratio * _plotArea.width;
+    }
     final ratio = (dataX - _xMin) / (_xMax - _xMin);
     return _plotArea.left + ratio * _plotArea.width;
   }
 
   double _dataToScreenY(double dataY) {
+    if (yAxis?.isLogarithmic == true) {
+      final base = yAxis!.logarithmicBase ?? 10.0;
+      final logBase = math.log(base);
+      final logMin = math.log(_yMin.clamp(1e-100, double.infinity)) / logBase;
+      final logMax = math.log(_yMax.clamp(1e-100, double.infinity)) / logBase;
+      final logVal = math.log(dataY.clamp(1e-100, double.infinity)) / logBase;
+      final ratio = (logVal - logMin) / (logMax - logMin);
+      return _plotArea.bottom - ratio * _plotArea.height;
+    }
     final ratio = (dataY - _yMin) / (_yMax - _yMin);
     return _plotArea.bottom - ratio * _plotArea.height;
   }
@@ -301,12 +385,42 @@ class ChartPainter extends CustomPainter {
       ..color = majorGridLineColor
       ..strokeWidth = 1.0;
 
-    // Use visible range (_xMin/_xMax) for ticks, not data range (_xDataMin/_xDataMax).
-    // This ensures grid lines cover the full visible area when zoomed out.
-    final xTicks = calculateTicks(
-        _xMin, _xMax, xAxis?.majorTickCount ?? 10);
-    final yTicks = calculateTicks(
-        _yMin, _yMax, yAxis?.majorTickCount ?? 10);
+    final xIsLog = xAxis?.isLogarithmic == true;
+    final yIsLog = yAxis?.isLogarithmic == true;
+    final xLogBase = xAxis?.logarithmicBase ?? 10.0;
+    final yLogBase = yAxis?.logarithmicBase ?? 10.0;
+
+    final xTicks = xIsLog
+        ? calculateLogTicks(_xMin, _xMax, xLogBase)
+        : calculateTicks(_xMin, _xMax, xAxis?.majorTickCount ?? 10);
+    final yTicks = yIsLog
+        ? calculateLogTicks(_yMin, _yMax, yLogBase)
+        : calculateTicks(_yMin, _yMax, yAxis?.majorTickCount ?? 10);
+
+    // Minor grid lines
+    if (showMinorGridLines) {
+      final minorPaint = Paint()
+        ..color = minorGridLineColor
+        ..strokeWidth = 0.5;
+
+      // Minor X grid lines
+      if (xTicks.length >= 2) {
+        if (xIsLog) {
+          _drawLogMinorGridLinesX(canvas, xTicks, xLogBase, minorPaint);
+        } else {
+          _drawLinearMinorGridLinesX(canvas, xTicks, minorPaint);
+        }
+      }
+
+      // Minor Y grid lines
+      if (yTicks.length >= 2) {
+        if (yIsLog) {
+          _drawLogMinorGridLinesY(canvas, yTicks, yLogBase, minorPaint);
+        } else {
+          _drawLinearMinorGridLinesY(canvas, yTicks, minorPaint);
+        }
+      }
+    }
 
     if (showMajorGridLines) {
       for (final tick in xTicks) {
@@ -332,9 +446,123 @@ class ChartPainter extends CustomPainter {
     }
   }
 
+  void _drawLinearMinorGridLinesX(Canvas canvas, List<double> ticks, Paint paint) {
+    const int minorDivisions = 5;
+    for (int i = 0; i < ticks.length - 1; i++) {
+      final step = (ticks[i + 1] - ticks[i]) / minorDivisions;
+      for (int j = 1; j < minorDivisions; j++) {
+        final x = _dataToScreenX(ticks[i] + j * step);
+        if (x >= _chartClip.left && x <= _chartClip.right) {
+          canvas.drawLine(Offset(x, _chartClip.top), Offset(x, _chartClip.bottom), paint);
+        }
+      }
+    }
+  }
+
+  void _drawLinearMinorGridLinesY(Canvas canvas, List<double> ticks, Paint paint) {
+    const int minorDivisions = 5;
+    for (int i = 0; i < ticks.length - 1; i++) {
+      final step = (ticks[i + 1] - ticks[i]) / minorDivisions;
+      for (int j = 1; j < minorDivisions; j++) {
+        final y = _dataToScreenY(ticks[i] + j * step);
+        if (y >= _chartClip.top && y <= _chartClip.bottom) {
+          canvas.drawLine(Offset(_chartClip.left, y), Offset(_chartClip.right, y), paint);
+        }
+      }
+    }
+  }
+
+  void _drawLogMinorGridLinesX(Canvas canvas, List<double> ticks, double base, Paint paint) {
+    // Minor ticks at 2, 3, ..., base-1 between each decade
+    final baseInt = base.toInt();
+    for (int i = 0; i < ticks.length - 1; i++) {
+      for (int m = 2; m < baseInt; m++) {
+        final minorTick = ticks[i] * m;
+        if (minorTick >= ticks[i + 1]) break;
+        final x = _dataToScreenX(minorTick);
+        if (x >= _chartClip.left && x <= _chartClip.right) {
+          canvas.drawLine(Offset(x, _chartClip.top), Offset(x, _chartClip.bottom), paint);
+        }
+      }
+    }
+  }
+
+  void _drawLogMinorGridLinesY(Canvas canvas, List<double> ticks, double base, Paint paint) {
+    final baseInt = base.toInt();
+    for (int i = 0; i < ticks.length - 1; i++) {
+      for (int m = 2; m < baseInt; m++) {
+        final minorTick = ticks[i] * m;
+        if (minorTick >= ticks[i + 1]) break;
+        final y = _dataToScreenY(minorTick);
+        if (y >= _chartClip.top && y <= _chartClip.bottom) {
+          canvas.drawLine(Offset(_chartClip.left, y), Offset(_chartClip.right, y), paint);
+        }
+      }
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Series rendering — type dispatcher
+  // ---------------------------------------------------------------------------
+
   void _drawSeries(Canvas canvas, SeriesModel series) {
+    switch (series.type) {
+      case 'scatter':
+      case 'xy_scatter':
+        _drawScatterSeries(canvas, series);
+        break;
+      case 'mountain':
+      case 'fast_mountain':
+        _drawMountainSeries(canvas, series);
+        break;
+      case 'fast_line':
+      default:
+        _drawLineSeries(canvas, series);
+        break;
+    }
+  }
+
+  /// Get visible data range and optional LTTB decimation indices.
+  /// Returns null if insufficient visible points.
+  _VisibleData? _getVisibleData(SeriesModel series, {int minPoints = 2}) {
     final data = series.data!;
-    if (data.length < 2) return;
+    if (data.length < minPoints) return null;
+
+    final xValues = data.xValues;
+    final yValues = data.yValues;
+    final int totalPoints = data.length;
+
+    final visibleStart =
+        (_lowerBound(xValues, _xMin, 0, totalPoints) - 1)
+            .clamp(0, totalPoints - 1);
+    final visibleEnd =
+        (_upperBound(xValues, _xMax, 0, totalPoints) + 1)
+            .clamp(0, totalPoints - 1);
+    final visibleCount = visibleEnd - visibleStart + 1;
+    if (visibleCount < minPoints) return null;
+
+    final visibleX =
+        Float64List.sublistView(xValues, visibleStart, visibleEnd + 1);
+    final visibleY =
+        Float64List.sublistView(yValues, visibleStart, visibleEnd + 1);
+
+    final targetPoints = (_chartClip.width * 2).toInt().clamp(100, 10000);
+    final indices = visibleCount > targetPoints
+        ? _lttbDecimate(visibleX, visibleY, visibleCount, targetPoints)
+        : null;
+
+    return _VisibleData(
+      visibleX: visibleX,
+      visibleY: visibleY,
+      visibleCount: visibleCount,
+      indices: indices,
+      drawCount: indices?.length ?? visibleCount,
+    );
+  }
+
+  void _drawLineSeries(Canvas canvas, SeriesModel series) {
+    final vd = _getVisibleData(series);
+    if (vd == null) return;
 
     final paint = Paint()
       ..color = series.strokeColor.withValues(alpha: series.opacity)
@@ -344,41 +572,13 @@ class ChartPainter extends CustomPainter {
       ..strokeJoin = StrokeJoin.round
       ..isAntiAlias = series.antiAliasing;
 
-    final xValues = data.xValues;
-    final yValues = data.yValues;
-    final int totalPoints = data.length;
-
-    // Pre-filter to visible X range (assumes sorted X data).
-    // Pad by 1 on each side for line continuity at edges.
-    final visibleStart =
-        (_lowerBound(xValues, _xMin, 0, totalPoints) - 1)
-            .clamp(0, totalPoints - 1);
-    final visibleEnd =
-        (_upperBound(xValues, _xMax, 0, totalPoints) + 1)
-            .clamp(0, totalPoints - 1);
-    final visibleCount = visibleEnd - visibleStart + 1;
-    if (visibleCount < 2) return;
-
-    // Zero-copy views of the visible subset.
-    final visibleX =
-        Float64List.sublistView(xValues, visibleStart, visibleEnd + 1);
-    final visibleY =
-        Float64List.sublistView(yValues, visibleStart, visibleEnd + 1);
-
-    // Apply LTTB decimation when visible points exceed threshold.
-    final targetPoints = (_chartClip.width * 2).toInt().clamp(100, 10000);
-    final indices = visibleCount > targetPoints
-        ? _lttbDecimate(visibleX, visibleY, visibleCount, targetPoints)
-        : null;
-    final int drawCount = indices?.length ?? visibleCount;
-
     final path = Path();
     bool started = false;
 
-    for (int i = 0; i < drawCount; i++) {
-      final idx = indices?[i] ?? i;
-      final x = _dataToScreenX(visibleX[idx]);
-      final y = _dataToScreenY(visibleY[idx]);
+    for (int i = 0; i < vd.drawCount; i++) {
+      final idx = vd.indices?[i] ?? i;
+      final x = _dataToScreenX(vd.visibleX[idx]);
+      final y = _dataToScreenY(vd.visibleY[idx]);
 
       if (!started) {
         path.moveTo(x, y);
@@ -391,7 +591,186 @@ class ChartPainter extends CustomPainter {
     canvas.save();
     canvas.clipRect(_chartClip);
     canvas.drawPath(path, paint);
+
+    // Draw point markers on top of line if configured
+    if (series.pointMarkerType != 'none') {
+      final markerFill = Paint()
+        ..color = series.pointMarkerColor.withValues(alpha: series.opacity)
+        ..style = PaintingStyle.fill
+        ..isAntiAlias = series.antiAliasing;
+      final markerStroke = Paint()
+        ..color = series.strokeColor.withValues(alpha: series.opacity)
+        ..strokeWidth = 1.0
+        ..style = PaintingStyle.stroke
+        ..isAntiAlias = series.antiAliasing;
+      final radius = series.pointMarkerSize / 2;
+
+      for (int i = 0; i < vd.drawCount; i++) {
+        final idx = vd.indices?[i] ?? i;
+        final cx = _dataToScreenX(vd.visibleX[idx]);
+        final cy = _dataToScreenY(vd.visibleY[idx]);
+        _drawPointMarker(canvas, cx, cy, radius, series.pointMarkerType,
+            markerFill, markerStroke);
+      }
+    }
+
     canvas.restore();
+  }
+
+  void _drawScatterSeries(Canvas canvas, SeriesModel series) {
+    final vd = _getVisibleData(series, minPoints: 1);
+    if (vd == null) return;
+
+    final fillPaint = Paint()
+      ..color = series.pointMarkerColor.withValues(alpha: series.opacity)
+      ..style = PaintingStyle.fill
+      ..isAntiAlias = series.antiAliasing;
+
+    final strokePaint = series.strokeThickness > 0
+        ? (Paint()
+          ..color = series.strokeColor.withValues(alpha: series.opacity)
+          ..strokeWidth = series.strokeThickness
+          ..style = PaintingStyle.stroke
+          ..isAntiAlias = series.antiAliasing)
+        : null;
+
+    final radius = series.pointMarkerSize / 2;
+    final markerType = series.pointMarkerType == 'none'
+        ? 'circle'
+        : series.pointMarkerType;
+
+    canvas.save();
+    canvas.clipRect(_chartClip);
+    for (int i = 0; i < vd.drawCount; i++) {
+      final idx = vd.indices?[i] ?? i;
+      final cx = _dataToScreenX(vd.visibleX[idx]);
+      final cy = _dataToScreenY(vd.visibleY[idx]);
+      _drawPointMarker(canvas, cx, cy, radius, markerType,
+          fillPaint, strokePaint);
+    }
+    canvas.restore();
+  }
+
+  void _drawMountainSeries(Canvas canvas, SeriesModel series) {
+    final vd = _getVisibleData(series);
+    if (vd == null) return;
+
+    final strokePaint = Paint()
+      ..color = series.strokeColor.withValues(alpha: series.opacity)
+      ..strokeWidth = series.strokeThickness
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round
+      ..isAntiAlias = series.antiAliasing;
+
+    // Build line path
+    final linePath = Path();
+    double firstScreenX = 0;
+    double lastScreenX = 0;
+    bool started = false;
+
+    for (int i = 0; i < vd.drawCount; i++) {
+      final idx = vd.indices?[i] ?? i;
+      final x = _dataToScreenX(vd.visibleX[idx]);
+      final y = _dataToScreenY(vd.visibleY[idx]);
+
+      if (!started) {
+        linePath.moveTo(x, y);
+        firstScreenX = x;
+        started = true;
+      } else {
+        linePath.lineTo(x, y);
+      }
+      lastScreenX = x;
+    }
+
+    if (!started) return;
+
+    // Build fill path: close the line down to zeroLineY baseline
+    final baselineY = _dataToScreenY(series.zeroLineY);
+    final fillPath = Path()..addPath(linePath, Offset.zero);
+    fillPath.lineTo(lastScreenX, baselineY);
+    fillPath.lineTo(firstScreenX, baselineY);
+    fillPath.close();
+
+    // Fill paint: gradient or solid
+    final fillPaint = Paint()
+      ..style = PaintingStyle.fill
+      ..isAntiAlias = series.antiAliasing;
+
+    if (series.gradientStartColor != null &&
+        series.gradientEndColor != null) {
+      // Preserve the alpha encoded in gradient colors; multiply by series opacity
+      final startAlpha = series.gradientStartColor!.a * series.opacity;
+      final endAlpha = series.gradientEndColor!.a * series.opacity;
+      fillPaint.shader = ui.Gradient.linear(
+        Offset(0, _plotArea.top),
+        Offset(0, baselineY),
+        [
+          series.gradientStartColor!.withValues(alpha: startAlpha),
+          series.gradientEndColor!.withValues(alpha: endAlpha),
+        ],
+      );
+    } else if (series.fillColor != null) {
+      final alpha = series.fillColor!.a * series.opacity;
+      fillPaint.color = series.fillColor!.withValues(alpha: alpha);
+    } else {
+      fillPaint.color = series.strokeColor.withValues(alpha: 0.3 * series.opacity);
+    }
+
+    canvas.save();
+    canvas.clipRect(_chartClip);
+    canvas.drawPath(fillPath, fillPaint);
+    canvas.drawPath(linePath, strokePaint);
+    canvas.restore();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Point marker shapes (shared by scatter + line series with markers)
+  // ---------------------------------------------------------------------------
+
+  void _drawPointMarker(Canvas canvas, double cx, double cy, double radius,
+      String markerType, Paint fillPaint, Paint? strokePaint) {
+    switch (markerType) {
+      case 'circle':
+        canvas.drawCircle(Offset(cx, cy), radius, fillPaint);
+        if (strokePaint != null) {
+          canvas.drawCircle(Offset(cx, cy), radius, strokePaint);
+        }
+        break;
+      case 'square':
+        final rect = Rect.fromCenter(
+            center: Offset(cx, cy),
+            width: radius * 2,
+            height: radius * 2);
+        canvas.drawRect(rect, fillPaint);
+        if (strokePaint != null) canvas.drawRect(rect, strokePaint);
+        break;
+      case 'triangle':
+        final path = Path()
+          ..moveTo(cx, cy - radius)
+          ..lineTo(cx - radius, cy + radius)
+          ..lineTo(cx + radius, cy + radius)
+          ..close();
+        canvas.drawPath(path, fillPaint);
+        if (strokePaint != null) canvas.drawPath(path, strokePaint);
+        break;
+      case 'cross':
+        final crossPaint = strokePaint ?? fillPaint;
+        canvas.drawLine(
+            Offset(cx - radius, cy), Offset(cx + radius, cy), crossPaint);
+        canvas.drawLine(
+            Offset(cx, cy - radius), Offset(cx, cy + radius), crossPaint);
+        break;
+      case 'ellipse':
+        final rect = Rect.fromCenter(
+            center: Offset(cx, cy),
+            width: radius * 2,
+            height: radius * 1.4);
+        canvas.drawOval(rect, fillPaint);
+        if (strokePaint != null) canvas.drawOval(rect, strokePaint);
+        break;
+    }
   }
 
   /// Binary search: first index where values[i] >= target.
@@ -501,8 +880,11 @@ class ChartPainter extends CustomPainter {
       axisPaint,
     );
 
-    final ticks = calculateTicks(
-        _xMin, _xMax, xAxis?.majorTickCount ?? 10);
+    final xIsLog = xAxis?.isLogarithmic == true;
+    final xLogBase = xAxis?.logarithmicBase ?? 10.0;
+    final ticks = xIsLog
+        ? calculateLogTicks(_xMin, _xMax, xLogBase)
+        : calculateTicks(_xMin, _xMax, xAxis?.majorTickCount ?? 10);
     final tickPaint = Paint()
       ..color = xAxis?.majorTickColor ?? const Color(0xFFAAAAAA)
       ..strokeWidth = 1.0;
@@ -511,6 +893,44 @@ class ChartPainter extends CustomPainter {
       color: xAxis?.axisLabelColor ?? const Color(0xFFCCCCCC),
       fontSize: xAxis?.axisLabelFontSize ?? 12.0,
     );
+
+    // Minor ticks between major ticks
+    if (showMinorGridLines && ticks.length >= 2) {
+      final minorTickPaint = Paint()
+        ..color = xAxis?.majorTickColor ?? const Color(0xFFAAAAAA)
+        ..strokeWidth = 0.5;
+      if (xIsLog) {
+        final baseInt = xLogBase.toInt();
+        for (int i = 0; i < ticks.length - 1; i++) {
+          for (int m = 2; m < baseInt; m++) {
+            final minorTick = ticks[i] * m;
+            if (minorTick >= ticks[i + 1]) break;
+            final x = _dataToScreenX(minorTick);
+            if (x < _chartClip.left || x > _chartClip.right) continue;
+            canvas.drawLine(
+              Offset(x, _chartClip.bottom),
+              Offset(x, _chartClip.bottom + 3),
+              minorTickPaint,
+            );
+          }
+        }
+      } else {
+        const int minorDivisions = 5;
+        for (int i = 0; i < ticks.length - 1; i++) {
+          final step = (ticks[i + 1] - ticks[i]) / minorDivisions;
+          for (int j = 1; j < minorDivisions; j++) {
+            final minorTick = ticks[i] + j * step;
+            final x = _dataToScreenX(minorTick);
+            if (x < _chartClip.left || x > _chartClip.right) continue;
+            canvas.drawLine(
+              Offset(x, _chartClip.bottom),
+              Offset(x, _chartClip.bottom + 3),
+              minorTickPaint,
+            );
+          }
+        }
+      }
+    }
 
     for (final tick in ticks) {
       final x = _dataToScreenX(tick);
@@ -522,7 +942,7 @@ class ChartPainter extends CustomPainter {
         tickPaint,
       );
 
-      final label = _formatNumber(tick);
+      final label = xIsLog ? _formatLogNumber(tick, xLogBase) : _formatNumber(tick);
       final textSpan = TextSpan(text: label, style: textStyle);
       final textPainter = TextPainter(
         text: textSpan,
@@ -567,8 +987,11 @@ class ChartPainter extends CustomPainter {
       axisPaint,
     );
 
-    final ticks = calculateTicks(
-        _yMin, _yMax, yAxis?.majorTickCount ?? 10);
+    final yIsLog = yAxis?.isLogarithmic == true;
+    final yLogBase = yAxis?.logarithmicBase ?? 10.0;
+    final ticks = yIsLog
+        ? calculateLogTicks(_yMin, _yMax, yLogBase)
+        : calculateTicks(_yMin, _yMax, yAxis?.majorTickCount ?? 10);
     final tickPaint = Paint()
       ..color = yAxis?.majorTickColor ?? const Color(0xFFAAAAAA)
       ..strokeWidth = 1.0;
@@ -577,6 +1000,44 @@ class ChartPainter extends CustomPainter {
       color: yAxis?.axisLabelColor ?? const Color(0xFFCCCCCC),
       fontSize: yAxis?.axisLabelFontSize ?? 12.0,
     );
+
+    // Minor ticks between major ticks
+    if (showMinorGridLines && ticks.length >= 2) {
+      final minorTickPaint = Paint()
+        ..color = yAxis?.majorTickColor ?? const Color(0xFFAAAAAA)
+        ..strokeWidth = 0.5;
+      if (yIsLog) {
+        final baseInt = yLogBase.toInt();
+        for (int i = 0; i < ticks.length - 1; i++) {
+          for (int m = 2; m < baseInt; m++) {
+            final minorTick = ticks[i] * m;
+            if (minorTick >= ticks[i + 1]) break;
+            final y = _dataToScreenY(minorTick);
+            if (y < _chartClip.top || y > _chartClip.bottom) continue;
+            canvas.drawLine(
+              Offset(_chartClip.right, y),
+              Offset(_chartClip.right + 3, y),
+              minorTickPaint,
+            );
+          }
+        }
+      } else {
+        const int minorDivisions = 5;
+        for (int i = 0; i < ticks.length - 1; i++) {
+          final step = (ticks[i + 1] - ticks[i]) / minorDivisions;
+          for (int j = 1; j < minorDivisions; j++) {
+            final minorTick = ticks[i] + j * step;
+            final y = _dataToScreenY(minorTick);
+            if (y < _chartClip.top || y > _chartClip.bottom) continue;
+            canvas.drawLine(
+              Offset(_chartClip.right, y),
+              Offset(_chartClip.right + 3, y),
+              minorTickPaint,
+            );
+          }
+        }
+      }
+    }
 
     for (final tick in ticks) {
       final y = _dataToScreenY(tick);
@@ -588,7 +1049,7 @@ class ChartPainter extends CustomPainter {
         tickPaint,
       );
 
-      final label = _formatNumber(tick);
+      final label = yIsLog ? _formatLogNumber(tick, yLogBase) : _formatNumber(tick);
       final textSpan = TextSpan(text: label, style: textStyle);
       final textPainter = TextPainter(
         text: textSpan,
@@ -633,6 +1094,48 @@ class ChartPainter extends CustomPainter {
     }
   }
 
+  String _formatLogNumber(double value, double base) {
+    if (value <= 0) return '0';
+    // SciChart-style format: "Nx10^P" — e.g., "1x10²", "3x10²"
+    final logBase = math.log(base);
+    final logVal = math.log(value) / logBase;
+    // Guard against floating point: log10(1000) = 2.9999... → round if very close
+    int power;
+    if ((logVal - logVal.roundToDouble()).abs() < 0.001) {
+      power = logVal.round();
+    } else {
+      power = logVal.floor();
+    }
+    final coefficient = value / math.pow(base, power);
+    final coeffRounded = coefficient.round();
+
+    // Check if coefficient is close to an integer (1, 2, 3, etc.)
+    if ((coefficient - coeffRounded).abs() < 0.1 && coeffRounded >= 1 && coeffRounded < base.toInt()) {
+      if (base == 10.0) {
+        final baseInt = base.toInt();
+        if (power == 0) {
+          return '$coeffRounded';
+        } else if (power == 1) {
+          return '${coeffRounded}x$baseInt';
+        } else {
+          // Unicode superscript digits
+          final superPower = _toSuperscript(power);
+          return '${coeffRounded}x$baseInt$superPower';
+        }
+      }
+    }
+    return _formatNumber(value);
+  }
+
+  static String _toSuperscript(int n) {
+    const superDigits = {
+      '0': '\u2070', '1': '\u00B9', '2': '\u00B2', '3': '\u00B3',
+      '4': '\u2074', '5': '\u2075', '6': '\u2076', '7': '\u2077',
+      '8': '\u2078', '9': '\u2079', '-': '\u207B',
+    };
+    return n.toString().split('').map((c) => superDigits[c] ?? c).join();
+  }
+
   @override
   bool shouldRepaint(covariant ChartPainter oldDelegate) {
     return oldDelegate.xAxis?.visibleRangeMin != xAxis?.visibleRangeMin ||
@@ -643,4 +1146,21 @@ class ChartPainter extends CustomPainter {
         oldDelegate.series != series ||
         oldDelegate.backgroundColor != backgroundColor;
   }
+}
+
+/// Helper class for visible data range + decimation result.
+class _VisibleData {
+  final Float64List visibleX;
+  final Float64List visibleY;
+  final int visibleCount;
+  final List<int>? indices;
+  final int drawCount;
+
+  _VisibleData({
+    required this.visibleX,
+    required this.visibleY,
+    required this.visibleCount,
+    required this.indices,
+    required this.drawCount,
+  });
 }

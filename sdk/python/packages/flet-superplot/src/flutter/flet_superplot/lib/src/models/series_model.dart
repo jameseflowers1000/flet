@@ -121,8 +121,10 @@ class SeriesModel {
       drawMode: json['draw_mode'] ?? 'linear',
       antiAliasing: json['anti_aliasing'] ?? true,
       pointMarkerType: json['point_marker_type'] ?? 'none',
-      pointMarkerSize: (json['point_marker_size'] ?? 8.0).toDouble(),
-      pointMarkerColor: _parseColor(json['point_marker_color'], const Color(0xFF4083FF)),
+      pointMarkerSize: (json['point_marker_size'] ?? json['point_size'] ?? 8.0).toDouble(),
+      pointMarkerColor: _parseColor(
+          json['point_marker_color'] ?? json['point_color'],
+          const Color(0xFF4083FF)),
       opacity: (json['opacity'] ?? 1.0).toDouble(),
       isVisible: json['is_visible'] ?? true,
       fillColor: json['fill_color'] != null ? _parseColor(json['fill_color'], null) : null,

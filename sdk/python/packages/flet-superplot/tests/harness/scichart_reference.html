@@ -33,9 +33,12 @@
     </div>
 
     <script>
-        // Test data configuration - must match Flutter side exactly
-        const TEST_CONFIG = {
-            // Two sine waves with different frequencies
+        // Toggle between linear and logarithmic test modes.
+        // Must match the useLogScale setting in main.dart.
+        const USE_LOG_SCALE = true;
+
+        // Test data configuration — linear mode (sine waves)
+        const LINEAR_CONFIG = {
             series1: {
                 points: 1000,
                 color: "#4083ff",
@@ -50,28 +53,105 @@
                 amplitude: 30,
                 offset: 50,
             },
+            scatter: {
+                points: 20,
+                color: "#ff6600",
+                size: 10,
+            },
+            mountain: {
+                points: 1000,
+                color: "#50C878",
+                gradientStart: "#AA50C878",
+                gradientEnd: "#0050C878",
+                frequency: 1.5,
+                amplitude: 25,
+                offset: 30,
+            },
             xRange: { min: 0, max: 10 },
             yRange: { min: 0, max: 100 },
         };
 
-        // Generate sine wave data
+        // Test data configuration — logarithmic mode (exponential curves)
+        const LOG_CONFIG = {
+            series1: {
+                points: 1000,
+                color: "#4083ff",
+                base: 10,
+                rate: 0.3,
+                scale: 1,
+            },
+            series2: {
+                points: 1000,
+                color: "#ff6347",
+                base: 10,
+                rate: 0.2,
+                scale: 5,
+            },
+            scatter: {
+                points: 20,
+                color: "#ff6600",
+                size: 10,
+            },
+            mountain: {
+                points: 1000,
+                color: "#50C878",
+                base: 10,
+                rate: 0.15,
+                scale: 1,
+            },
+            xRange: { min: 0, max: 10 },
+            yRange: { min: 1, max: 10000 },
+        };
+
+        const TEST_CONFIG = USE_LOG_SCALE ? LOG_CONFIG : LINEAR_CONFIG;
+
+        // Generate sine wave data (linear mode)
         function generateSineWave(config, xMin, xMax) {
             const xValues = [];
             const yValues = [];
             const step = (xMax - xMin) / (config.points - 1);
-            
+
             for (let i = 0; i < config.points; i++) {
                 const x = xMin + i * step;
                 const y = config.offset + config.amplitude * Math.sin(2 * Math.PI * config.frequency * x / (xMax - xMin));
                 xValues.push(x);
                 yValues.push(y);
             }
-            
+
+            return { xValues, yValues };
+        }
+
+        // Generate exponential data (log mode): y = scale * base^(rate * x)
+        function generateExponential(config, xMin, xMax) {
+            const xValues = [];
+            const yValues = [];
+            const step = (xMax - xMin) / (config.points - 1);
+
+            for (let i = 0; i < config.points; i++) {
+                const x = xMin + i * step;
+                const y = config.scale * Math.pow(config.base, config.rate * x);
+                xValues.push(x);
+                yValues.push(y);
+            }
+
+            return { xValues, yValues };
+        }
+
+        // Sample N evenly-spaced points from a data set
+        function samplePoints(data, count) {
+            const step = Math.floor(data.xValues.length / count);
+            const xValues = [];
+            const yValues = [];
+            for (let i = 0; i < count; i++) {
+                const idx = i * step;
+                xValues.push(data.xValues[idx]);
+                yValues.push(data.yValues[idx]);
+            }
             return { xValues, yValues };
         }
 
         async function initSciChart() {
-            const { SciChartSurface, NumericAxis, FastLineRenderableSeries, XyDataSeries, SciChartJsNavyTheme, EWatermarkPosition } = SciChart;
+            const { SciChartSurface, NumericAxis, LogarithmicAxis, FastLineRenderableSeries, FastMountainRenderableSeries, XyScatterRenderableSeries, XyDataSeries, EllipsePointMarker, SciChartJsNavyTheme, EWatermarkPosition } = SciChart;
 
             // Load WASM from CDN
             SciChartSurface.useWasmFromCDN();
@@ -91,7 +171,7 @@
                 // Move watermark to top-right corner (away from axis origin)
                 sciChartSurface.watermarkPosition = EWatermarkPosition.TopRight;
 
-                // X Axis
+                // X Axis (always numeric)
                 sciChartSurface.xAxes.add(new NumericAxis(wasmContext, {
                     axisTitle: "Time (s)",
                     visibleRange: { min: TEST_CONFIG.xRange.min, max: TEST_CONFIG.xRange.max },
@@ -103,20 +183,61 @@
                     growBy: { min: 0.1, max: 0.1 },
                 }));
 
-                // Y Axis
-                sciChartSurface.yAxes.add(new NumericAxis(wasmContext, {
-                    axisTitle: "Amplitude",
-                    visibleRange: { min: TEST_CONFIG.yRange.min, max: TEST_CONFIG.yRange.max },
-                    axisTitleStyle: { color: "#ffffff", fontSize: 14 },
-                    labelStyle: { color: "#aaaaaa", fontSize: 12 },
-                    majorGridLineStyle: { color: "#333333", strokeThickness: 1 },
-                    minorGridLineStyle: { color: "#222222", strokeThickness: 0.5 },
-                    axisBorder: { color: "#555555", borderRight: 1 },
-                    growBy: { min: 0.1, max: 0.1 },
+                // Y Axis — logarithmic or numeric depending on mode
+                if (USE_LOG_SCALE) {
+                    sciChartSurface.yAxes.add(new LogarithmicAxis(wasmContext, {
+                        axisTitle: "Value",
+                        visibleRange: { min: TEST_CONFIG.yRange.min, max: TEST_CONFIG.yRange.max },
+                        axisTitleStyle: { color: "#ffffff", fontSize: 14 },
+                        labelStyle: { color: "#aaaaaa", fontSize: 12 },
+                        majorGridLineStyle: { color: "#333333", strokeThickness: 1 },
+                        minorGridLineStyle: { color: "#222222", strokeThickness: 0.5 },
+                        axisBorder: { color: "#555555", borderRight: 1 },
+                        growBy: { min: 0.1, max: 0.1 },
+                        logBase: 10,
+                    }));
+                } else {
+                    sciChartSurface.yAxes.add(new NumericAxis(wasmContext, {
+                        axisTitle: "Amplitude",
+                        visibleRange: { min: TEST_CONFIG.yRange.min, max: TEST_CONFIG.yRange.max },
+                        axisTitleStyle: { color: "#ffffff", fontSize: 14 },
+                        labelStyle: { color: "#aaaaaa", fontSize: 12 },
+                        majorGridLineStyle: { color: "#333333", strokeThickness: 1 },
+                        minorGridLineStyle: { color: "#222222", strokeThickness: 0.5 },
+                        axisBorder: { color: "#555555", borderRight: 1 },
+                        growBy: { min: 0.1, max: 0.1 },
+                    }));
+                }
+
+                const xMin = TEST_CONFIG.xRange.min;
+                const xMax = TEST_CONFIG.xRange.max;
+
+                // Generate data based on mode
+                let data1, data2, mountainData;
+                if (USE_LOG_SCALE) {
+                    data1 = generateExponential(TEST_CONFIG.series1, xMin, xMax);
+                    data2 = generateExponential(TEST_CONFIG.series2, xMin, xMax);
+                    mountainData = generateExponential(TEST_CONFIG.mountain, xMin, xMax);
+                } else {
+                    data1 = generateSineWave(TEST_CONFIG.series1, xMin, xMax);
+                    data2 = generateSineWave(TEST_CONFIG.series2, xMin, xMax);
+                    mountainData = generateSineWave(TEST_CONFIG.mountain, xMin, xMax);
+                }
+                const scatterData = samplePoints(data1, TEST_CONFIG.scatter.points);
+
+                // Mountain series (drawn first = behind lines)
+                sciChartSurface.renderableSeries.add(new FastMountainRenderableSeries(wasmContext, {
+                    dataSeries: new XyDataSeries(wasmContext, {
+                        xValues: mountainData.xValues,
+                        yValues: mountainData.yValues,
+                    }),
+                    stroke: TEST_CONFIG.mountain.color,
+                    strokeThickness: 2,
+                    zeroLineY: USE_LOG_SCALE ? 0.5 : 0,
+                    fill: "rgba(80, 200, 120, 0.33)",
                 }));
 
-                // Series 1 - Blue sine wave
-                const data1 = generateSineWave(TEST_CONFIG.series1, TEST_CONFIG.xRange.min, TEST_CONFIG.xRange.max);
+                // Series 1 - Blue line
                 sciChartSurface.renderableSeries.add(new FastLineRenderableSeries(wasmContext, {
                     dataSeries: new XyDataSeries(wasmContext, {
                         xValues: data1.xValues,
@@ -126,8 +247,7 @@
                     strokeThickness: 2,
                 }));
 
-                // Series 2 - Red sine wave
-                const data2 = generateSineWave(TEST_CONFIG.series2, TEST_CONFIG.xRange.min, TEST_CONFIG.xRange.max);
+                // Series 2 - Red line with circle markers
                 sciChartSurface.renderableSeries.add(new FastLineRenderableSeries(wasmContext, {
                     dataSeries: new XyDataSeries(wasmContext, {
                         xValues: data2.xValues,
@@ -135,9 +255,32 @@
                     }),
                     stroke: TEST_CONFIG.series2.color,
                     strokeThickness: 2,
+                    pointMarker: new EllipsePointMarker(wasmContext, {
+                        width: 6,
+                        height: 6,
+                        fill: TEST_CONFIG.series2.color,
+                        stroke: TEST_CONFIG.series2.color,
+                        strokeThickness: 1,
+                    }),
                 }));
 
-                document.getElementById('status').textContent = 'SciChart Ready - ' + TEST_CONFIG.series1.points + ' points per series';
+                // Scatter series - sampled from series1
+                sciChartSurface.renderableSeries.add(new XyScatterRenderableSeries(wasmContext, {
+                    dataSeries: new XyDataSeries(wasmContext, {
+                        xValues: scatterData.xValues,
+                        yValues: scatterData.yValues,
+                    }),
+                    pointMarker: new EllipsePointMarker(wasmContext, {
+                        width: TEST_CONFIG.scatter.size,
+                        height: TEST_CONFIG.scatter.size,
+                        fill: TEST_CONFIG.scatter.color,
+                        stroke: TEST_CONFIG.scatter.color,
+                        strokeThickness: 1,
+                    }),
+                }));
+
+                const mode = USE_LOG_SCALE ? "Log Y" : "Linear";
+                document.getElementById('status').textContent = `SciChart Ready (${mode}) - ${TEST_CONFIG.series1.points} points per series`;
 
                 // Expose config for Playwright
                 window.TEST_CONFIG = TEST_CONFIG;

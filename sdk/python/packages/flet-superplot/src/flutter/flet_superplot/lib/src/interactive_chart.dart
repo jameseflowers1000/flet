@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
@@ -155,27 +156,37 @@ class _InteractiveChartState extends State<InteractiveChart>
       }
     }
 
-    // Apply grow-by
+    // Apply grow-by (multiplicative for log axes, additive for linear)
     if (xMin.isFinite && xMax.isFinite) {
-      final xRange = xMax - xMin;
-      if (xRange > 0) {
-        xMin -= xRange * (xAxis?.growByMin ?? 0.1);
-        xMax += xRange * (xAxis?.growByMax ?? 0.1);
+      if (_xIsLog && xMin > 0 && xMax > xMin) {
+        xMin = xMin / math.pow(_xLogBase, xAxis?.growByMin ?? 0.1);
+        xMax = xMax * math.pow(_xLogBase, xAxis?.growByMax ?? 0.1);
+      } else {
+        final xRange = xMax - xMin;
+        if (xRange > 0) {
+          xMin -= xRange * (xAxis?.growByMin ?? 0.1);
+          xMax += xRange * (xAxis?.growByMax ?? 0.1);
+        }
       }
     } else {
-      xMin = 0;
-      xMax = 1;
+      xMin = _xIsLog ? 0.1 : 0;
+      xMax = _xIsLog ? 10 : 1;
     }
 
     if (yMin.isFinite && yMax.isFinite) {
-      final yRange = yMax - yMin;
-      if (yRange > 0) {
-        yMin -= yRange * (yAxis?.growByMin ?? 0.1);
-        yMax += yRange * (yAxis?.growByMax ?? 0.1);
+      if (_yIsLog && yMin > 0 && yMax > yMin) {
+        yMin = yMin / math.pow(_yLogBase, yAxis?.growByMin ?? 0.1);
+        yMax = yMax * math.pow(_yLogBase, yAxis?.growByMax ?? 0.1);
+      } else {
+        final yRange = yMax - yMin;
+        if (yRange > 0) {
+          yMin -= yRange * (yAxis?.growByMin ?? 0.1);
+          yMax += yRange * (yAxis?.growByMax ?? 0.1);
+        }
       }
     } else {
-      yMin = 0;
-      yMax = 1;
+      yMin = _yIsLog ? 0.1 : 0;
+      yMax = _yIsLog ? 10 : 1;
     }
 
     _xVisibleMin = xMin;
@@ -183,6 +194,22 @@ class _InteractiveChartState extends State<InteractiveChart>
     _yVisibleMin = yMin;
     _yVisibleMax = yMax;
     _userHasZoomed = true;
+  }
+
+  // Log axis helpers for coordinate conversion
+  bool get _xIsLog => widget.xAxis?.isLogarithmic == true;
+  bool get _yIsLog => widget.yAxis?.isLogarithmic == true;
+  double get _xLogBase => widget.xAxis?.logarithmicBase ?? 10.0;
+  double get _yLogBase => widget.yAxis?.logarithmicBase ?? 10.0;
+
+  double _screenToDataX(double screenX, Rect plotArea, double xMin, double xMax) {
+    return ChartPainter.screenToDataX(screenX, plotArea, xMin, xMax,
+        isLogarithmic: _xIsLog, logarithmicBase: _xLogBase);
+  }
+
+  double _screenToDataY(double screenY, Rect plotArea, double yMin, double yMax) {
+    return ChartPainter.screenToDataY(screenY, plotArea, yMin, yMax,
+        isLogarithmic: _yIsLog, logarithmicBase: _yLogBase);
   }
 
   /// Get the plot area for coordinate conversion during gestures.
@@ -236,10 +263,10 @@ class _InteractiveChartState extends State<InteractiveChart>
     if (zoomAmount.abs() < 1e-6) return;
     final zoomFactor = 1.0 + zoomAmount.clamp(-0.15, 0.15);
 
-    final cursorX = ChartPainter.screenToDataX(
+    final cursorX = _screenToDataX(
         event.localPosition.dx.clamp(0, plotArea.right),
         plotArea, _xVisibleMin!, _xVisibleMax!);
-    final cursorY = ChartPainter.screenToDataY(
+    final cursorY = _screenToDataY(
         event.localPosition.dy.clamp(0, plotArea.bottom),
         plotArea, _yVisibleMin!, _yVisibleMax!);
 
@@ -351,9 +378,9 @@ class _InteractiveChartState extends State<InteractiveChart>
       if (zoomAmount.abs() < 1e-6) return;
       final zoomFactor = 1.0 + zoomAmount.clamp(-0.15, 0.15);
 
-      final cursorX = ChartPainter.screenToDataX(
+      final cursorX = _screenToDataX(
           _scaleStartFocalPoint!.dx, plotArea, xMin, xMax);
-      final cursorY = ChartPainter.screenToDataY(
+      final cursorY = _screenToDataY(
           _scaleStartFocalPoint!.dy, plotArea, yMin, yMax);
 
       if (_gestureRegion == _HitRegion.chart ||
@@ -383,9 +410,9 @@ class _InteractiveChartState extends State<InteractiveChart>
         // scale > 1 = fingers apart = zoom in = smaller data range
         final zoomFactor = 1.0 / details.scale;
 
-        final focalX = ChartPainter.screenToDataX(
+        final focalX = _screenToDataX(
             details.localFocalPoint.dx, plotArea, xMin, xMax);
-        final focalY = ChartPainter.screenToDataY(
+        final focalY = _screenToDataY(
             details.localFocalPoint.dy, plotArea, yMin, yMax);
 
         xMin = focalX - (focalX - xMin) * zoomFactor;
@@ -487,9 +514,9 @@ class _InteractiveChartState extends State<InteractiveChart>
     final cursor = _momentumCursor ??
         Offset(plotArea.center.dx, plotArea.center.dy);
     final cursorX =
-        ChartPainter.screenToDataX(cursor.dx, plotArea, xMin, xMax);
+        _screenToDataX(cursor.dx, plotArea, xMin, xMax);
     final cursorY =
-        ChartPainter.screenToDataY(cursor.dy, plotArea, yMin, yMax);
+        _screenToDataY(cursor.dy, plotArea, yMin, yMax);
 
     if (_gestureRegion == _HitRegion.chart ||
         _gestureRegion == _HitRegion.xAxis) {
