@@ -61,6 +61,7 @@ class _InteractiveChartState extends State<InteractiveChart> {
   double? _panStartXMax;
   double? _panStartYMin;
   double? _panStartYMax;
+  _HitRegion _panRegion = _HitRegion.chart;
 
   // Debounce timer for scroll gesture end
   Timer? _scrollEndTimer;
@@ -165,15 +166,25 @@ class _InteractiveChartState extends State<InteractiveChart> {
     );
   }
 
-  /// Check if a local position is within the chart area (not axis labels).
-  bool _isInChartArea(Offset localPosition) {
-    final chartClip = Rect.fromLTRB(
-      0,
-      0,
-      _lastSize.width - ChartPainter.rightAxisWidth,
-      _lastSize.height - ChartPainter.bottomAxisHeight,
-    );
-    return chartClip.contains(localPosition);
+  /// Determine which region a local position falls in.
+  /// - chart: main plot area → zoom/pan both axes
+  /// - xAxis: bottom axis strip → zoom/pan X only
+  /// - yAxis: right axis strip → zoom/pan Y only
+  /// - none: corner or outside
+  _HitRegion _hitTest(Offset localPosition) {
+    final chartRight = _lastSize.width - ChartPainter.rightAxisWidth;
+    final chartBottom = _lastSize.height - ChartPainter.bottomAxisHeight;
+
+    if (localPosition.dx < chartRight && localPosition.dy < chartBottom) {
+      return _HitRegion.chart;
+    }
+    if (localPosition.dx < chartRight && localPosition.dy >= chartBottom) {
+      return _HitRegion.xAxis;
+    }
+    if (localPosition.dx >= chartRight && localPosition.dy < chartBottom) {
+      return _HitRegion.yAxis;
+    }
+    return _HitRegion.none;
   }
 
   // ---------------------------------------------------------------------------
@@ -182,27 +193,40 @@ class _InteractiveChartState extends State<InteractiveChart> {
 
   void _onPointerSignal(PointerSignalEvent event) {
     if (event is PointerScrollEvent) {
-      if (!_isInChartArea(event.localPosition)) return;
+      final region = _hitTest(event.localPosition);
+      if (region == _HitRegion.none) return;
 
       _ensureExplicitRanges();
       final plotArea = _getPlotArea();
       if (plotArea == Rect.zero) return;
 
-      final scrollDelta = event.scrollDelta.dy;
-      final zoomFactor = scrollDelta > 0
-          ? (1 + widget.zoomSensitivity)
-          : (1 / (1 + widget.zoomSensitivity));
+      // Scale zoom by actual scroll delta for smooth trackpad support.
+      // Typical mouse wheel: ~50-100px per tick. Trackpad: ~2-10px.
+      final zoomAmount = event.scrollDelta.dy / 300.0;
+      final zoomFactor = 1.0 + zoomAmount.clamp(-0.5, 0.5);
 
-      // Zoom centered on cursor in data coordinates
+      // Zoom centered on cursor (or axis midpoint for axis regions)
       final cursorX = ChartPainter.screenToDataX(
-          event.localPosition.dx, plotArea, _xVisibleMin!, _xVisibleMax!);
+          event.localPosition.dx.clamp(0, plotArea.right),
+          plotArea, _xVisibleMin!, _xVisibleMax!);
       final cursorY = ChartPainter.screenToDataY(
-          event.localPosition.dy, plotArea, _yVisibleMin!, _yVisibleMax!);
+          event.localPosition.dy.clamp(0, plotArea.bottom),
+          plotArea, _yVisibleMin!, _yVisibleMax!);
 
-      final newXMin = cursorX - (cursorX - _xVisibleMin!) * zoomFactor;
-      final newXMax = cursorX + (_xVisibleMax! - cursorX) * zoomFactor;
-      final newYMin = cursorY - (cursorY - _yVisibleMin!) * zoomFactor;
-      final newYMax = cursorY + (_yVisibleMax! - cursorY) * zoomFactor;
+      double newXMin = _xVisibleMin!;
+      double newXMax = _xVisibleMax!;
+      double newYMin = _yVisibleMin!;
+      double newYMax = _yVisibleMax!;
+
+      // Apply zoom to the appropriate axis/axes based on hit region
+      if (region == _HitRegion.chart || region == _HitRegion.xAxis) {
+        newXMin = cursorX - (cursorX - _xVisibleMin!) * zoomFactor;
+        newXMax = cursorX + (_xVisibleMax! - cursorX) * zoomFactor;
+      }
+      if (region == _HitRegion.chart || region == _HitRegion.yAxis) {
+        newYMin = cursorY - (cursorY - _yVisibleMin!) * zoomFactor;
+        newYMax = cursorY + (_yVisibleMax! - cursorY) * zoomFactor;
+      }
 
       // Guard against degenerate ranges
       if ((newXMax - newXMin).abs() < 1e-10 ||
@@ -232,7 +256,8 @@ class _InteractiveChartState extends State<InteractiveChart> {
   // ---------------------------------------------------------------------------
 
   void _onPanStart(DragStartDetails details) {
-    if (!_isInChartArea(details.localPosition)) return;
+    final region = _hitTest(details.localPosition);
+    if (region == _HitRegion.none) return;
 
     _ensureExplicitRanges();
 
@@ -241,6 +266,7 @@ class _InteractiveChartState extends State<InteractiveChart> {
     _panStartXMax = _xVisibleMax;
     _panStartYMin = _yVisibleMin;
     _panStartYMax = _yVisibleMax;
+    _panRegion = region;
 
     setState(() {
       _isGesturing = true;
@@ -267,10 +293,15 @@ class _InteractiveChartState extends State<InteractiveChart> {
     final dataYDelta = dy / plotArea.height * yRange;
 
     setState(() {
-      _xVisibleMin = _panStartXMin! + dataXDelta;
-      _xVisibleMax = _panStartXMax! + dataXDelta;
-      _yVisibleMin = _panStartYMin! + dataYDelta;
-      _yVisibleMax = _panStartYMax! + dataYDelta;
+      // Apply pan to appropriate axes based on where the drag started
+      if (_panRegion == _HitRegion.chart || _panRegion == _HitRegion.xAxis) {
+        _xVisibleMin = _panStartXMin! + dataXDelta;
+        _xVisibleMax = _panStartXMax! + dataXDelta;
+      }
+      if (_panRegion == _HitRegion.chart || _panRegion == _HitRegion.yAxis) {
+        _yVisibleMin = _panStartYMin! + dataYDelta;
+        _yVisibleMax = _panStartYMax! + dataYDelta;
+      }
     });
   }
 
@@ -372,3 +403,5 @@ class _InteractiveChartState extends State<InteractiveChart> {
     );
   }
 }
+
+enum _HitRegion { chart, xAxis, yAxis, none }
