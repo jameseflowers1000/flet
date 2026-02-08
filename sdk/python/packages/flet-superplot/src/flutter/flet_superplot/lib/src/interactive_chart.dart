@@ -80,6 +80,7 @@ class _InteractiveChartState extends State<InteractiveChart> {
     super.didUpdateWidget(oldWidget);
     // If parent pushes new axis config while user hasn't zoomed, respect it
     if (!_userHasZoomed) {
+      ChartPainter.resetStaticPlotArea();
       _xVisibleMin = null;
       _xVisibleMax = null;
       _yVisibleMin = null;
@@ -150,20 +151,20 @@ class _InteractiveChartState extends State<InteractiveChart> {
     _userHasZoomed = true;
   }
 
-  /// Get the current plot area for coordinate conversion.
+  /// Get the plot area for coordinate conversion during gestures.
+  /// Reuses the last tick-based plot area from ChartPainter so the mapping
+  /// matches what was rendered — no jump at gesture start.
   Rect _getPlotArea() {
     if (_xVisibleMin == null || _lastSize == Size.zero) return Rect.zero;
-    return ChartPainter.computePlotArea(
-      size: _lastSize,
-      xMin: _xVisibleMin!,
-      xMax: _xVisibleMax!,
-      yMin: _yVisibleMin!,
-      yMax: _yVisibleMax!,
-      xDataMin: _xVisibleMin!,
-      xDataMax: _xVisibleMax!,
-      yDataMin: _yVisibleMin!,
-      yDataMax: _yVisibleMax!,
-    );
+    // Use the cached tick-based plot area from the last static frame.
+    // Falls back to fixed insets if no static frame has been painted yet.
+    return ChartPainter.lastStaticPlotArea ??
+        Rect.fromLTRB(
+          10.0,
+          10.0,
+          _lastSize.width - ChartPainter.rightAxisWidth - 11.0,
+          _lastSize.height - ChartPainter.bottomAxisHeight - 3.0,
+        );
   }
 
   /// Determine which region a local position falls in.
@@ -200,10 +201,12 @@ class _InteractiveChartState extends State<InteractiveChart> {
       final plotArea = _getPlotArea();
       if (plotArea == Rect.zero) return;
 
-      // Scale zoom by actual scroll delta for smooth trackpad support.
-      // Typical mouse wheel: ~50-100px per tick. Trackpad: ~2-10px.
-      final zoomAmount = event.scrollDelta.dy / 300.0;
-      final zoomFactor = 1.0 + zoomAmount.clamp(-0.5, 0.5);
+      // Scale zoom by scroll delta. Divisor tuned for smooth feel:
+      // Mouse wheel (~100px/tick): ~5% zoom. Trackpad (~5px/event): ~0.3%.
+      final rawDelta = event.scrollDelta.dy;
+      if (rawDelta.abs() < 0.5) return; // Ignore sub-pixel momentum
+      final zoomAmount = rawDelta / 1500.0;
+      final zoomFactor = 1.0 + zoomAmount.clamp(-0.15, 0.15);
 
       // Zoom centered on cursor (or axis midpoint for axis regions)
       final cursorX = ChartPainter.screenToDataX(
@@ -243,10 +246,7 @@ class _InteractiveChartState extends State<InteractiveChart> {
       // Debounce: mark gesture as ended 150ms after last scroll
       _scrollEndTimer?.cancel();
       _scrollEndTimer = Timer(const Duration(milliseconds: 150), () {
-        setState(() {
-          _isGesturing = false;
-        });
-        _notifyRangeChanged();
+        _endGesture();
       });
     }
   }
@@ -307,6 +307,14 @@ class _InteractiveChartState extends State<InteractiveChart> {
 
   void _onPanEnd(DragEndDetails details) {
     _panStartScreen = null;
+    _endGesture();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Gesture end
+  // ---------------------------------------------------------------------------
+
+  void _endGesture() {
     setState(() {
       _isGesturing = false;
     });
@@ -318,6 +326,7 @@ class _InteractiveChartState extends State<InteractiveChart> {
   // ---------------------------------------------------------------------------
 
   void _onDoubleTap() {
+    ChartPainter.resetStaticPlotArea();
     setState(() {
       _xVisibleMin = null;
       _xVisibleMax = null;

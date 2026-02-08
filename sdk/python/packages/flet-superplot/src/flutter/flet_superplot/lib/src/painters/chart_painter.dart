@@ -42,6 +42,19 @@ class ChartPainter extends CustomPainter {
   static String _gridCacheKey = '';
   static String _axesCacheKey = '';
 
+  // Cached tick-based plot area from last non-gesture frame.
+  // Reused during gestures so the coordinate mapping stays stable
+  // (no jump at gesture start/end).
+  static Rect? _staticPlotArea;
+
+  /// The last tick-based plot area, for use by InteractiveChart.
+  static Rect? get lastStaticPlotArea => _staticPlotArea;
+
+  /// Reset the cached plot area (call on double-tap reset or new data).
+  static void resetStaticPlotArea() {
+    _staticPlotArea = null;
+  }
+
   ChartPainter({
     this.xAxis,
     this.yAxis,
@@ -306,15 +319,23 @@ class ChartPainter extends CustomPainter {
   }
 
   void _computePlotArea() {
-    final xTicks = calculateTicks(
-        _xDataMin, _xDataMax, xAxis?.majorTickCount ?? 10);
-    final yTicks = calculateTicks(
-        _yDataMin, _yDataMax, yAxis?.majorTickCount ?? 10);
+    // Reuse cached plot area to prevent coordinate jumps during
+    // zoom/pan. Only recomputed on first frame or after explicit reset
+    // (double-tap, new data from parent).
+    if (_staticPlotArea != null) {
+      _plotArea = _staticPlotArea!;
+      return;
+    }
 
     const leftInset = 10.0;
     const topInset = 10.0;
     const rightInset = 11.0;
     const bottomInset = 3.0;
+
+    final xTicks = calculateTicks(
+        _xDataMin, _xDataMax, xAxis?.majorTickCount ?? 10);
+    final yTicks = calculateTicks(
+        _yDataMin, _yDataMax, yAxis?.majorTickCount ?? 10);
 
     if (xTicks.length >= 2 && yTicks.length >= 2) {
       final xTickSpan = xTicks.last - xTicks.first;
@@ -337,6 +358,9 @@ class ChartPainter extends CustomPainter {
     } else {
       _plotArea = _chartClip;
     }
+
+    // Cache for reuse during gestures.
+    _staticPlotArea = _plotArea;
   }
 
   double _dataToScreenX(double dataX) {
@@ -395,26 +419,41 @@ class ChartPainter extends CustomPainter {
       ..strokeJoin = StrokeJoin.round
       ..isAntiAlias = series.antiAliasing;
 
-    // Apply LTTB decimation when point count exceeds threshold.
-    final targetPoints = (_chartClip.width * 2).toInt().clamp(100, 10000);
     final xValues = data.xValues;
     final yValues = data.yValues;
-    final int pointCount = data.length;
+    final int totalPoints = data.length;
 
-    final indices = pointCount > targetPoints
-        ? _lttbDecimate(xValues, yValues, pointCount, targetPoints)
+    // Pre-filter to visible X range (assumes sorted X data).
+    // Pad by 1 on each side for line continuity at edges.
+    final visibleStart =
+        (_lowerBound(xValues, _xMin, 0, totalPoints) - 1)
+            .clamp(0, totalPoints - 1);
+    final visibleEnd =
+        (_upperBound(xValues, _xMax, 0, totalPoints) + 1)
+            .clamp(0, totalPoints - 1);
+    final visibleCount = visibleEnd - visibleStart + 1;
+    if (visibleCount < 2) return;
+
+    // Zero-copy views of the visible subset.
+    final visibleX =
+        Float64List.sublistView(xValues, visibleStart, visibleEnd + 1);
+    final visibleY =
+        Float64List.sublistView(yValues, visibleStart, visibleEnd + 1);
+
+    // Apply LTTB decimation when visible points exceed threshold.
+    final targetPoints = (_chartClip.width * 2).toInt().clamp(100, 10000);
+    final indices = visibleCount > targetPoints
+        ? _lttbDecimate(visibleX, visibleY, visibleCount, targetPoints)
         : null;
-    final int drawCount = indices?.length ?? pointCount;
+    final int drawCount = indices?.length ?? visibleCount;
 
     final path = Path();
     bool started = false;
 
     for (int i = 0; i < drawCount; i++) {
       final idx = indices?[i] ?? i;
-      final x = _dataToScreenX(xValues[idx]);
-      final y = _dataToScreenY(yValues[idx]);
-
-      if (x < _plotArea.left - 10 || x > _plotArea.right + 10) continue;
+      final x = _dataToScreenX(visibleX[idx]);
+      final y = _dataToScreenY(visibleY[idx]);
 
       if (!started) {
         path.moveTo(x, y);
@@ -428,6 +467,34 @@ class ChartPainter extends CustomPainter {
     canvas.clipRect(_chartClip);
     canvas.drawPath(path, paint);
     canvas.restore();
+  }
+
+  /// Binary search: first index where values[i] >= target.
+  static int _lowerBound(Float64List values, double target,
+      int start, int end) {
+    while (start < end) {
+      final mid = (start + end) >> 1;
+      if (values[mid] < target) {
+        start = mid + 1;
+      } else {
+        end = mid;
+      }
+    }
+    return start;
+  }
+
+  /// Binary search: last index where values[i] <= target.
+  static int _upperBound(Float64List values, double target,
+      int start, int end) {
+    while (start < end) {
+      final mid = (start + end) >> 1;
+      if (values[mid] <= target) {
+        start = mid + 1;
+      } else {
+        end = mid;
+      }
+    }
+    return start > 0 ? start - 1 : 0;
   }
 
   /// LTTB (Largest Triangle Three Buckets) downsampling algorithm.
