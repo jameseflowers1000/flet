@@ -42,18 +42,11 @@ class ChartPainter extends CustomPainter {
   static String _gridCacheKey = '';
   static String _axesCacheKey = '';
 
-  // Cached tick-based plot area from last non-gesture frame.
-  // Reused during gestures so the coordinate mapping stays stable
-  // (no jump at gesture start/end).
-  static Rect? _staticPlotArea;
-
-  /// The last tick-based plot area, for use by InteractiveChart.
-  static Rect? get lastStaticPlotArea => _staticPlotArea;
-
-  /// Reset the cached plot area (call on double-tap reset or new data).
-  static void resetStaticPlotArea() {
-    _staticPlotArea = null;
-  }
+  // Layout insets matching SciChart defaults
+  static const double leftInset = 10.0;
+  static const double topInset = 10.0;
+  static const double rightInset = 11.0;
+  static const double bottomInset = 3.0;
 
   ChartPainter({
     this.xAxis,
@@ -116,8 +109,8 @@ class ChartPainter extends CustomPainter {
       _gridCacheKey = cacheKey;
     }
 
-    // --- Axes layer (skip rebuild during gestures — expensive TextPainter) ---
-    if (!gestureActive && (_axesCache == null || _axesCacheKey != cacheKey)) {
+    // --- Axes layer (always rebuild — correctness over performance) ---
+    if (_axesCache == null || _axesCacheKey != cacheKey) {
       final axesRec = ui.PictureRecorder();
       final axesCanvas = Canvas(axesRec);
       try {
@@ -156,54 +149,16 @@ class ChartPainter extends CustomPainter {
   // Public static helpers for coordinate conversion (used by InteractiveChart)
   // ---------------------------------------------------------------------------
 
-  /// Compute the plot area rect for given ranges and canvas size.
-  /// This is the inverse-friendly version of the internal _computePlotArea.
-  static Rect computePlotArea({
-    required Size size,
-    required double xMin,
-    required double xMax,
-    required double yMin,
-    required double yMax,
-    required double xDataMin,
-    required double xDataMax,
-    required double yDataMin,
-    required double yDataMax,
-    int xMajorTickCount = 10,
-    int yMajorTickCount = 10,
-  }) {
-    final chartClip = Rect.fromLTRB(
-      0,
-      0,
-      size.width - rightAxisWidth,
-      size.height - bottomAxisHeight,
+  /// Compute the plot area rect for a given canvas size.
+  /// Simple inset-based mapping: the full visible range maps exactly to
+  /// the chart clip area minus insets. This ensures no clipping at any zoom.
+  static Rect computePlotArea({required Size size}) {
+    return Rect.fromLTRB(
+      leftInset,
+      topInset,
+      size.width - rightAxisWidth - rightInset,
+      size.height - bottomAxisHeight - bottomInset,
     );
-
-    final xTicks = calculateTicks(xDataMin, xDataMax, xMajorTickCount);
-    final yTicks = calculateTicks(yDataMin, yDataMax, yMajorTickCount);
-
-    const leftInset = 10.0;
-    const topInset = 10.0;
-    const rightInset = 11.0;
-    const bottomInset = 3.0;
-
-    if (xTicks.length >= 2 && yTicks.length >= 2) {
-      final xTickSpan = xTicks.last - xTicks.first;
-      final yTickSpan = yTicks.last - yTicks.first;
-
-      final xPixelSpan = chartClip.width - leftInset - rightInset;
-      final yPixelSpan = chartClip.height - topInset - bottomInset;
-
-      final xPPU = xTickSpan > 0 ? xPixelSpan / xTickSpan : 1.0;
-      final yPPU = yTickSpan > 0 ? yPixelSpan / yTickSpan : 1.0;
-
-      final plotLeft = chartClip.left + leftInset - (xTicks.first - xMin) * xPPU;
-      final plotRight = plotLeft + (xMax - xMin) * xPPU;
-      final plotTop = chartClip.top + topInset - (yMax - yTicks.last) * yPPU;
-      final plotBottom = plotTop + (yMax - yMin) * yPPU;
-
-      return Rect.fromLTRB(plotLeft, plotTop, plotRight, plotBottom);
-    }
-    return chartClip;
   }
 
   /// Convert screen X coordinate to data X value.
@@ -319,48 +274,16 @@ class ChartPainter extends CustomPainter {
   }
 
   void _computePlotArea() {
-    // Reuse cached plot area to prevent coordinate jumps during
-    // zoom/pan. Only recomputed on first frame or after explicit reset
-    // (double-tap, new data from parent).
-    if (_staticPlotArea != null) {
-      _plotArea = _staticPlotArea!;
-      return;
-    }
-
-    const leftInset = 10.0;
-    const topInset = 10.0;
-    const rightInset = 11.0;
-    const bottomInset = 3.0;
-
-    final xTicks = calculateTicks(
-        _xDataMin, _xDataMax, xAxis?.majorTickCount ?? 10);
-    final yTicks = calculateTicks(
-        _yDataMin, _yDataMax, yAxis?.majorTickCount ?? 10);
-
-    if (xTicks.length >= 2 && yTicks.length >= 2) {
-      final xTickSpan = xTicks.last - xTicks.first;
-      final yTickSpan = yTicks.last - yTicks.first;
-
-      final xPixelSpan = _chartClip.width - leftInset - rightInset;
-      final yPixelSpan = _chartClip.height - topInset - bottomInset;
-
-      final xPPU = xTickSpan > 0 ? xPixelSpan / xTickSpan : 1.0;
-      final yPPU = yTickSpan > 0 ? yPixelSpan / yTickSpan : 1.0;
-
-      final plotLeft =
-          _chartClip.left + leftInset - (xTicks.first - _xMin) * xPPU;
-      final plotRight = plotLeft + (_xMax - _xMin) * xPPU;
-      final plotTop =
-          _chartClip.top + topInset - (_yMax - yTicks.last) * yPPU;
-      final plotBottom = plotTop + (_yMax - _yMin) * yPPU;
-
-      _plotArea = Rect.fromLTRB(plotLeft, plotTop, plotRight, plotBottom);
-    } else {
-      _plotArea = _chartClip;
-    }
-
-    // Cache for reuse during gestures.
-    _staticPlotArea = _plotArea;
+    // Simple inset-based mapping: the full visible range [_xMin, _xMax]
+    // maps exactly to the chart clip minus insets. This guarantees grid
+    // lines, axis labels, and data series all stay within the visible area
+    // at any zoom level — no clipping.
+    _plotArea = Rect.fromLTRB(
+      _chartClip.left + leftInset,
+      _chartClip.top + topInset,
+      _chartClip.right - rightInset,
+      _chartClip.bottom - bottomInset,
+    );
   }
 
   double _dataToScreenX(double dataX) {
@@ -378,10 +301,12 @@ class ChartPainter extends CustomPainter {
       ..color = majorGridLineColor
       ..strokeWidth = 1.0;
 
+    // Use visible range (_xMin/_xMax) for ticks, not data range (_xDataMin/_xDataMax).
+    // This ensures grid lines cover the full visible area when zoomed out.
     final xTicks = calculateTicks(
-        _xDataMin, _xDataMax, xAxis?.majorTickCount ?? 10);
+        _xMin, _xMax, xAxis?.majorTickCount ?? 10);
     final yTicks = calculateTicks(
-        _yDataMin, _yDataMax, yAxis?.majorTickCount ?? 10);
+        _yMin, _yMax, yAxis?.majorTickCount ?? 10);
 
     if (showMajorGridLines) {
       for (final tick in xTicks) {
@@ -577,7 +502,7 @@ class ChartPainter extends CustomPainter {
     );
 
     final ticks = calculateTicks(
-        _xDataMin, _xDataMax, xAxis?.majorTickCount ?? 10);
+        _xMin, _xMax, xAxis?.majorTickCount ?? 10);
     final tickPaint = Paint()
       ..color = xAxis?.majorTickColor ?? const Color(0xFFAAAAAA)
       ..strokeWidth = 1.0;
@@ -643,7 +568,7 @@ class ChartPainter extends CustomPainter {
     );
 
     final ticks = calculateTicks(
-        _yDataMin, _yDataMax, yAxis?.majorTickCount ?? 10);
+        _yMin, _yMax, yAxis?.majorTickCount ?? 10);
     final tickPaint = Paint()
       ..color = yAxis?.majorTickColor ?? const Color(0xFFAAAAAA)
       ..strokeWidth = 1.0;

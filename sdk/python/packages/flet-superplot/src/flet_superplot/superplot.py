@@ -15,7 +15,7 @@ from .series import FastLineSeries, XyScatterSeries
 from .data import XyDataSeries
 
 # Source version - must match Flutter SuperPlotControl.version
-SOURCE_VERSION = '0.1.0'
+SOURCE_VERSION = '0.1.02'
 
 # Track whether we've printed version info
 _version_printed = False

@@ -2,13 +2,34 @@ import 'dart:async';
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 
 import 'models/axis_model.dart';
 import 'models/series_model.dart';
 import 'painters/chart_painter.dart';
 
-/// Interactive chart widget with mouse wheel zoom, drag-to-pan, and
-/// double-tap to reset. Wraps [ChartPainter] with gesture handling.
+/// Scale gesture recognizer that eagerly claims trackpad (pan/zoom) events,
+/// preventing parent Scrollable/ListView from competing for them.
+class _EagerScaleGestureRecognizer extends ScaleGestureRecognizer {
+  _EagerScaleGestureRecognizer({super.supportedDevices});
+
+  @override
+  void addAllowedPointerPanZoom(PointerPanZoomStartEvent event) {
+    super.addAllowedPointerPanZoom(event);
+    // Immediately win the gesture arena for trackpad events.
+    // This prevents parent ListView/Scrollable from stealing scroll.
+    resolve(GestureDisposition.accepted);
+  }
+}
+
+/// Interactive chart widget with mouse wheel zoom, pinch-to-zoom,
+/// drag-to-pan, and double-tap to reset. Wraps [ChartPainter] with
+/// gesture handling.
+///
+/// Uses an eager [ScaleGestureRecognizer] that claims trackpad events
+/// immediately, preventing parent ScrollView/ListView from competing.
+/// Also uses [Listener.onPointerSignal] with [PointerSignalResolver]
+/// to claim mouse wheel events before parent Scrollable.
 class InteractiveChart extends StatefulWidget {
   final AxisModel? xAxis;
   final AxisModel? yAxis;
@@ -18,9 +39,6 @@ class InteractiveChart extends StatefulWidget {
   final bool showMinorGridLines;
   final Color majorGridLineColor;
   final Color minorGridLineColor;
-
-  /// Zoom sensitivity: fraction of range per scroll tick (default 10%).
-  final double zoomSensitivity;
 
   /// Callback fired when visible range changes (on gesture end).
   final void Function(double xMin, double xMax, double yMin, double yMax)?
@@ -36,7 +54,6 @@ class InteractiveChart extends StatefulWidget {
     required this.showMinorGridLines,
     required this.majorGridLineColor,
     required this.minorGridLineColor,
-    this.zoomSensitivity = 0.1,
     this.onVisibleRangeChanged,
   });
 
@@ -44,7 +61,8 @@ class InteractiveChart extends StatefulWidget {
   State<InteractiveChart> createState() => _InteractiveChartState();
 }
 
-class _InteractiveChartState extends State<InteractiveChart> {
+class _InteractiveChartState extends State<InteractiveChart>
+    with TickerProviderStateMixin {
   // Mutable visible ranges. Null = use axis config / auto-range.
   double? _xVisibleMin;
   double? _xVisibleMax;
@@ -56,12 +74,28 @@ class _InteractiveChartState extends State<InteractiveChart> {
 
   // Gesture state
   bool _isGesturing = false;
-  Offset? _panStartScreen;
-  double? _panStartXMin;
-  double? _panStartXMax;
-  double? _panStartYMin;
-  double? _panStartYMax;
-  _HitRegion _panRegion = _HitRegion.chart;
+  Offset? _scaleStartFocalPoint;
+  double? _scaleStartXMin;
+  double? _scaleStartXMax;
+  double? _scaleStartYMin;
+  double? _scaleStartYMax;
+  _HitRegion _gestureRegion = _HitRegion.chart;
+
+  // Trackpad detection: on macOS desktop, trackpad scroll generates
+  // PointerPanZoomUpdateEvent (not PointerScrollEvent). ScaleGestureRecognizer
+  // treats this as pan (scale=1.0). We detect trackpad origin and convert
+  // the vertical scroll delta to zoom instead.
+  bool _isTrackpadGesture = false;
+  // Per-frame tracking for incremental trackpad zoom (avoids cumulative
+  // acceleration that makes zoom feel abrupt).
+  Offset? _lastTrackpadFocalPoint;
+
+  // Momentum animation for trackpad zoom deceleration.
+  // On web the browser provides inertia; on desktop we simulate it.
+  Ticker? _momentumTicker;
+  double _momentumVelocity = 0;
+  Duration? _lastTickTime;
+  Offset? _momentumCursor; // zoom center during momentum
 
   // Debounce timer for scroll gesture end
   Timer? _scrollEndTimer;
@@ -72,6 +106,7 @@ class _InteractiveChartState extends State<InteractiveChart> {
   @override
   void dispose() {
     _scrollEndTimer?.cancel();
+    _stopMomentum();
     super.dispose();
   }
 
@@ -80,7 +115,6 @@ class _InteractiveChartState extends State<InteractiveChart> {
     super.didUpdateWidget(oldWidget);
     // If parent pushes new axis config while user hasn't zoomed, respect it
     if (!_userHasZoomed) {
-      ChartPainter.resetStaticPlotArea();
       _xVisibleMin = null;
       _xVisibleMax = null;
       _yVisibleMin = null;
@@ -152,26 +186,13 @@ class _InteractiveChartState extends State<InteractiveChart> {
   }
 
   /// Get the plot area for coordinate conversion during gestures.
-  /// Reuses the last tick-based plot area from ChartPainter so the mapping
-  /// matches what was rendered — no jump at gesture start.
+  /// Uses the same simple inset-based mapping as ChartPainter.
   Rect _getPlotArea() {
     if (_xVisibleMin == null || _lastSize == Size.zero) return Rect.zero;
-    // Use the cached tick-based plot area from the last static frame.
-    // Falls back to fixed insets if no static frame has been painted yet.
-    return ChartPainter.lastStaticPlotArea ??
-        Rect.fromLTRB(
-          10.0,
-          10.0,
-          _lastSize.width - ChartPainter.rightAxisWidth - 11.0,
-          _lastSize.height - ChartPainter.bottomAxisHeight - 3.0,
-        );
+    return ChartPainter.computePlotArea(size: _lastSize);
   }
 
   /// Determine which region a local position falls in.
-  /// - chart: main plot area → zoom/pan both axes
-  /// - xAxis: bottom axis strip → zoom/pan X only
-  /// - yAxis: right axis strip → zoom/pan Y only
-  /// - none: corner or outside
   _HitRegion _hitTest(Offset localPosition) {
     final chartRight = _lastSize.width - ChartPainter.rightAxisWidth;
     final chartBottom = _lastSize.height - ChartPainter.bottomAxisHeight;
@@ -189,7 +210,8 @@ class _InteractiveChartState extends State<InteractiveChart> {
   }
 
   // ---------------------------------------------------------------------------
-  // Mouse wheel zoom
+  // Mouse wheel zoom — uses PointerSignalResolver to claim events before
+  // parent Scrollable/ListView. Innermost widget registers first and wins.
   // ---------------------------------------------------------------------------
 
   void _onPointerSignal(PointerSignalEvent event) {
@@ -197,117 +219,297 @@ class _InteractiveChartState extends State<InteractiveChart> {
       final region = _hitTest(event.localPosition);
       if (region == _HitRegion.none) return;
 
-      _ensureExplicitRanges();
-      final plotArea = _getPlotArea();
-      if (plotArea == Rect.zero) return;
-
-      // Scale zoom by scroll delta. Divisor tuned for smooth feel:
-      // Mouse wheel (~100px/tick): ~5% zoom. Trackpad (~5px/event): ~0.3%.
-      final rawDelta = event.scrollDelta.dy;
-      if (rawDelta.abs() < 0.5) return; // Ignore sub-pixel momentum
-      final zoomAmount = rawDelta / 1500.0;
-      final zoomFactor = 1.0 + zoomAmount.clamp(-0.15, 0.15);
-
-      // Zoom centered on cursor (or axis midpoint for axis regions)
-      final cursorX = ChartPainter.screenToDataX(
-          event.localPosition.dx.clamp(0, plotArea.right),
-          plotArea, _xVisibleMin!, _xVisibleMax!);
-      final cursorY = ChartPainter.screenToDataY(
-          event.localPosition.dy.clamp(0, plotArea.bottom),
-          plotArea, _yVisibleMin!, _yVisibleMax!);
-
-      double newXMin = _xVisibleMin!;
-      double newXMax = _xVisibleMax!;
-      double newYMin = _yVisibleMin!;
-      double newYMax = _yVisibleMax!;
-
-      // Apply zoom to the appropriate axis/axes based on hit region
-      if (region == _HitRegion.chart || region == _HitRegion.xAxis) {
-        newXMin = cursorX - (cursorX - _xVisibleMin!) * zoomFactor;
-        newXMax = cursorX + (_xVisibleMax! - cursorX) * zoomFactor;
-      }
-      if (region == _HitRegion.chart || region == _HitRegion.yAxis) {
-        newYMin = cursorY - (cursorY - _yVisibleMin!) * zoomFactor;
-        newYMax = cursorY + (_yVisibleMax! - cursorY) * zoomFactor;
-      }
-
-      // Guard against degenerate ranges
-      if ((newXMax - newXMin).abs() < 1e-10 ||
-          (newYMax - newYMin).abs() < 1e-10) return;
-
-      setState(() {
-        _xVisibleMin = newXMin;
-        _xVisibleMax = newXMax;
-        _yVisibleMin = newYMin;
-        _yVisibleMax = newYMax;
-        _isGesturing = true;
-      });
-
-      // Debounce: mark gesture as ended 150ms after last scroll
-      _scrollEndTimer?.cancel();
-      _scrollEndTimer = Timer(const Duration(milliseconds: 150), () {
-        _endGesture();
-      });
+      GestureBinding.instance.pointerSignalResolver.register(
+        event,
+        (resolvedEvent) => _handleScrollZoom(
+            resolvedEvent as PointerScrollEvent, region),
+      );
     }
   }
 
+  void _handleScrollZoom(PointerScrollEvent event, _HitRegion region) {
+    _ensureExplicitRanges();
+    final plotArea = _getPlotArea();
+    if (plotArea == Rect.zero) return;
+
+    final zoomAmount = event.scrollDelta.dy / 1500.0;
+    if (zoomAmount.abs() < 1e-6) return;
+    final zoomFactor = 1.0 + zoomAmount.clamp(-0.15, 0.15);
+
+    final cursorX = ChartPainter.screenToDataX(
+        event.localPosition.dx.clamp(0, plotArea.right),
+        plotArea, _xVisibleMin!, _xVisibleMax!);
+    final cursorY = ChartPainter.screenToDataY(
+        event.localPosition.dy.clamp(0, plotArea.bottom),
+        plotArea, _yVisibleMin!, _yVisibleMax!);
+
+    double newXMin = _xVisibleMin!;
+    double newXMax = _xVisibleMax!;
+    double newYMin = _yVisibleMin!;
+    double newYMax = _yVisibleMax!;
+
+    if (region == _HitRegion.chart || region == _HitRegion.xAxis) {
+      newXMin = cursorX - (cursorX - _xVisibleMin!) * zoomFactor;
+      newXMax = cursorX + (_xVisibleMax! - cursorX) * zoomFactor;
+    }
+    if (region == _HitRegion.chart || region == _HitRegion.yAxis) {
+      newYMin = cursorY - (cursorY - _yVisibleMin!) * zoomFactor;
+      newYMax = cursorY + (_yVisibleMax! - cursorY) * zoomFactor;
+    }
+
+    if ((newXMax - newXMin).abs() < 1e-10 ||
+        (newYMax - newYMin).abs() < 1e-10) return;
+
+    setState(() {
+      _xVisibleMin = newXMin;
+      _xVisibleMax = newXMax;
+      _yVisibleMin = newYMin;
+      _yVisibleMax = newYMax;
+      _isGesturing = true;
+    });
+
+    _scrollEndTimer?.cancel();
+    _scrollEndTimer = Timer(const Duration(milliseconds: 150), () {
+      _endGesture();
+    });
+  }
+
   // ---------------------------------------------------------------------------
-  // Drag pan
+  // Trackpad detection: Listener callbacks fire BEFORE the GestureDetector's
+  // ScaleGestureRecognizer processes the same events. We use them to tag
+  // whether the current gesture is from a trackpad or mouse/touch.
   // ---------------------------------------------------------------------------
 
-  void _onPanStart(DragStartDetails details) {
-    final region = _hitTest(details.localPosition);
+  void _onPointerDown(PointerDownEvent event) {
+    _isTrackpadGesture = false;
+  }
+
+  void _onPointerPanZoomStart(PointerPanZoomStartEvent event) {
+    _isTrackpadGesture = true;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Scale gesture: handles drag-to-pan (mouse/touch), pinch-to-zoom
+  // (touch/trackpad), and trackpad scroll-to-zoom.
+  //
+  // Uses _EagerScaleGestureRecognizer which immediately claims trackpad events
+  // in the gesture arena, preventing parent ListView from competing.
+  // ---------------------------------------------------------------------------
+
+  void _onScaleStart(ScaleStartDetails details) {
+    _stopMomentum(); // cancel any in-flight momentum from previous gesture
+
+    final region = _hitTest(details.localFocalPoint);
     if (region == _HitRegion.none) return;
 
     _ensureExplicitRanges();
 
-    _panStartScreen = details.localPosition;
-    _panStartXMin = _xVisibleMin;
-    _panStartXMax = _xVisibleMax;
-    _panStartYMin = _yVisibleMin;
-    _panStartYMax = _yVisibleMax;
-    _panRegion = region;
+    _scaleStartFocalPoint = details.localFocalPoint;
+    _lastTrackpadFocalPoint = details.localFocalPoint;
+    _scaleStartXMin = _xVisibleMin;
+    _scaleStartXMax = _xVisibleMax;
+    _scaleStartYMin = _yVisibleMin;
+    _scaleStartYMax = _yVisibleMax;
+    _gestureRegion = region;
 
     setState(() {
       _isGesturing = true;
     });
   }
 
-  void _onPanUpdate(DragUpdateDetails details) {
-    if (_panStartScreen == null) return;
+  void _onScaleUpdate(ScaleUpdateDetails details) {
+    if (_scaleStartFocalPoint == null) return;
 
     final plotArea = _getPlotArea();
     if (plotArea == Rect.zero || plotArea.width == 0 || plotArea.height == 0) {
       return;
     }
 
-    final dx = details.localPosition.dx - _panStartScreen!.dx;
-    final dy = details.localPosition.dy - _panStartScreen!.dy;
+    final startXRange = _scaleStartXMax! - _scaleStartXMin!;
+    final startYRange = _scaleStartYMax! - _scaleStartYMin!;
 
-    final xRange = _panStartXMax! - _panStartXMin!;
-    final yRange = _panStartYMax! - _panStartYMin!;
+    double xMin = _scaleStartXMin!;
+    double xMax = _scaleStartXMax!;
+    double yMin = _scaleStartYMin!;
+    double yMax = _scaleStartYMax!;
 
-    // Drag right → view pans left → data range decreases
-    final dataXDelta = -dx / plotArea.width * xRange;
-    // Drag down → view pans up → data range increases (Y is inverted)
-    final dataYDelta = dy / plotArea.height * yRange;
+    if (_isTrackpadGesture && (details.scale - 1.0).abs() < 0.001) {
+      // --- Trackpad scroll-to-zoom (incremental) ---
+      // On macOS desktop, two-finger scroll arrives via ScaleGestureRecognizer
+      // with scale=1.0. Use per-frame delta (not cumulative from start) for
+      // smooth, inertial zoom that matches web feel.
+      final dy = details.localFocalPoint.dy - _lastTrackpadFocalPoint!.dy;
+      _lastTrackpadFocalPoint = details.localFocalPoint;
+
+      // Use current ranges (not start ranges) since we apply incrementally
+      xMin = _xVisibleMin!;
+      xMax = _xVisibleMax!;
+      yMin = _yVisibleMin!;
+      yMax = _yVisibleMax!;
+
+      final zoomAmount = -dy / 300.0;
+      if (zoomAmount.abs() < 1e-6) return;
+      final zoomFactor = 1.0 + zoomAmount.clamp(-0.15, 0.15);
+
+      final cursorX = ChartPainter.screenToDataX(
+          _scaleStartFocalPoint!.dx, plotArea, xMin, xMax);
+      final cursorY = ChartPainter.screenToDataY(
+          _scaleStartFocalPoint!.dy, plotArea, yMin, yMax);
+
+      if (_gestureRegion == _HitRegion.chart ||
+          _gestureRegion == _HitRegion.xAxis) {
+        xMin = cursorX - (cursorX - xMin) * zoomFactor;
+        xMax = cursorX + (xMax - cursorX) * zoomFactor;
+      }
+      if (_gestureRegion == _HitRegion.chart ||
+          _gestureRegion == _HitRegion.yAxis) {
+        yMin = cursorY - (cursorY - yMin) * zoomFactor;
+        yMax = cursorY + (yMax - cursorY) * zoomFactor;
+      }
+    } else {
+      // --- Mouse/touch: pan from focal point delta ---
+      final dx = details.localFocalPoint.dx - _scaleStartFocalPoint!.dx;
+      final dy = details.localFocalPoint.dy - _scaleStartFocalPoint!.dy;
+      final dataXDelta = -dx / plotArea.width * startXRange;
+      final dataYDelta = dy / plotArea.height * startYRange;
+
+      xMin += dataXDelta;
+      xMax += dataXDelta;
+      yMin += dataYDelta;
+      yMax += dataYDelta;
+
+      // --- Zoom: apply pinch scale centered on focal point ---
+      if ((details.scale - 1.0).abs() > 0.001) {
+        // scale > 1 = fingers apart = zoom in = smaller data range
+        final zoomFactor = 1.0 / details.scale;
+
+        final focalX = ChartPainter.screenToDataX(
+            details.localFocalPoint.dx, plotArea, xMin, xMax);
+        final focalY = ChartPainter.screenToDataY(
+            details.localFocalPoint.dy, plotArea, yMin, yMax);
+
+        xMin = focalX - (focalX - xMin) * zoomFactor;
+        xMax = focalX + (xMax - focalX) * zoomFactor;
+        yMin = focalY - (focalY - yMin) * zoomFactor;
+        yMax = focalY + (yMax - focalY) * zoomFactor;
+      }
+    }
+
+    // Guard against degenerate ranges
+    if ((xMax - xMin).abs() < 1e-10 || (yMax - yMin).abs() < 1e-10) return;
 
     setState(() {
-      // Apply pan to appropriate axes based on where the drag started
-      if (_panRegion == _HitRegion.chart || _panRegion == _HitRegion.xAxis) {
-        _xVisibleMin = _panStartXMin! + dataXDelta;
-        _xVisibleMax = _panStartXMax! + dataXDelta;
+      if (_gestureRegion == _HitRegion.chart ||
+          _gestureRegion == _HitRegion.xAxis) {
+        _xVisibleMin = xMin;
+        _xVisibleMax = xMax;
       }
-      if (_panRegion == _HitRegion.chart || _panRegion == _HitRegion.yAxis) {
-        _yVisibleMin = _panStartYMin! + dataYDelta;
-        _yVisibleMax = _panStartYMax! + dataYDelta;
+      if (_gestureRegion == _HitRegion.chart ||
+          _gestureRegion == _HitRegion.yAxis) {
+        _yVisibleMin = yMin;
+        _yVisibleMax = yMax;
       }
     });
   }
 
-  void _onPanEnd(DragEndDetails details) {
-    _panStartScreen = null;
+  void _onScaleEnd(ScaleEndDetails details) {
+    if (_isTrackpadGesture && _scaleStartFocalPoint != null) {
+      // Start momentum animation if there's enough velocity.
+      final vy = details.velocity.pixelsPerSecond.dy;
+      if (vy.abs() > 50) {
+        _startMomentum(vy);
+        _scaleStartFocalPoint = null;
+        return; // gesture stays "active" during momentum
+      }
+    }
+
+    _scaleStartFocalPoint = null;
     _endGesture();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Momentum animation — simulates browser-style inertia for trackpad zoom
+  // ---------------------------------------------------------------------------
+
+  void _startMomentum(double velocityPxPerSec) {
+    _stopMomentum();
+    _momentumVelocity = velocityPxPerSec;
+    _momentumCursor = _lastTrackpadFocalPoint ?? _scaleStartFocalPoint;
+    _lastTickTime = null;
+    _momentumTicker = createTicker(_onMomentumTick);
+    _momentumTicker!.start();
+  }
+
+  void _stopMomentum() {
+    _momentumTicker?.stop();
+    _momentumTicker?.dispose();
+    _momentumTicker = null;
+  }
+
+  void _onMomentumTick(Duration elapsed) {
+    if (_lastTickTime == null) {
+      _lastTickTime = elapsed;
+      return;
+    }
+
+    final dt = (elapsed - _lastTickTime!).inMicroseconds / 1000000.0;
+    _lastTickTime = elapsed;
+
+    // Exponential friction: ~0.91 per frame at 60fps ≈ short, snappy
+    // deceleration that feels responsive without abrupt stop.
+    _momentumVelocity *= 0.91;
+
+    if (_momentumVelocity.abs() < 10) {
+      _stopMomentum();
+      _endGesture();
+      return;
+    }
+
+    // Convert velocity to a pixel delta for this frame
+    final dy = _momentumVelocity * dt;
+    _applyTrackpadZoomDelta(dy);
+  }
+
+  /// Apply a single trackpad zoom step from a pixel delta.
+  void _applyTrackpadZoomDelta(double dy) {
+    final plotArea = _getPlotArea();
+    if (plotArea == Rect.zero) return;
+
+    final zoomAmount = -dy / 300.0;
+    if (zoomAmount.abs() < 1e-6) return;
+    final zoomFactor = 1.0 + zoomAmount.clamp(-0.15, 0.15);
+
+    double xMin = _xVisibleMin!;
+    double xMax = _xVisibleMax!;
+    double yMin = _yVisibleMin!;
+    double yMax = _yVisibleMax!;
+
+    final cursor = _momentumCursor ??
+        Offset(plotArea.center.dx, plotArea.center.dy);
+    final cursorX =
+        ChartPainter.screenToDataX(cursor.dx, plotArea, xMin, xMax);
+    final cursorY =
+        ChartPainter.screenToDataY(cursor.dy, plotArea, yMin, yMax);
+
+    if (_gestureRegion == _HitRegion.chart ||
+        _gestureRegion == _HitRegion.xAxis) {
+      xMin = cursorX - (cursorX - xMin) * zoomFactor;
+      xMax = cursorX + (xMax - cursorX) * zoomFactor;
+    }
+    if (_gestureRegion == _HitRegion.chart ||
+        _gestureRegion == _HitRegion.yAxis) {
+      yMin = cursorY - (cursorY - yMin) * zoomFactor;
+      yMax = cursorY + (yMax - cursorY) * zoomFactor;
+    }
+
+    if ((xMax - xMin).abs() < 1e-10 || (yMax - yMin).abs() < 1e-10) return;
+
+    setState(() {
+      _xVisibleMin = xMin;
+      _xVisibleMax = xMax;
+      _yVisibleMin = yMin;
+      _yVisibleMax = yMax;
+    });
   }
 
   // ---------------------------------------------------------------------------
@@ -326,7 +528,6 @@ class _InteractiveChartState extends State<InteractiveChart> {
   // ---------------------------------------------------------------------------
 
   void _onDoubleTap() {
-    ChartPainter.resetStaticPlotArea();
     setState(() {
       _xVisibleMin = null;
       _xVisibleMax = null;
@@ -382,11 +583,30 @@ class _InteractiveChartState extends State<InteractiveChart> {
         _lastSize = Size(constraints.maxWidth, constraints.maxHeight);
         return Listener(
           onPointerSignal: _onPointerSignal,
-          child: GestureDetector(
-            onPanStart: _onPanStart,
-            onPanUpdate: _onPanUpdate,
-            onPanEnd: _onPanEnd,
-            onDoubleTap: _onDoubleTap,
+          onPointerDown: _onPointerDown,
+          onPointerPanZoomStart: _onPointerPanZoomStart,
+          child: RawGestureDetector(
+            gestures: <Type, GestureRecognizerFactory>{
+              _EagerScaleGestureRecognizer:
+                  GestureRecognizerFactoryWithHandlers<
+                      _EagerScaleGestureRecognizer>(
+                () => _EagerScaleGestureRecognizer(),
+                (_EagerScaleGestureRecognizer instance) {
+                  instance
+                    ..onStart = _onScaleStart
+                    ..onUpdate = _onScaleUpdate
+                    ..onEnd = _onScaleEnd;
+                },
+              ),
+              DoubleTapGestureRecognizer:
+                  GestureRecognizerFactoryWithHandlers<
+                      DoubleTapGestureRecognizer>(
+                () => DoubleTapGestureRecognizer(),
+                (DoubleTapGestureRecognizer instance) {
+                  instance.onDoubleTap = _onDoubleTap;
+                },
+              ),
+            },
             child: MouseRegion(
               cursor: _isGesturing
                   ? SystemMouseCursors.grabbing
