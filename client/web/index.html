@@ -84,10 +84,12 @@
       body {
         inset: 0;
         overflow: hidden;
+        overscroll-behavior: none;
         margin: 0;
         padding: 0;
         position: fixed;
       }
+
 
       #loading {
         align-items: center;
@@ -137,6 +139,54 @@
     <img src="icons/loading-animation.png" alt="Loading..." />
   </div>
   <script src="flutter_bootstrap.js" async></script>
+
+  <script>
+    // Fix: Flutter web platform views (WebView iframes) capture pointer events,
+    // breaking drag gestures. FLT-GLASS-PANE uses a shadow DOM so parent CSS
+    // cannot reach these elements. We inject inline pointer-events:none directly
+    // and use MutationObserver for dynamically added platform views.
+    (function() {
+      function disablePointerEvents(el) {
+        el.style.setProperty('pointer-events', 'none', 'important');
+      }
+
+      function scanAndDisable(root) {
+        root.querySelectorAll('flt-platform-view, flt-platform-view iframe, iframe').forEach(disablePointerEvents);
+      }
+
+      function observeRoot(root) {
+        new MutationObserver(function(mutations) {
+          mutations.forEach(function(m) {
+            m.addedNodes.forEach(function(node) {
+              if (node.nodeType !== 1) return;
+              if (node.tagName === 'FLT-PLATFORM-VIEW' || node.tagName === 'IFRAME') {
+                disablePointerEvents(node);
+                if (node.querySelectorAll) {
+                  node.querySelectorAll('iframe').forEach(disablePointerEvents);
+                }
+              }
+              if (node.shadowRoot) { scanAndDisable(node.shadowRoot); observeRoot(node.shadowRoot); }
+              if (node.querySelectorAll) { scanAndDisable(node); }
+            });
+          });
+        }).observe(root, { childList: true, subtree: true });
+      }
+
+      function tryStart() {
+        if (document.querySelectorAll('flt-platform-view, iframe').length > 0) {
+          scanAndDisable(document);
+          document.querySelectorAll('flutter-view, flt-glass-pane').forEach(function(el) {
+            if (el.shadowRoot) { scanAndDisable(el.shadowRoot); observeRoot(el.shadowRoot); }
+          });
+          observeRoot(document.body);
+        } else {
+          setTimeout(tryStart, 500);
+        }
+      }
+
+      setTimeout(tryStart, 1000);
+    })();
+  </script>
 
   <!-- <h1>View 1</h1>
   <div id="view-1" style="display: flex; justify-content: center;"></div>
