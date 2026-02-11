@@ -141,47 +141,102 @@
   <script src="flutter_bootstrap.js" async></script>
 
   <script>
-    // Fix: Flutter web platform views (WebView iframes) capture pointer events,
-    // breaking drag gestures. FLT-GLASS-PANE uses a shadow DOM so parent CSS
-    // cannot reach these elements. We inject inline pointer-events:none directly
-    // and use MutationObserver for dynamically added platform views.
+    // Fix: Flutter web platform views (WebView iframes) capture pointer events
+    // at the browser DOM level, breaking drag gestures (flutter#134652).
+    // Iframes must also be disabled when behind other Flutter widgets (e.g.
+    // Agent layer) because platform views sit ABOVE the Canvas in the DOM.
+    //
+    // Two mechanisms:
+    // 1. Drag protection: pointerdown → none, pointerup → re-enable (if allowed)
+    // 2. Interactive flag: Dart calls _epyxSetIframeInteractive(bool) to control
+    //    whether iframes should be re-enabled after drag or pointer events.
+    //
+    // *** LIMITATION: BLANKET TOGGLE — AFFECTS ALL IFRAMES ***
+    // The current implementation enables/disables pointer-events on ALL iframes
+    // at once. This works with a single WebView (Python REPL) but WILL BREAK
+    // with multiple WebViews (e.g. Python + zsh + EMark).
+    //
+    // BEFORE adding a second WebView to the Orchestrator Stack, refactor to
+    // per-iframe targeting using Flet control IDs as data attributes.
+    // See: notes/dart_widgets_plan.md § "Per-Iframe Pointer-Events Targeting"
     (function() {
-      function disablePointerEvents(el) {
-        el.style.setProperty('pointer-events', 'none', 'important');
+      var dragging = false;
+      var iframesAllowed = true;  // Set by Dart via _epyxSetIframeInteractive
+
+      function setIframePointerEvents(value) {
+        function applyToRoot(root) {
+          root.querySelectorAll('flt-platform-view, flt-platform-view iframe, iframe').forEach(function(el) {
+            el.style.setProperty('pointer-events', value, 'important');
+          });
+        }
+        applyToRoot(document);
+        document.querySelectorAll('flutter-view, flt-glass-pane').forEach(function(el) {
+          if (el.shadowRoot) applyToRoot(el.shadowRoot);
+        });
       }
 
-      function scanAndDisable(root) {
-        root.querySelectorAll('flt-platform-view, flt-platform-view iframe, iframe').forEach(disablePointerEvents);
-      }
+      // API for Dart: control whether iframes should receive pointer events.
+      // Called from webview_web.dart when the 'interactive' property changes.
+      window._epyxSetIframeInteractive = function(allowed) {
+        iframesAllowed = !!allowed;
+        setIframePointerEvents(iframesAllowed ? 'auto' : 'none');
+      };
 
+      // On pointerdown: disable iframe pointer events so drags work
+      document.addEventListener('pointerdown', function() {
+        if (!dragging) {
+          dragging = true;
+          setIframePointerEvents('none');
+        }
+      }, true);
+
+      // On pointerup: re-enable only if iframes are allowed (not behind other widgets)
+      document.addEventListener('pointerup', function() {
+        if (dragging) {
+          dragging = false;
+          if (iframesAllowed) {
+            setIframePointerEvents('auto');
+          }
+        }
+      }, true);
+
+      // Also handle pointer cancel (e.g. touch cancel)
+      document.addEventListener('pointercancel', function() {
+        if (dragging) {
+          dragging = false;
+          if (iframesAllowed) {
+            setIframePointerEvents('auto');
+          }
+        }
+      }, true);
+
+      // MutationObserver: new iframes respect the current interactive state
       function observeRoot(root) {
         new MutationObserver(function(mutations) {
           mutations.forEach(function(m) {
             m.addedNodes.forEach(function(node) {
               if (node.nodeType !== 1) return;
-              if (node.tagName === 'FLT-PLATFORM-VIEW' || node.tagName === 'IFRAME') {
-                disablePointerEvents(node);
+              if (!dragging && (node.tagName === 'FLT-PLATFORM-VIEW' || node.tagName === 'IFRAME')) {
+                var pe = iframesAllowed ? 'auto' : 'none';
+                node.style.setProperty('pointer-events', pe, 'important');
                 if (node.querySelectorAll) {
-                  node.querySelectorAll('iframe').forEach(disablePointerEvents);
+                  node.querySelectorAll('iframe').forEach(function(el) {
+                    el.style.setProperty('pointer-events', pe, 'important');
+                  });
                 }
               }
-              if (node.shadowRoot) { scanAndDisable(node.shadowRoot); observeRoot(node.shadowRoot); }
-              if (node.querySelectorAll) { scanAndDisable(node); }
+              if (node.shadowRoot) observeRoot(node.shadowRoot);
             });
           });
         }).observe(root, { childList: true, subtree: true });
       }
 
       function tryStart() {
-        if (document.querySelectorAll('flt-platform-view, iframe').length > 0) {
-          scanAndDisable(document);
-          document.querySelectorAll('flutter-view, flt-glass-pane').forEach(function(el) {
-            if (el.shadowRoot) { scanAndDisable(el.shadowRoot); observeRoot(el.shadowRoot); }
-          });
-          observeRoot(document.body);
-        } else {
-          setTimeout(tryStart, 500);
-        }
+        setIframePointerEvents(iframesAllowed ? 'auto' : 'none');
+        document.querySelectorAll('flutter-view, flt-glass-pane').forEach(function(el) {
+          if (el.shadowRoot) observeRoot(el.shadowRoot);
+        });
+        observeRoot(document.body);
       }
 
       setTimeout(tryStart, 1000);

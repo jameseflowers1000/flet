@@ -135,11 +135,12 @@ def app(
     )
 
     # Add middleware for custom headers
+    # NOTE: COOP/COEP removed — they block cross-origin iframes (e.g. ttyd
+    # terminal).  SharedArrayBuffer won't be available but Flutter web still
+    # works (CanvasKit falls back to single-threaded rendering).
     class CustomHeadersMiddleware(BaseHTTPMiddleware):
         async def dispatch(self, request: Request, call_next):
             response = await call_next(request)
-            response.headers["Cross-Origin-Opener-Policy"] = "same-origin"
-            response.headers["Cross-Origin-Embedder-Policy"] = "require-corp"
             response.headers["Access-Control-Allow-Origin"] = "*"
             return response
 

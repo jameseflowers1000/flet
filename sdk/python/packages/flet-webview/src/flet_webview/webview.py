@@ -28,6 +28,19 @@ class WebView(ft.LayoutControl):
     url: Optional[str] = None
     """The URL of the web page to load."""
 
+    interactive: Optional[bool] = True
+    """Whether the WebView should receive pointer events.
+
+    Set to ``False`` to disable pointer interaction (IgnorePointer on web).
+    Useful when the WebView is behind other widgets in a Stack but its
+    iframe would otherwise intercept events on the Canvas layer.
+
+    LIMITATION: The JS bridge currently toggles ALL iframes at once.
+    Before adding a second WebView to the Orchestrator, refactor to
+    per-iframe targeting using control IDs.
+    See: notes/dart_widgets_plan.md § "Per-Iframe Pointer-Events Targeting"
+    """
+
     prevent_links: Optional[list[str]] = None
     """List of url-prefixes that should not be followed/loaded/downloaded."""
 
