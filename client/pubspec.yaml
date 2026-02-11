@@ -85,6 +85,12 @@ dependencies:
   flet_superplot:
     path: ../sdk/python/packages/flet-superplot/src/flutter/flet_superplot
 
+  flet_agentview:
+    path: ../sdk/python/packages/flet-agentview/src/flutter/flet_agentview
+
+  flet_terminal:
+    path: ../sdk/python/packages/flet-terminal/src/flutter/flet_terminal
+
   cupertino_icons:
   syncfusion_flutter_core: any
   wakelock_plus: ^1.4.0
