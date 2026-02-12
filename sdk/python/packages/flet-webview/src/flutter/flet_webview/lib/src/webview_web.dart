@@ -65,6 +65,13 @@ class _WebviewWebState extends State<WebviewWeb> {
     if (fn != null && fn.isA<JSFunction>()) {
       (fn as JSFunction).callAsFunction(null, interactive.toJS);
     }
+    // When becoming interactive, also focus the iframe for keyboard input
+    if (interactive) {
+      final focusFn = globalContext['_epyxFocusIframe'];
+      if (focusFn != null && focusFn.isA<JSFunction>()) {
+        (focusFn as JSFunction).callAsFunction(null);
+      }
+    }
   }
 
   @override

@@ -175,11 +175,40 @@
         });
       }
 
+      function blurAllIframes() {
+        function blurInRoot(root) {
+          root.querySelectorAll('iframe').forEach(function(el) { el.blur(); });
+        }
+        blurInRoot(document);
+        document.querySelectorAll('flutter-view, flt-glass-pane').forEach(function(el) {
+          if (el.shadowRoot) blurInRoot(el.shadowRoot);
+        });
+      }
+
       // API for Dart: control whether iframes should receive pointer events.
       // Called from webview_web.dart when the 'interactive' property changes.
       window._epyxSetIframeInteractive = function(allowed) {
         iframesAllowed = !!allowed;
         setIframePointerEvents(iframesAllowed ? 'auto' : 'none');
+        // Blur iframes when disabling — even with pointer-events:none,
+        // iframes retain keyboard focus and can steal it from other widgets.
+        if (!allowed) blurAllIframes();
+      };
+
+      // Focus the first iframe (e.g. ttyd terminal) so it receives keyboard input.
+      // Called from webview_web.dart when interactive changes to true.
+      // LIMITATION: Blanket — focuses the first iframe found. Extend to per-iframe
+      // targeting when adding a second WebView.
+      window._epyxFocusIframe = function() {
+        function tryFocus(root) {
+          var iframe = root.querySelector('iframe');
+          if (iframe) { iframe.focus(); return true; }
+          return false;
+        }
+        if (tryFocus(document)) return;
+        document.querySelectorAll('flutter-view, flt-glass-pane').forEach(function(el) {
+          if (el.shadowRoot) tryFocus(el.shadowRoot);
+        });
       };
 
       // On pointerdown: disable iframe pointer events so drags work

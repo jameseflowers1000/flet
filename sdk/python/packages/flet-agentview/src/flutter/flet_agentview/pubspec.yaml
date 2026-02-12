@@ -1,6 +1,6 @@
 name: flet_agentview
-description: AI Agent chat view using Syncfusion AI AssistView
-version: 0.1.0
+description: AI Agent chat view with custom Dart widget
+version: 0.2.0
 publish_to: none
 
 environment:
@@ -14,4 +14,8 @@ dependencies:
   flet:
     path: ../../../../../../../packages/flet
 
-  syncfusion_flutter_chat: any
+  # Explicit deps for markdown rendering in chat bubbles
+  # (also available transitively from flet, but listed for clarity)
+  flutter_markdown_plus: ^1.0.7
+  markdown: ^7.3.0
+  highlight: ^0.7.0

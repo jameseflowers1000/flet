@@ -1,10 +1,12 @@
 """
 AgentView - Python-side control for the AI Agent chat interface.
 
-Uses Syncfusion's SfAIAssistView on the Dart side for rendering.
+Custom Dart chat widget with markdown rendering, keyboard shortcuts,
+and slash command popup. Replaces Syncfusion SfAIAssistView.
+
 Communication follows the established SuperPlot pattern:
   Python → Dart: JSON string properties
-  Dart → Python: FletBackend.updateControl()
+  Dart → Python: FletBackend.triggerControlEvent()
 """
 
 import json
@@ -14,18 +16,19 @@ import flet as ft
 
 
 # Source version — must match Dart AgentViewControl.version
-SOURCE_VERSION = '0.1.0'
+SOURCE_VERSION = '0.2.0'
 
 
 @ft.control("flet_agentview")
 class AgentView(ft.LayoutControl):
-    """AI Agent chat view backed by Syncfusion SfAIAssistView.
+    """AI Agent chat view with custom Dart widget.
 
     Properties sent to Dart as JSON strings:
         messages: JSON array of {role, content, timestamp}
         placeholder_text: shown when no messages
         input_hint: composer hint text
         theme_bg: background color hex
+        slash_commands: JSON array of {command, label, icon}
 
     Events received from Dart:
         on_request: user submitted a message (text in event data)
@@ -38,6 +41,16 @@ class AgentView(ft.LayoutControl):
     placeholder_text: str = "What can I help you with today?"
     input_hint: str = "Ask something..."
     theme_bg: str = "#1A191F"
+
+    # Slash command definitions for the popup menu
+    slash_commands: Optional[str] = None
+    """JSON array of {command, label, icon} for the slash command popup.
+
+    Example: [{"command": "/python", "label": "Python REPL", "icon": "terminal"}]
+    """
+
+    # Whether this view is the active/visible layer (triggers input focus)
+    active: bool = True
 
     # Dart runtime version (sent back from Dart on mount)
     runtime_version: Optional[str] = None
