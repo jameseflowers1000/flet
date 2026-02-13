@@ -55,6 +55,9 @@ class AgentView(ft.LayoutControl):
     # Agent mode label shown as a chip in the composer (e.g. "General")
     mode_label: str = ""
 
+    # Base64-encoded icon for the current mode (shown instead of text when set)
+    mode_icon: str = ""
+
     # Dart runtime version (sent back from Dart on mount)
     runtime_version: Optional[str] = None
 

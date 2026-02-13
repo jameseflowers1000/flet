@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -20,6 +22,7 @@ class ChatComposer extends StatefulWidget {
   final ValueChanged<String> onSubmit;
   final FocusNode? focusNode;
   final String modeLabel;
+  final String modeIcon;
 
   const ChatComposer({
     super.key,
@@ -28,6 +31,7 @@ class ChatComposer extends StatefulWidget {
     required this.onSubmit,
     this.focusNode,
     this.modeLabel = '',
+    this.modeIcon = '',
   });
 
   @override
@@ -179,8 +183,17 @@ class _ChatComposerState extends State<ChatComposer> {
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
-              // Mode chip — only shown for non-default modes
-              if (widget.modeLabel.isNotEmpty &&
+              // Mode indicator — icon (base64 image) or text chip for non-default modes
+              if (widget.modeIcon.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(right: 8, bottom: 4),
+                  child: Image.memory(
+                    base64Decode(widget.modeIcon),
+                    height: 44,
+                    filterQuality: FilterQuality.medium,
+                  ),
+                )
+              else if (widget.modeLabel.isNotEmpty &&
                   widget.modeLabel.toLowerCase() != 'general')
                 Padding(
                   padding: const EdgeInsets.only(right: 8, bottom: 4),

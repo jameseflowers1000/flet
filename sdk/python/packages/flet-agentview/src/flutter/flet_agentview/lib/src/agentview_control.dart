@@ -43,6 +43,7 @@ class _AgentViewControlState extends State<AgentViewControl> {
   String _placeholderText = 'What can I help you with today?';
   String _inputHint = 'Ask something...';
   String _modeLabel = '';
+  String _modeIcon = '';
 
   @override
   void initState() {
@@ -118,6 +119,7 @@ class _AgentViewControlState extends State<AgentViewControl> {
     }
 
     _modeLabel = widget.control.getString("mode_label") ?? '';
+    _modeIcon = widget.control.getString("mode_icon") ?? '';
 
     // Focus management: reclaim focus periodically until settled.
     // Flet's update cycle can steal focus via cascading WebSocket updates,
@@ -204,6 +206,7 @@ class _AgentViewControlState extends State<AgentViewControl> {
               onSubmit: _onSubmit,
               focusNode: _composerFocusNode,
               modeLabel: _modeLabel,
+              modeIcon: _modeIcon,
             ),
           ],
         ),

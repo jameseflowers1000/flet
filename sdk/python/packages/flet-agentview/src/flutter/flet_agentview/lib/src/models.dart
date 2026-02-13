@@ -58,6 +58,8 @@ class AgentTheme {
         return Icons.architecture;
       case 'send':
         return Icons.send;
+      case 'show_chart':
+        return Icons.show_chart;
       default:
         return Icons.chevron_right;
     }
