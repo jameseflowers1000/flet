@@ -15,6 +15,9 @@ downloads/
 eggs/
 .eggs/
 lib/
+# But allow Dart lib/ directories in our custom Flet extension packages
+!packages/flet-*/src/flutter/*/lib/
+!packages/flet-*/src/flutter/*/lib/**
 lib64/
 parts/
 sdist/
