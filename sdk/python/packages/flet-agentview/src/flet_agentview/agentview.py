@@ -52,6 +52,9 @@ class AgentView(ft.LayoutControl):
     # Whether this view is the active/visible layer (triggers input focus)
     active: bool = True
 
+    # Agent mode label shown as a chip in the composer (e.g. "General")
+    mode_label: str = ""
+
     # Dart runtime version (sent back from Dart on mount)
     runtime_version: Optional[str] = None
 
