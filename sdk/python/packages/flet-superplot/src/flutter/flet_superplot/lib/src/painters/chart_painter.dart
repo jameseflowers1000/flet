@@ -91,13 +91,20 @@ class ChartPainter extends CustomPainter {
       _plotArea = _chartClip;
     }
 
-    // Cache key based on size + all computed ranges
-    final cacheKey = '${size.width},${size.height},'
+    // Cache keys include all properties that affect each layer's rendering
+    final rangeKey = '${size.width},${size.height},'
         '$_xMin,$_xMax,$_yMin,$_yMax,'
         '$_xDataMin,$_xDataMax,$_yDataMin,$_yDataMax';
+    final gridCacheKey = '$rangeKey,'
+        '$showMajorGridLines,$showMinorGridLines,'
+        '${majorGridLineColor.value},${minorGridLineColor.value}';
+    final axesCacheKey = '$rangeKey,'
+        '${xAxis?.axisTitle},${yAxis?.axisTitle},'
+        '${xAxis?.labelFormat},${yAxis?.labelFormat},'
+        '${xAxis?.type},${yAxis?.type}';
 
-    // --- Grid layer (always rebuild on range change — cheap line drawing) ---
-    if (_gridCache == null || _gridCacheKey != cacheKey) {
+    // --- Grid layer ---
+    if (_gridCache == null || _gridCacheKey != gridCacheKey) {
       final gridRec = ui.PictureRecorder();
       final gridCanvas = Canvas(gridRec);
       try {
@@ -106,11 +113,11 @@ class ChartPainter extends CustomPainter {
         debugPrint('[SuperPlot] _drawGridLines error: $e');
       }
       _gridCache = gridRec.endRecording();
-      _gridCacheKey = cacheKey;
+      _gridCacheKey = gridCacheKey;
     }
 
-    // --- Axes layer (always rebuild — correctness over performance) ---
-    if (_axesCache == null || _axesCacheKey != cacheKey) {
+    // --- Axes layer ---
+    if (_axesCache == null || _axesCacheKey != axesCacheKey) {
       final axesRec = ui.PictureRecorder();
       final axesCanvas = Canvas(axesRec);
       try {
@@ -124,7 +131,7 @@ class ChartPainter extends CustomPainter {
         debugPrint('[SuperPlot] _drawYAxis error: $e');
       }
       _axesCache = axesRec.endRecording();
-      _axesCacheKey = cacheKey;
+      _axesCacheKey = axesCacheKey;
     }
 
     // Draw: grid → series → axes
@@ -1138,13 +1145,15 @@ class ChartPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant ChartPainter oldDelegate) {
-    return oldDelegate.xAxis?.visibleRangeMin != xAxis?.visibleRangeMin ||
-        oldDelegate.xAxis?.visibleRangeMax != xAxis?.visibleRangeMax ||
-        oldDelegate.yAxis?.visibleRangeMin != yAxis?.visibleRangeMin ||
-        oldDelegate.yAxis?.visibleRangeMax != yAxis?.visibleRangeMax ||
+    return oldDelegate.xAxis != xAxis ||
+        oldDelegate.yAxis != yAxis ||
         oldDelegate.gestureActive != gestureActive ||
         oldDelegate.series != series ||
-        oldDelegate.backgroundColor != backgroundColor;
+        oldDelegate.backgroundColor != backgroundColor ||
+        oldDelegate.showMajorGridLines != showMajorGridLines ||
+        oldDelegate.showMinorGridLines != showMinorGridLines ||
+        oldDelegate.majorGridLineColor != majorGridLineColor ||
+        oldDelegate.minorGridLineColor != minorGridLineColor;
   }
 }
 
