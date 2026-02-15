@@ -25,6 +25,12 @@ class FletDataGridSource extends DataGridSource {
   /// Per-column type hints: "int", "float", "bool", "str"
   Map<String, String> _columnTypes = {};
 
+  /// Per-column Python format strings (e.g. "${:,.2f}")
+  Map<String, String> _columnFormats = {};
+
+  /// Per-column read-only flags
+  Set<String> _readOnlyColumns = {};
+
   /// Callback when a cell is edited
   final CellEditCallback? onCellEdit;
 
@@ -36,11 +42,20 @@ class FletDataGridSource extends DataGridSource {
 
   void _buildColumnTypes() {
     _columnTypes = {};
+    _columnFormats = {};
+    _readOnlyColumns = {};
     for (var i = 0; i < _columnDefs.length && i < _columnNames.length; i++) {
       final def = _columnDefs[i];
       if (def is Map) {
         final dtype = def["dtype"] as String? ?? "str";
         _columnTypes[_columnNames[i]] = dtype;
+        final fmt = def["format"] as String?;
+        if (fmt != null && fmt.isNotEmpty) {
+          _columnFormats[_columnNames[i]] = fmt;
+        }
+        if (def["read_only"] == true) {
+          _readOnlyColumns.add(_columnNames[i]);
+        }
       }
     }
   }
@@ -90,21 +105,24 @@ class FletDataGridSource extends DataGridSource {
   String _formatValue(Object? value, String columnName) {
     if (value == null) return '';
 
+    // Check for custom Python format string first
+    if (_columnFormats.containsKey(columnName)) {
+      final formatted = _applyFormat(value, _columnFormats[columnName]!);
+      if (formatted != null) return formatted;
+    }
+
+    // Fallback to dtype-based formatting
     final dtype = _columnTypes[columnName] ?? "str";
 
     if (dtype == "float") {
-      // Try to parse as double for formatting
       final d = value is num
           ? value.toDouble()
           : double.tryParse(value.toString());
       if (d != null) {
-        // If it's a whole number, show without decimals
         if (d == d.roundToDouble() && d.abs() < 1e15) {
           return d.toInt().toString();
         }
-        // Otherwise show up to 4 decimal places, trimming trailing zeros
         String s = d.toStringAsFixed(4);
-        // Remove trailing zeros after decimal point
         if (s.contains('.')) {
           s = s.replaceAll(RegExp(r'0+$'), '');
           s = s.replaceAll(RegExp(r'\.$'), '');
@@ -126,6 +144,48 @@ class FletDataGridSource extends DataGridSource {
     return value.toString();
   }
 
+  /// Parse and apply a Python format string like "${:,.2f}" or "{:,d}".
+  /// Returns null if the format couldn't be applied.
+  String? _applyFormat(Object? value, String format) {
+    if (value == null) return null;
+
+    // Extract prefix (e.g. "$" from "${:,.2f}")
+    String prefix = "";
+    String fmt = format;
+    if (fmt.startsWith('\$')) {
+      prefix = '\$';
+      fmt = fmt.substring(1);
+    }
+
+    // Match Python format spec: {:,?.?\d*[fd]?}
+    final match = RegExp(r'\{:([,]?)\.?(\d*)([fd]?)\}').firstMatch(fmt);
+    if (match == null) return null;
+
+    final useCommas = match.group(1) == ",";
+    final decStr = match.group(2) ?? "";
+    final decimals = decStr.isNotEmpty ? int.parse(decStr) : 0;
+
+    double? numValue =
+        value is num ? value.toDouble() : double.tryParse(value.toString());
+    if (numValue == null) return null;
+
+    String result;
+    if (decimals > 0) {
+      result = numValue.toStringAsFixed(decimals);
+    } else {
+      result = numValue.round().toString();
+    }
+
+    if (useCommas) {
+      final parts = result.split('.');
+      parts[0] = parts[0].replaceAllMapped(
+          RegExp(r'(\d)(?=(\d{3})+(?!\d))'), (m) => '${m[1]},');
+      result = parts.join('.');
+    }
+
+    return "$prefix$result";
+  }
+
   @override
   Widget? buildEditWidget(
     DataGridRow dataGridRow,
@@ -133,6 +193,11 @@ class FletDataGridSource extends DataGridSource {
     GridColumn column,
     CellSubmit submitCell,
   ) {
+    // Block editing on read-only columns
+    if (_readOnlyColumns.contains(column.columnName)) {
+      return null;
+    }
+
     final displayValue = dataGridRow
             .getCells()
             .firstWhere(

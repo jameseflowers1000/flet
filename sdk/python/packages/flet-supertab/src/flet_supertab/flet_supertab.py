@@ -23,6 +23,10 @@ class SuperTab(ft.LayoutControl):
     # Navigation / selection
     selection_mode: str = "cell"  # "none", "row", "cell"
 
+    # Interaction
+    allow_sorting: bool = field(default=False, metadata={"data_field": "allow_sorting"})
+    allow_column_resize: bool = field(default=False, metadata={"data_field": "allow_column_resize"})
+
     # Styling
     header_bg_color: Optional[str] = field(default=None, metadata={"data_field": "header_bg_color"})
     header_text_color: Optional[str] = field(default=None, metadata={"data_field": "header_text_color"})

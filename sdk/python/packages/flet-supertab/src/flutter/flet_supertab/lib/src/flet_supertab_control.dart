@@ -25,6 +25,10 @@ class _SuperTabControlState extends State<SuperTabControl> {
   List<List<Object?>> _dataRows = [];
   List<String> _columnNames = [];
 
+  /// Tracks user-resized column widths (columnName → width).
+  /// Columns not in this map use auto-fill sizing.
+  final Map<String, double> _columnWidths = {};
+
   @override
   void initState() {
     super.initState();
@@ -114,9 +118,23 @@ class _SuperTabControlState extends State<SuperTabControl> {
         break;
     }
 
+    final allowSorting = widget.control.getBool("allow_sorting", false)!;
+    final allowColumnResize = widget.control.getBool("allow_column_resize", false)!;
+
     final grid = SfDataGrid(
       source: _source,
       allowEditing: editable,
+      allowSorting: allowSorting,
+      allowColumnsResizing: allowColumnResize,
+      columnResizeMode: ColumnResizeMode.onResize,
+      onColumnResizeUpdate: allowColumnResize
+          ? (ColumnResizeUpdateDetails details) {
+              setState(() {
+                _columnWidths[details.column.columnName] = details.width;
+              });
+              return true;
+            }
+          : null,
       selectionMode: selectionMode,
       navigationMode: navMode,
       editingGestureType: EditingGestureType.tap,
@@ -129,6 +147,7 @@ class _SuperTabControlState extends State<SuperTabControl> {
         for (final c in _cols)
           GridColumn(
             columnName: (c as Map)["name"] as String,
+            width: _columnWidths[(c as Map)["name"] as String] ?? double.nan,
             label: Container(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
               alignment: _alignmentFromString(c["alignment"] as String?),
