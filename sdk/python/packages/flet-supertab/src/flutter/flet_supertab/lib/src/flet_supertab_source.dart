@@ -8,15 +8,22 @@ class FletDataGridSource extends DataGridSource {
   FletDataGridSource({
     required List<List<Object?>> rows,
     required List<String> columnNames,
+    List<dynamic>? columnDefs,
     this.onCellEdit,
-  }) : _columnNames = columnNames {
+  })  : _columnNames = columnNames,
+        _columnDefs = columnDefs ?? [] {
     _dataRows = rows;
+    _buildColumnTypes();
     _buildDataGridRows();
   }
 
   final List<String> _columnNames;
+  final List<dynamic> _columnDefs;
   List<List<Object?>> _dataRows = [];
   List<DataGridRow> _rows = [];
+
+  /// Per-column type hints: "int", "float", "bool", "str"
+  Map<String, String> _columnTypes = {};
 
   /// Callback when a cell is edited
   final CellEditCallback? onCellEdit;
@@ -26,6 +33,22 @@ class FletDataGridSource extends DataGridSource {
 
   /// Controller for the TextField editor
   final TextEditingController _editingController = TextEditingController();
+
+  void _buildColumnTypes() {
+    _columnTypes = {};
+    for (var i = 0; i < _columnDefs.length && i < _columnNames.length; i++) {
+      final def = _columnDefs[i];
+      if (def is Map) {
+        final dtype = def["dtype"] as String? ?? "str";
+        _columnTypes[_columnNames[i]] = dtype;
+      }
+    }
+  }
+
+  bool _isNumericColumn(String columnName) {
+    final dtype = _columnTypes[columnName];
+    return dtype == "int" || dtype == "float";
+  }
 
   void _buildDataGridRows() {
     _rows = _dataRows
@@ -50,16 +73,57 @@ class FletDataGridSource extends DataGridSource {
   DataGridRowAdapter buildRow(DataGridRow row) {
     return DataGridRowAdapter(
       cells: row.getCells().map<Widget>((cell) {
-        final align = cell.columnName == 'id'
-            ? Alignment.centerRight
-            : Alignment.centerLeft;
+        final isNumeric = _isNumericColumn(cell.columnName);
         return Container(
-          alignment: align,
-          padding: const EdgeInsets.all(8),
-          child: Text(cell.value?.toString() ?? ''),
+          alignment: isNumeric ? Alignment.centerRight : Alignment.centerLeft,
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+          child: Text(
+            _formatValue(cell.value, cell.columnName),
+            style: const TextStyle(fontSize: 13),
+            overflow: TextOverflow.ellipsis,
+          ),
         );
       }).toList(),
     );
+  }
+
+  String _formatValue(Object? value, String columnName) {
+    if (value == null) return '';
+
+    final dtype = _columnTypes[columnName] ?? "str";
+
+    if (dtype == "float") {
+      // Try to parse as double for formatting
+      final d = value is num
+          ? value.toDouble()
+          : double.tryParse(value.toString());
+      if (d != null) {
+        // If it's a whole number, show without decimals
+        if (d == d.roundToDouble() && d.abs() < 1e15) {
+          return d.toInt().toString();
+        }
+        // Otherwise show up to 4 decimal places, trimming trailing zeros
+        String s = d.toStringAsFixed(4);
+        // Remove trailing zeros after decimal point
+        if (s.contains('.')) {
+          s = s.replaceAll(RegExp(r'0+$'), '');
+          s = s.replaceAll(RegExp(r'\.$'), '');
+        }
+        return s;
+      }
+    }
+
+    if (dtype == "int") {
+      final i =
+          value is int ? value : int.tryParse(value.toString());
+      if (i != null) return i.toString();
+    }
+
+    if (dtype == "bool") {
+      return value.toString().toLowerCase() == 'true' ? 'Yes' : 'No';
+    }
+
+    return value.toString();
   }
 
   @override
@@ -69,7 +133,6 @@ class FletDataGridSource extends DataGridSource {
     GridColumn column,
     CellSubmit submitCell,
   ) {
-    // Get the current cell value
     final displayValue = dataGridRow
             .getCells()
             .firstWhere(
@@ -80,6 +143,8 @@ class FletDataGridSource extends DataGridSource {
             ?.toString() ??
         '';
 
+    final isNumeric = _isNumericColumn(column.columnName);
+
     _newCellValue = displayValue;
     _editingController.text = displayValue;
     _editingController.selection = TextSelection(
@@ -88,13 +153,18 @@ class FletDataGridSource extends DataGridSource {
     );
 
     return Container(
-      padding: const EdgeInsets.all(8.0),
-      alignment: Alignment.centerLeft,
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      alignment: isNumeric ? Alignment.centerRight : Alignment.centerLeft,
       child: TextField(
         controller: _editingController,
         autofocus: true,
+        textAlign: isNumeric ? TextAlign.right : TextAlign.left,
+        keyboardType: isNumeric
+            ? const TextInputType.numberWithOptions(decimal: true)
+            : TextInputType.text,
+        style: const TextStyle(fontSize: 13),
         decoration: const InputDecoration(
-          contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+          contentPadding: EdgeInsets.symmetric(horizontal: 4, vertical: 8),
           border: InputBorder.none,
           isDense: true,
         ),
@@ -114,29 +184,21 @@ class FletDataGridSource extends DataGridSource {
     RowColumnIndex rowColumnIndex,
     GridColumn column,
   ) async {
-    // rowColumnIndex.rowIndex is already 0-based for data rows
     final rowIndex = rowColumnIndex.rowIndex;
     final columnName = column.columnName;
 
     if (rowIndex < 0 || rowIndex >= _dataRows.length) return;
 
-    // Find column index
     final colIndex = _columnNames.indexOf(columnName);
     if (colIndex < 0) return;
 
     final oldValue = _dataRows[rowIndex][colIndex];
     final newValue = _newCellValue;
 
-    // Only update if value changed
     if (oldValue?.toString() != newValue?.toString()) {
-      // Update the underlying data
       _dataRows[rowIndex][colIndex] = newValue;
-
-      // Rebuild the rows
       _buildDataGridRows();
       notifyListeners();
-
-      // Notify callback
       onCellEdit?.call(rowIndex, columnName, oldValue, newValue);
     }
   }

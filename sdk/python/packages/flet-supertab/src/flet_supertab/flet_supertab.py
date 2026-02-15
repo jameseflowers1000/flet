@@ -20,6 +20,14 @@ class SuperTab(ft.LayoutControl):
     # Enable inline editing
     editable: bool = False
 
+    # Navigation / selection
+    selection_mode: str = "cell"  # "none", "row", "cell"
+
+    # Styling
+    header_bg_color: Optional[str] = field(default=None, metadata={"data_field": "header_bg_color"})
+    header_text_color: Optional[str] = field(default=None, metadata={"data_field": "header_text_color"})
+    grid_line_color: Optional[str] = field(default=None, metadata={"data_field": "grid_line_color"})
+
     # Event: called when a cell is edited
     # Event data (in e.data as JSON): {"row_index": int, "column_name": str, "old_value": str, "new_value": str}
     on_cell_edit: Optional[ft.ControlEventHandler["SuperTab"]] = None
@@ -45,3 +53,8 @@ class SuperTab(ft.LayoutControl):
     def set_rows(self, rows: list[list[Any]]):
         self._rows_data = rows
         self.rows = json.dumps(rows)
+
+    def set_data(self, columns: list[dict[str, Any]], rows: list[list[Any]]):
+        """Convenience: set both columns and rows, then update."""
+        self.set_columns(columns)
+        self.set_rows(rows)

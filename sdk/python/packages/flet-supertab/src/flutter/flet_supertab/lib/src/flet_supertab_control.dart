@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flet/flet.dart';
 import 'package:flutter/material.dart';
 import 'package:syncfusion_flutter_datagrid/datagrid.dart';
+import 'package:syncfusion_flutter_core/theme.dart';
 
 import 'flet_supertab_source.dart';
 
@@ -48,21 +49,22 @@ class _SuperTabControlState extends State<SuperTabControl> {
 
     _columnNames =
         _cols.map<String>((c) => (c as Map)["name"] as String).toList();
-    _dataRows =
-        (rows as List).map<List<Object?>>((r) => (r as List).cast<Object?>()).toList();
+    _dataRows = (rows as List)
+        .map<List<Object?>>((r) => (r as List).cast<Object?>())
+        .toList();
   }
 
   void _buildSource() {
     _source = FletDataGridSource(
       rows: _dataRows,
       columnNames: _columnNames,
+      columnDefs: _cols,
       onCellEdit: _handleCellEdit,
     );
   }
 
   void _handleCellEdit(
       int rowIndex, String columnName, Object? oldValue, Object? newValue) {
-    // Trigger event back to Python with JSON-encoded data
     final eventData = jsonEncode({
       "row_index": rowIndex,
       "column_name": columnName,
@@ -72,31 +74,93 @@ class _SuperTabControlState extends State<SuperTabControl> {
     widget.control.triggerEventWithoutSubscribers("cell_edit", eventData);
   }
 
+  Color _parseColor(String? hex, [Color fallback = Colors.transparent]) {
+    if (hex == null || hex.isEmpty) return fallback;
+    hex = hex.replaceFirst('#', '');
+    if (hex.length == 6) hex = 'FF$hex';
+    return Color(int.parse(hex, radix: 16));
+  }
+
   @override
   Widget build(BuildContext context) {
     final editable = widget.control.getBool("editable", false)!;
 
+    // Read styling properties
+    final headerBg =
+        _parseColor(widget.control.getString("header_bg_color"), const Color(0xFF2D2D30));
+    final headerTextColor =
+        _parseColor(widget.control.getString("header_text_color"), Colors.white);
+    final gridLineColor =
+        _parseColor(widget.control.getString("grid_line_color"), const Color(0xFF3E3E42));
+
+    // Read selection mode
+    final selectionModeStr =
+        widget.control.getString("selection_mode") ?? "cell";
+    SelectionMode selectionMode;
+    GridNavigationMode navMode;
+    switch (selectionModeStr) {
+      case "row":
+        selectionMode = SelectionMode.single;
+        navMode = GridNavigationMode.row;
+        break;
+      case "none":
+        selectionMode = SelectionMode.none;
+        navMode = GridNavigationMode.row;
+        break;
+      case "cell":
+      default:
+        selectionMode = SelectionMode.single;
+        navMode = GridNavigationMode.cell;
+        break;
+    }
+
     final grid = SfDataGrid(
       source: _source,
       allowEditing: editable,
-      selectionMode: editable ? SelectionMode.single : SelectionMode.none,
-      navigationMode:
-          editable ? GridNavigationMode.cell : GridNavigationMode.row,
-      editingGestureType: EditingGestureType.doubleTap,
+      selectionMode: selectionMode,
+      navigationMode: navMode,
+      editingGestureType: EditingGestureType.tap,
+      columnWidthMode: ColumnWidthMode.fill,
+      gridLinesVisibility: GridLinesVisibility.both,
+      headerGridLinesVisibility: GridLinesVisibility.both,
+      headerRowHeight: 40,
+      rowHeight: 36,
       columns: [
         for (final c in _cols)
           GridColumn(
             columnName: (c as Map)["name"] as String,
             label: Container(
-              padding: const EdgeInsets.all(16),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
               alignment: _alignmentFromString(c["alignment"] as String?),
-              child: Text((c["label"] as String?) ?? c["name"] as String),
+              child: Text(
+                (c["label"] as String?) ?? c["name"] as String,
+                style: TextStyle(
+                  color: headerTextColor,
+                  fontWeight: FontWeight.w600,
+                  fontSize: 13,
+                ),
+                overflow: TextOverflow.ellipsis,
+              ),
             ),
           ),
       ],
     );
 
-    return ConstrainedControl(control: widget.control, child: grid);
+    final themed = SfDataGridTheme(
+      data: SfDataGridThemeData(
+        currentCellStyle: DataGridCurrentCellStyle(
+          borderColor: Colors.blue,
+          borderWidth: 2,
+        ),
+        selectionColor: Colors.blue.withValues(alpha: 0.15),
+        headerColor: headerBg,
+        gridLineColor: gridLineColor,
+        gridLineStrokeWidth: 1,
+      ),
+      child: grid,
+    );
+
+    return ConstrainedControl(control: widget.control, child: themed);
   }
 
   Alignment _alignmentFromString(String? s) {
