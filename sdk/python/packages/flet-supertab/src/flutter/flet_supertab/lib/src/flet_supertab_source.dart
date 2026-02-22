@@ -10,6 +10,14 @@ class FletDataGridSource extends DataGridSource {
     required List<String> columnNames,
     List<dynamic>? columnDefs,
     this.onCellEdit,
+    this.showRowNumbers = false,
+    this.cellTextColor = Colors.transparent,
+    this.cellBgColor = Colors.transparent,
+    this.alternateRowColor = Colors.transparent,
+    this.cellFontSize = 13.0,
+    this.fontFamily,
+    this.cellPaddingHorizontal = 12.0,
+    this.cellPaddingVertical = 4.0,
   })  : _columnNames = columnNames,
         _columnDefs = columnDefs ?? [] {
     _dataRows = rows;
@@ -31,6 +39,18 @@ class FletDataGridSource extends DataGridSource {
   /// Per-column read-only flags
   Set<String> _readOnlyColumns = {};
 
+  /// Whether to prepend a row-number cell to each row
+  final bool showRowNumbers;
+
+  /// Styling
+  final Color cellTextColor;
+  final Color cellBgColor;
+  final Color alternateRowColor;
+  final double cellFontSize;
+  final String? fontFamily;
+  final double cellPaddingHorizontal;
+  final double cellPaddingVertical;
+
   /// Callback when a cell is edited
   final CellEditCallback? onCellEdit;
 
@@ -39,6 +59,10 @@ class FletDataGridSource extends DataGridSource {
 
   /// Controller for the TextField editor
   final TextEditingController _editingController = TextEditingController();
+
+  bool get _hasCellTextColor => cellTextColor != Colors.transparent;
+  bool get _hasCellBgColor => cellBgColor != Colors.transparent;
+  bool get _hasAlternateRowColor => alternateRowColor != Colors.transparent;
 
   void _buildColumnTypes() {
     _columnTypes = {};
@@ -66,19 +90,23 @@ class FletDataGridSource extends DataGridSource {
   }
 
   void _buildDataGridRows() {
-    _rows = _dataRows
-        .map<DataGridRow>(
-          (row) => DataGridRow(
-            cells: [
-              for (var i = 0; i < _columnNames.length; i++)
-                DataGridCell<Object?>(
-                  columnName: _columnNames[i],
-                  value: i < row.length ? row[i] : null,
-                ),
-            ],
-          ),
-        )
-        .toList();
+    _rows = List.generate(_dataRows.length, (rowIndex) {
+      final row = _dataRows[rowIndex];
+      final cells = <DataGridCell<Object?>>[];
+      if (showRowNumbers) {
+        cells.add(DataGridCell<Object?>(
+          columnName: '__row_num__',
+          value: rowIndex + 1,
+        ));
+      }
+      for (var i = 0; i < _columnNames.length; i++) {
+        cells.add(DataGridCell<Object?>(
+          columnName: _columnNames[i],
+          value: i < row.length ? row[i] : null,
+        ));
+      }
+      return DataGridRow(cells: cells);
+    });
   }
 
   @override
@@ -86,15 +114,43 @@ class FletDataGridSource extends DataGridSource {
 
   @override
   DataGridRowAdapter buildRow(DataGridRow row) {
+    final rowIndex = _rows.indexOf(row);
+    final useAltColor = _hasAlternateRowColor && rowIndex.isOdd;
+
     return DataGridRowAdapter(
+      color: useAltColor
+          ? alternateRowColor
+          : (_hasCellBgColor ? cellBgColor : null),
       cells: row.getCells().map<Widget>((cell) {
+        // Row-number column: centered, muted style
+        if (cell.columnName == '__row_num__') {
+          return Container(
+            alignment: Alignment.center,
+            padding: EdgeInsets.symmetric(
+                horizontal: 4, vertical: cellPaddingVertical),
+            child: Text(
+              cell.value?.toString() ?? '',
+              style: TextStyle(
+                fontSize: cellFontSize - 1,
+                color: Colors.grey,
+                fontFamily: fontFamily,
+              ),
+              overflow: TextOverflow.ellipsis,
+            ),
+          );
+        }
         final isNumeric = _isNumericColumn(cell.columnName);
         return Container(
           alignment: isNumeric ? Alignment.centerRight : Alignment.centerLeft,
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+          padding: EdgeInsets.symmetric(
+              horizontal: cellPaddingHorizontal, vertical: cellPaddingVertical),
           child: Text(
             _formatValue(cell.value, cell.columnName),
-            style: const TextStyle(fontSize: 13),
+            style: TextStyle(
+              fontSize: cellFontSize,
+              color: _hasCellTextColor ? cellTextColor : null,
+              fontFamily: fontFamily,
+            ),
             overflow: TextOverflow.ellipsis,
           ),
         );
@@ -193,7 +249,8 @@ class FletDataGridSource extends DataGridSource {
     GridColumn column,
     CellSubmit submitCell,
   ) {
-    // Block editing on read-only columns
+    // Block editing on row-number and read-only columns
+    if (column.columnName == '__row_num__') return null;
     if (_readOnlyColumns.contains(column.columnName)) {
       return null;
     }
@@ -218,7 +275,8 @@ class FletDataGridSource extends DataGridSource {
     );
 
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      padding: EdgeInsets.symmetric(
+          horizontal: cellPaddingHorizontal / 1.5, vertical: 2),
       alignment: isNumeric ? Alignment.centerRight : Alignment.centerLeft,
       child: TextField(
         controller: _editingController,
@@ -227,7 +285,10 @@ class FletDataGridSource extends DataGridSource {
         keyboardType: isNumeric
             ? const TextInputType.numberWithOptions(decimal: true)
             : TextInputType.text,
-        style: const TextStyle(fontSize: 13),
+        style: TextStyle(
+          fontSize: cellFontSize,
+          fontFamily: fontFamily,
+        ),
         decoration: const InputDecoration(
           contentPadding: EdgeInsets.symmetric(horizontal: 4, vertical: 8),
           border: InputBorder.none,
@@ -251,6 +312,9 @@ class FletDataGridSource extends DataGridSource {
   ) async {
     final rowIndex = rowColumnIndex.rowIndex;
     final columnName = column.columnName;
+
+    // Skip row-number column edits
+    if (columnName == '__row_num__') return;
 
     if (rowIndex < 0 || rowIndex >= _dataRows.length) return;
 

@@ -59,11 +59,28 @@ class _SuperTabControlState extends State<SuperTabControl> {
   }
 
   void _buildSource() {
+    final showRowNumbers = widget.control.getBool("show_row_numbers", false)!;
+    final cellTextColor = _parseColor(widget.control.getString("cell_text_color"));
+    final cellBgColor = _parseColor(widget.control.getString("cell_bg_color"));
+    final alternateRowColor = _parseColor(widget.control.getString("alternate_row_color"));
+    final cellFontSize = widget.control.getDouble("cell_font_size", 13.0)!;
+    final fontFamily = widget.control.getString("font_family");
+    final cellPadH = widget.control.getDouble("cell_padding_horizontal", 12.0)!;
+    final cellPadV = widget.control.getDouble("cell_padding_vertical", 4.0)!;
+
     _source = FletDataGridSource(
       rows: _dataRows,
       columnNames: _columnNames,
       columnDefs: _cols,
       onCellEdit: _handleCellEdit,
+      showRowNumbers: showRowNumbers,
+      cellTextColor: cellTextColor,
+      cellBgColor: cellBgColor,
+      alternateRowColor: alternateRowColor,
+      cellFontSize: cellFontSize,
+      fontFamily: fontFamily,
+      cellPaddingHorizontal: cellPadH,
+      cellPaddingVertical: cellPadV,
     );
   }
 
@@ -85,19 +102,52 @@ class _SuperTabControlState extends State<SuperTabControl> {
     return Color(int.parse(hex, radix: 16));
   }
 
+  FontWeight _parseFontWeight(String? w) {
+    switch (w) {
+      case "w100": return FontWeight.w100;
+      case "w200": return FontWeight.w200;
+      case "w300": return FontWeight.w300;
+      case "w400": return FontWeight.w400;
+      case "w500": return FontWeight.w500;
+      case "w600": return FontWeight.w600;
+      case "w700": return FontWeight.w700;
+      case "w800": return FontWeight.w800;
+      case "w900": return FontWeight.w900;
+      case "bold": return FontWeight.bold;
+      case "normal": return FontWeight.normal;
+      default: return FontWeight.w600;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final editable = widget.control.getBool("editable", false)!;
 
-    // Read styling properties
+    // Colors
     final headerBg =
         _parseColor(widget.control.getString("header_bg_color"), const Color(0xFF2D2D30));
     final headerTextColor =
         _parseColor(widget.control.getString("header_text_color"), Colors.white);
     final gridLineColor =
         _parseColor(widget.control.getString("grid_line_color"), const Color(0xFF3E3E42));
+    final selectionColor =
+        _parseColor(widget.control.getString("selection_color"), Colors.blue.withValues(alpha: 0.15));
+    final currentCellBorderColor =
+        _parseColor(widget.control.getString("current_cell_border_color"), Colors.blue);
 
-    // Read selection mode
+    // Fonts
+    final fontFamily = widget.control.getString("font_family");
+    final headerFontSize = widget.control.getDouble("header_font_size", 13.0)!;
+    final headerFontWeight = _parseFontWeight(widget.control.getString("header_font_weight"));
+    final cellFontSize = widget.control.getDouble("cell_font_size", 13.0)!;
+
+    // Spacing
+    final headerPadH = widget.control.getDouble("header_padding_horizontal", 12.0)!;
+    final headerPadV = widget.control.getDouble("header_padding_vertical", 8.0)!;
+    final gridLineWidth = widget.control.getDouble("grid_line_width", 1.0)!;
+    final currentCellBorderWidth = widget.control.getDouble("current_cell_border_width", 2.0)!;
+
+    // Selection mode
     final selectionModeStr =
         widget.control.getString("selection_mode") ?? "cell";
     SelectionMode selectionMode;
@@ -121,6 +171,36 @@ class _SuperTabControlState extends State<SuperTabControl> {
     final allowSorting = widget.control.getBool("allow_sorting", false)!;
     final allowColumnResize = widget.control.getBool("allow_column_resize", false)!;
 
+    // Config properties from ETab
+    final showRowNumbers = widget.control.getBool("show_row_numbers", false)!;
+    final showCheckboxColumn = widget.control.getBool("show_checkbox_column", false)!;
+    final frozenColumnsCount = widget.control.getInt("frozen_columns_count", 0)!;
+    final rowHeight = widget.control.getDouble("row_height", 36.0)!;
+    final headerRowHeight = widget.control.getDouble("header_row_height", 40.0)!;
+
+    // Build data columns from column defs
+    final dataColumns = [
+      for (final c in _cols)
+        GridColumn(
+          columnName: (c as Map)["name"] as String,
+          width: _columnWidths[(c as Map)["name"] as String] ?? double.nan,
+          label: Container(
+            padding: EdgeInsets.symmetric(horizontal: headerPadH, vertical: headerPadV),
+            alignment: _alignmentFromString(c["alignment"] as String?),
+            child: Text(
+              (c["label"] as String?) ?? c["name"] as String,
+              style: TextStyle(
+                color: headerTextColor,
+                fontWeight: headerFontWeight,
+                fontSize: headerFontSize,
+                fontFamily: fontFamily,
+              ),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ),
+    ];
+
     final grid = SfDataGrid(
       source: _source,
       allowEditing: editable,
@@ -138,48 +218,53 @@ class _SuperTabControlState extends State<SuperTabControl> {
       selectionMode: selectionMode,
       navigationMode: navMode,
       editingGestureType: EditingGestureType.tap,
-      columnWidthMode: ColumnWidthMode.fill,
+      columnWidthMode: ColumnWidthMode.lastColumnFill,
       gridLinesVisibility: GridLinesVisibility.both,
       headerGridLinesVisibility: GridLinesVisibility.both,
-      headerRowHeight: 40,
-      rowHeight: 36,
+      showCheckboxColumn: showCheckboxColumn,
+      frozenColumnsCount: frozenColumnsCount + (showRowNumbers ? 1 : 0),
+      headerRowHeight: headerRowHeight,
+      rowHeight: rowHeight,
       columns: [
-        for (final c in _cols)
-          GridColumn(
-            columnName: (c as Map)["name"] as String,
-            width: _columnWidths[(c as Map)["name"] as String] ?? double.nan,
-            label: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-              alignment: _alignmentFromString(c["alignment"] as String?),
-              child: Text(
-                (c["label"] as String?) ?? c["name"] as String,
-                style: TextStyle(
-                  color: headerTextColor,
-                  fontWeight: FontWeight.w600,
-                  fontSize: 13,
-                ),
-                overflow: TextOverflow.ellipsis,
-              ),
-            ),
-          ),
+        if (showRowNumbers) _buildRowNumberColumn(headerBg, headerTextColor, headerFontSize, fontFamily),
+        ...dataColumns,
       ],
     );
 
     final themed = SfDataGridTheme(
       data: SfDataGridThemeData(
         currentCellStyle: DataGridCurrentCellStyle(
-          borderColor: Colors.blue,
-          borderWidth: 2,
+          borderColor: currentCellBorderColor,
+          borderWidth: currentCellBorderWidth,
         ),
-        selectionColor: Colors.blue.withValues(alpha: 0.15),
+        selectionColor: selectionColor,
         headerColor: headerBg,
         gridLineColor: gridLineColor,
-        gridLineStrokeWidth: 1,
+        gridLineStrokeWidth: gridLineWidth,
       ),
       child: grid,
     );
 
     return ConstrainedControl(control: widget.control, child: themed);
+  }
+
+  GridColumn _buildRowNumberColumn(Color headerBgColor, Color headerTextColor, double fontSize, String? fontFamily) {
+    return GridColumn(
+      columnName: '__row_num__',
+      width: 50,
+      allowEditing: false,
+      allowSorting: false,
+      label: Container(
+        alignment: Alignment.center,
+        color: headerBgColor,
+        child: Text('#',
+            style: TextStyle(
+                color: headerTextColor,
+                fontWeight: FontWeight.bold,
+                fontSize: fontSize,
+                fontFamily: fontFamily)),
+      ),
+    );
   }
 
   Alignment _alignmentFromString(String? s) {
