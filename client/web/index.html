@@ -245,6 +245,15 @@
           mutations.forEach(function(m) {
             m.addedNodes.forEach(function(node) {
               if (node.nodeType !== 1) return;
+              // Grant clipboard permissions to iframes (needed for ttyd/xterm.js copy/paste)
+              if (node.tagName === 'IFRAME') {
+                node.setAttribute('allow', 'clipboard-read; clipboard-write');
+              }
+              if (node.querySelectorAll) {
+                node.querySelectorAll('iframe').forEach(function(el) {
+                  el.setAttribute('allow', 'clipboard-read; clipboard-write');
+                });
+              }
               if (!dragging && (node.tagName === 'FLT-PLATFORM-VIEW' || node.tagName === 'IFRAME')) {
                 var pe = iframesAllowed ? 'auto' : 'none';
                 node.style.setProperty('pointer-events', pe, 'important');
@@ -260,10 +269,21 @@
         }).observe(root, { childList: true, subtree: true });
       }
 
+      // Grant clipboard permissions on all existing iframes in a root.
+      function setIframeClipboardPermissions(root) {
+        root.querySelectorAll('iframe').forEach(function(el) {
+          el.setAttribute('allow', 'clipboard-read; clipboard-write');
+        });
+      }
+
       function tryStart() {
         setIframePointerEvents(iframesAllowed ? 'auto' : 'none');
+        setIframeClipboardPermissions(document);
         document.querySelectorAll('flutter-view, flt-glass-pane').forEach(function(el) {
-          if (el.shadowRoot) observeRoot(el.shadowRoot);
+          if (el.shadowRoot) {
+            observeRoot(el.shadowRoot);
+            setIframeClipboardPermissions(el.shadowRoot);
+          }
         });
         observeRoot(document.body);
       }
