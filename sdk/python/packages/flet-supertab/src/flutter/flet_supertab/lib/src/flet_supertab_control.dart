@@ -33,14 +33,14 @@ class _SuperTabControlState extends State<SuperTabControl> {
   void initState() {
     super.initState();
     _parseData();
-    _buildSource();
+    _buildSource(null);
   }
 
   @override
   void didUpdateWidget(covariant SuperTabControl oldWidget) {
     super.didUpdateWidget(oldWidget);
     _parseData();
-    _buildSource();
+    // Source will be rebuilt in build() where context is available
   }
 
   void _parseData() {
@@ -58,11 +58,13 @@ class _SuperTabControlState extends State<SuperTabControl> {
         .toList();
   }
 
-  void _buildSource() {
+  /// Build the data source. [context] is used for Flet color name resolution;
+  /// pass null during initState (before the widget is in the tree).
+  void _buildSource(BuildContext? context) {
     final showRowNumbers = widget.control.getBool("show_row_numbers", false)!;
-    final cellTextColor = _parseColor(widget.control.getString("cell_text_color"));
-    final cellBgColor = _parseColor(widget.control.getString("cell_bg_color"));
-    final alternateRowColor = _parseColor(widget.control.getString("alternate_row_color"));
+    final cellTextColor = _color("cell_text_color", context, Colors.transparent);
+    final cellBgColor = _color("cell_bg_color", context, Colors.transparent);
+    final alternateRowColor = _color("alternate_row_color", context, Colors.transparent);
     final cellFontSize = widget.control.getDouble("cell_font_size", 13.0)!;
     final fontFamily = widget.control.getString("font_family");
     final cellPadH = widget.control.getDouble("cell_padding_horizontal", 12.0)!;
@@ -95,11 +97,11 @@ class _SuperTabControlState extends State<SuperTabControl> {
     widget.control.triggerEventWithoutSubscribers("cell_edit", eventData);
   }
 
-  Color _parseColor(String? hex, [Color fallback = Colors.transparent]) {
-    if (hex == null || hex.isEmpty) return fallback;
-    hex = hex.replaceFirst('#', '');
-    if (hex.length == 6) hex = 'FF$hex';
-    return Color(int.parse(hex, radix: 16));
+  /// Parse a color property using Flet's built-in color resolver.
+  /// Handles hex (#FF8C00), Flet names (deeporange, blue, amber700), and
+  /// opacity (red,0.5). Falls back to [fallback] on null/empty/parse failure.
+  Color _color(String prop, BuildContext? context, Color fallback) {
+    return widget.control.getColor(prop, context, fallback) ?? fallback;
   }
 
   FontWeight _parseFontWeight(String? w) {
@@ -121,19 +123,17 @@ class _SuperTabControlState extends State<SuperTabControl> {
 
   @override
   Widget build(BuildContext context) {
+    // Rebuild source with context available for color name resolution
+    _buildSource(context);
+
     final editable = widget.control.getBool("editable", false)!;
 
-    // Colors
-    final headerBg =
-        _parseColor(widget.control.getString("header_bg_color"), const Color(0xFF2D2D30));
-    final headerTextColor =
-        _parseColor(widget.control.getString("header_text_color"), Colors.white);
-    final gridLineColor =
-        _parseColor(widget.control.getString("grid_line_color"), const Color(0xFF3E3E42));
-    final selectionColor =
-        _parseColor(widget.control.getString("selection_color"), Colors.blue.withValues(alpha: 0.15));
-    final currentCellBorderColor =
-        _parseColor(widget.control.getString("current_cell_border_color"), Colors.blue);
+    // Colors (using Flet's built-in color parser — supports hex, named, opacity)
+    final headerBg = _color("header_bg_color", context, const Color(0xFF2D2D30));
+    final headerTextColor = _color("header_text_color", context, Colors.white);
+    final gridLineColor = _color("grid_line_color", context, const Color(0xFF3E3E42));
+    final selectionColor = _color("selection_color", context, Colors.blue.withValues(alpha: 0.15));
+    final currentCellBorderColor = _color("current_cell_border_color", context, Colors.blue);
 
     // Fonts
     final fontFamily = widget.control.getString("font_family");
