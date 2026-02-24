@@ -13,7 +13,7 @@ import 'models.dart';
 /// Reads configuration from Python via control properties.
 /// Sends user input back to Python via FletBackend.triggerControlEvent().
 class AgentViewControl extends StatefulWidget {
-  static const String version = '0.2.0';
+  static const String version = '0.3.0';
 
   final Control control;
 
@@ -44,6 +44,7 @@ class _AgentViewControlState extends State<AgentViewControl> {
   String _inputHint = 'Ask something...';
   String _modeLabel = '';
   String _modeIcon = '';
+  List<Map<String, dynamic>> _breadcrumb = [];
 
   @override
   void initState() {
@@ -93,11 +94,28 @@ class _AgentViewControlState extends State<AgentViewControl> {
                   command: c['command'] as String? ?? '',
                   label: c['label'] as String? ?? '',
                   icon: c['icon'] as String?,
+                  category: c['category'] as String?,
                 ))
             .toList();
       } catch (e) {
         debugPrint('[AgentView] ERROR parsing slash_commands: $e');
       }
+    }
+
+    // Parse context breadcrumb from Python
+    final breadcrumbJson = widget.control.getString("context_breadcrumb");
+    if (breadcrumbJson != null && breadcrumbJson.isNotEmpty) {
+      try {
+        final List<dynamic> bcList = jsonDecode(breadcrumbJson);
+        _breadcrumb = bcList
+            .map((b) => Map<String, dynamic>.from(b as Map))
+            .toList();
+      } catch (e) {
+        debugPrint('[AgentView] ERROR parsing context_breadcrumb: $e');
+        _breadcrumb = [];
+      }
+    } else {
+      _breadcrumb = [];
     }
 
     // Parse UI config
@@ -174,6 +192,14 @@ class _AgentViewControlState extends State<AgentViewControl> {
     );
   }
 
+  void _onContextNav(int depth) {
+    FletBackend.of(context).triggerControlEvent(
+      widget.control,
+      "context_nav",
+      depth.toString(),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     // Send version to Python once
@@ -207,6 +233,8 @@ class _AgentViewControlState extends State<AgentViewControl> {
               focusNode: _composerFocusNode,
               modeLabel: _modeLabel,
               modeIcon: _modeIcon,
+              breadcrumb: _breadcrumb,
+              onBreadcrumbTap: _onContextNav,
             ),
           ],
         ),

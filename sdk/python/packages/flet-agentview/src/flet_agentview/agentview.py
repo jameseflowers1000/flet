@@ -16,7 +16,7 @@ import flet as ft
 
 
 # Source version — must match Dart AgentViewControl.version
-SOURCE_VERSION = '0.2.0'
+SOURCE_VERSION = '0.3.0'
 
 
 @ft.control("flet_agentview")
@@ -58,11 +58,17 @@ class AgentView(ft.LayoutControl):
     # Base64-encoded icon for the current mode (shown instead of text when set)
     mode_icon: str = ""
 
+    # Context breadcrumb as JSON array: [{"label": "doclet", "level": 0}, ...]
+    context_breadcrumb: Optional[str] = None
+
     # Dart runtime version (sent back from Dart on mount)
     runtime_version: Optional[str] = None
 
     # Event: user submitted text in the composer
     on_request: Optional[ft.ControlEventHandler["AgentView"]] = None
+
+    # Event: user clicked a breadcrumb segment (target depth as event data)
+    on_context_nav: Optional[ft.ControlEventHandler["AgentView"]] = None
 
     def add_message(self, role: str, content: str):
         """Add a message and push to Dart."""

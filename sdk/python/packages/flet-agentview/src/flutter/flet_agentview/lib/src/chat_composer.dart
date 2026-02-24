@@ -23,6 +23,8 @@ class ChatComposer extends StatefulWidget {
   final FocusNode? focusNode;
   final String modeLabel;
   final String modeIcon;
+  final List<Map<String, dynamic>> breadcrumb;
+  final ValueChanged<int>? onBreadcrumbTap;
 
   const ChatComposer({
     super.key,
@@ -32,6 +34,8 @@ class ChatComposer extends StatefulWidget {
     this.focusNode,
     this.modeLabel = '',
     this.modeIcon = '',
+    this.breadcrumb = const [],
+    this.onBreadcrumbTap,
   });
 
   @override
@@ -183,7 +187,7 @@ class _ChatComposerState extends State<ChatComposer> {
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
-              // Mode indicator — icon (base64 image) or text chip for non-default modes
+              // Mode icon (base64 image) when present
               if (widget.modeIcon.isNotEmpty)
                 Padding(
                   padding: const EdgeInsets.only(right: 8, bottom: 4),
@@ -192,8 +196,19 @@ class _ChatComposerState extends State<ChatComposer> {
                     height: 44,
                     filterQuality: FilterQuality.medium,
                   ),
+                ),
+              // Breadcrumb bar — clickable segments separated by " > "
+              if (widget.breadcrumb.length > 1)
+                Padding(
+                  padding: const EdgeInsets.only(right: 8, bottom: 4),
+                  child: _BreadcrumbBar(
+                    breadcrumb: widget.breadcrumb,
+                    onTap: widget.onBreadcrumbTap,
+                  ),
                 )
-              else if (widget.modeLabel.isNotEmpty &&
+              // Fallback: mode label chip for non-default modes (no breadcrumb)
+              else if (widget.modeIcon.isEmpty &&
+                  widget.modeLabel.isNotEmpty &&
                   widget.modeLabel.toLowerCase() != 'general')
                 Padding(
                   padding: const EdgeInsets.only(right: 8, bottom: 4),
@@ -253,6 +268,75 @@ class _ChatComposerState extends State<ChatComposer> {
           ),
         ),
       ],
+    );
+  }
+}
+
+/// Clickable breadcrumb bar showing context stack navigation.
+///
+/// Each segment is a tappable chip; tapping calls [onTap] with the
+/// segment's depth index, which pops the context stack to that level.
+class _BreadcrumbBar extends StatelessWidget {
+  final List<Map<String, dynamic>> breadcrumb;
+  final ValueChanged<int>? onTap;
+
+  const _BreadcrumbBar({required this.breadcrumb, this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final children = <Widget>[];
+    for (int i = 0; i < breadcrumb.length; i++) {
+      final segment = breadcrumb[i];
+      final label = segment['label'] as String? ?? '';
+      final isLast = i == breadcrumb.length - 1;
+
+      if (i > 0) {
+        children.add(Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 2),
+          child: Text(
+            '>',
+            style: TextStyle(
+              color: AgentTheme.mutedTextColor,
+              fontSize: 10,
+            ),
+          ),
+        ));
+      }
+
+      children.add(
+        GestureDetector(
+          onTap: onTap != null ? () => onTap!(i) : null,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+            decoration: BoxDecoration(
+              color: isLast
+                  ? AgentTheme.accentColor.withValues(alpha: 0.15)
+                  : AgentTheme.inputBgColor,
+              borderRadius: BorderRadius.circular(6),
+              border: Border.all(
+                color: isLast
+                    ? AgentTheme.accentColor.withValues(alpha: 0.4)
+                    : AgentTheme.borderColor.withValues(alpha: 0.3),
+                width: 0.5,
+              ),
+            ),
+            child: Text(
+              label,
+              style: TextStyle(
+                color: isLast ? AgentTheme.accentColor : AgentTheme.mutedTextColor,
+                fontSize: 10,
+                fontWeight: isLast ? FontWeight.w600 : FontWeight.w400,
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: children,
     );
   }
 }

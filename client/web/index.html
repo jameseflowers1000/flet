@@ -147,23 +147,61 @@
     // Agent layer) because platform views sit ABOVE the Canvas in the DOM.
     //
     // Two mechanisms:
-    // 1. Drag protection: pointerdown → none, pointerup → re-enable (if allowed)
-    // 2. Interactive flag: Dart calls _epyxSetIframeInteractive(bool) to control
-    //    whether iframes should be re-enabled after drag or pointer events.
+    // 1. Drag protection: pointerdown → blanket none, pointerup → re-enable per iframeStates
+    // 2. Per-iframe interactive flag: Dart calls _epyxSetIframeInteractive(controlId, bool)
+    //    to control individual iframes via data-flet-id attributes.
     //
-    // *** LIMITATION: BLANKET TOGGLE — AFFECTS ALL IFRAMES ***
-    // The current implementation enables/disables pointer-events on ALL iframes
-    // at once. This works with a single WebView (Python REPL) but WILL BREAK
-    // with multiple WebViews (e.g. Python + zsh + EMark).
-    //
-    // BEFORE adding a second WebView to the Orchestrator Stack, refactor to
-    // per-iframe targeting using Flet control IDs as data attributes.
-    // See: notes/dart_widgets_plan.md § "Per-Iframe Pointer-Events Targeting"
+    // Per-iframe targeting: each iframe is tagged with data-flet-id by Dart.
+    // The iframeStates registry tracks {controlId: bool} for each WebView.
+    // Backward compat: if controlId is a boolean (old call pattern), falls back to blanket.
     (function() {
       var dragging = false;
-      var iframesAllowed = true;  // Set by Dart via _epyxSetIframeInteractive
+      var iframeStates = {};  // { controlId: bool } — per-iframe interactive state
+      var blanketAllowed = true;  // Legacy fallback for old boolean API
 
-      function setIframePointerEvents(value) {
+      // Find an iframe by its data-flet-id, searching document + shadow roots
+      function findIframeByControlId(controlId) {
+        var sel = '[data-flet-id="' + controlId + '"]';
+        function searchRoot(root) {
+          // Check iframes directly
+          var el = root.querySelector('iframe' + sel);
+          if (el) return el;
+          // Check flt-platform-view containers that have the attribute
+          var pv = root.querySelector('flt-platform-view' + sel);
+          if (pv) {
+            var iframe = pv.querySelector('iframe');
+            if (iframe) return iframe;
+          }
+          return null;
+        }
+        var found = searchRoot(document);
+        if (found) return found;
+        var views = document.querySelectorAll('flutter-view, flt-glass-pane');
+        for (var i = 0; i < views.length; i++) {
+          if (views[i].shadowRoot) {
+            found = searchRoot(views[i].shadowRoot);
+            if (found) return found;
+          }
+        }
+        return null;
+      }
+
+      // Apply pointer-events to a specific iframe by controlId
+      function applyIframeState(controlId) {
+        var allowed = iframeStates[controlId];
+        var pe = allowed ? 'auto' : 'none';
+        var iframe = findIframeByControlId(controlId);
+        if (iframe) {
+          iframe.style.setProperty('pointer-events', pe, 'important');
+          // Also set on parent flt-platform-view
+          if (iframe.parentElement && iframe.parentElement.tagName === 'FLT-PLATFORM-VIEW') {
+            iframe.parentElement.style.setProperty('pointer-events', pe, 'important');
+          }
+        }
+      }
+
+      // Set ALL iframes to a pointer-events value (used during drag)
+      function setAllIframePointerEvents(value) {
         function applyToRoot(root) {
           root.querySelectorAll('flt-platform-view, flt-platform-view iframe, iframe').forEach(function(el) {
             el.style.setProperty('pointer-events', value, 'important');
@@ -173,6 +211,24 @@
         document.querySelectorAll('flutter-view, flt-glass-pane').forEach(function(el) {
           if (el.shadowRoot) applyToRoot(el.shadowRoot);
         });
+      }
+
+      // Re-apply all per-iframe states (called after drag ends)
+      function reapplyAllStates() {
+        var ids = Object.keys(iframeStates);
+        if (ids.length === 0) {
+          // No per-iframe states — use blanket
+          setAllIframePointerEvents(blanketAllowed ? 'auto' : 'none');
+          return;
+        }
+        for (var i = 0; i < ids.length; i++) {
+          applyIframeState(ids[i]);
+        }
+      }
+
+      function blurIframe(controlId) {
+        var iframe = findIframeByControlId(controlId);
+        if (iframe) iframe.blur();
       }
 
       function blurAllIframes() {
@@ -185,21 +241,32 @@
         });
       }
 
-      // API for Dart: control whether iframes should receive pointer events.
+      // API for Dart: control whether a specific iframe should receive pointer events.
       // Called from webview_web.dart when the 'interactive' property changes.
-      window._epyxSetIframeInteractive = function(allowed) {
-        iframesAllowed = !!allowed;
-        setIframePointerEvents(iframesAllowed ? 'auto' : 'none');
-        // Blur iframes when disabling — even with pointer-events:none,
-        // iframes retain keyboard focus and can steal it from other widgets.
-        if (!allowed) blurAllIframes();
+      // Backward compat: if controlId is boolean, fall back to blanket behavior.
+      window._epyxSetIframeInteractive = function(controlId, allowed) {
+        if (typeof controlId === 'boolean') {
+          // Legacy blanket API: _epyxSetIframeInteractive(bool)
+          blanketAllowed = controlId;
+          setAllIframePointerEvents(blanketAllowed ? 'auto' : 'none');
+          if (!blanketAllowed) blurAllIframes();
+          return;
+        }
+        iframeStates[controlId] = !!allowed;
+        if (!dragging) {
+          applyIframeState(controlId);
+        }
+        if (!allowed) blurIframe(controlId);
       };
 
-      // Focus the first iframe (e.g. ttyd terminal) so it receives keyboard input.
-      // Called from webview_web.dart when interactive changes to true.
-      // LIMITATION: Blanket — focuses the first iframe found. Extend to per-iframe
-      // targeting when adding a second WebView.
-      window._epyxFocusIframe = function() {
+      // Focus a specific iframe by controlId for keyboard input.
+      // Backward compat: if no args, focus first iframe found.
+      window._epyxFocusIframe = function(controlId) {
+        if (controlId && typeof controlId === 'string') {
+          var iframe = findIframeByControlId(controlId);
+          if (iframe) { iframe.focus(); return; }
+        }
+        // Fallback: focus first iframe
         function tryFocus(root) {
           var iframe = root.querySelector('iframe');
           if (iframe) { iframe.focus(); return true; }
@@ -211,21 +278,19 @@
         });
       };
 
-      // On pointerdown: disable iframe pointer events so drags work
+      // On pointerdown: blanket-disable ALL iframes so drags work
       document.addEventListener('pointerdown', function() {
         if (!dragging) {
           dragging = true;
-          setIframePointerEvents('none');
+          setAllIframePointerEvents('none');
         }
       }, true);
 
-      // On pointerup: re-enable only if iframes are allowed (not behind other widgets)
+      // On pointerup: re-enable per iframeStates registry
       document.addEventListener('pointerup', function() {
         if (dragging) {
           dragging = false;
-          if (iframesAllowed) {
-            setIframePointerEvents('auto');
-          }
+          reapplyAllStates();
         }
       }, true);
 
@@ -233,19 +298,17 @@
       document.addEventListener('pointercancel', function() {
         if (dragging) {
           dragging = false;
-          if (iframesAllowed) {
-            setIframePointerEvents('auto');
-          }
+          reapplyAllStates();
         }
       }, true);
 
-      // MutationObserver: new iframes respect the current interactive state
+      // MutationObserver: new iframes check iframeStates for matching controlId
       function observeRoot(root) {
         new MutationObserver(function(mutations) {
           mutations.forEach(function(m) {
             m.addedNodes.forEach(function(node) {
               if (node.nodeType !== 1) return;
-              // Grant clipboard permissions to iframes (needed for ttyd/xterm.js copy/paste)
+              // Grant clipboard permissions to iframes
               if (node.tagName === 'IFRAME') {
                 node.setAttribute('allow', 'clipboard-read; clipboard-write');
               }
@@ -255,12 +318,37 @@
                 });
               }
               if (!dragging && (node.tagName === 'FLT-PLATFORM-VIEW' || node.tagName === 'IFRAME')) {
-                var pe = iframesAllowed ? 'auto' : 'none';
-                node.style.setProperty('pointer-events', pe, 'important');
-                if (node.querySelectorAll) {
-                  node.querySelectorAll('iframe').forEach(function(el) {
-                    el.style.setProperty('pointer-events', pe, 'important');
-                  });
+                // Check if this node has a data-flet-id and apply per-iframe state
+                var fletId = node.getAttribute && node.getAttribute('data-flet-id');
+                if (fletId && iframeStates.hasOwnProperty(fletId)) {
+                  var pe = iframeStates[fletId] ? 'auto' : 'none';
+                  node.style.setProperty('pointer-events', pe, 'important');
+                  if (node.querySelectorAll) {
+                    node.querySelectorAll('iframe').forEach(function(el) {
+                      el.style.setProperty('pointer-events', pe, 'important');
+                    });
+                  }
+                } else {
+                  // No specific state — check child iframes for data-flet-id
+                  if (node.querySelectorAll) {
+                    node.querySelectorAll('iframe[data-flet-id]').forEach(function(el) {
+                      var id = el.getAttribute('data-flet-id');
+                      if (id && iframeStates.hasOwnProperty(id)) {
+                        el.style.setProperty('pointer-events',
+                          iframeStates[id] ? 'auto' : 'none', 'important');
+                      }
+                    });
+                  }
+                  // Fallback: use blanket state for untagged iframes
+                  var pe = blanketAllowed ? 'auto' : 'none';
+                  if (!fletId) {
+                    node.style.setProperty('pointer-events', pe, 'important');
+                    if (node.querySelectorAll) {
+                      node.querySelectorAll('iframe:not([data-flet-id])').forEach(function(el) {
+                        el.style.setProperty('pointer-events', pe, 'important');
+                      });
+                    }
+                  }
                 }
               }
               if (node.shadowRoot) observeRoot(node.shadowRoot);
@@ -277,7 +365,7 @@
       }
 
       function tryStart() {
-        setIframePointerEvents(iframesAllowed ? 'auto' : 'none');
+        reapplyAllStates();
         setIframeClipboardPermissions(document);
         document.querySelectorAll('flutter-view, flt-glass-pane').forEach(function(el) {
           if (el.shadowRoot) {
