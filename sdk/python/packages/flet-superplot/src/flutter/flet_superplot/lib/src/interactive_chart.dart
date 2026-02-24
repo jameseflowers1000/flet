@@ -4,6 +4,8 @@ import 'dart:math' as math;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/services.dart';
 
 import 'models/axis_model.dart';
 import 'models/series_model.dart';
@@ -41,6 +43,9 @@ class InteractiveChart extends StatefulWidget {
   final Color majorGridLineColor;
   final Color minorGridLineColor;
 
+  /// Chart annotations (horizontal/vertical lines, text, boxes).
+  final List<Map<String, dynamic>> annotations;
+
   /// Callback fired when visible range changes (on gesture end).
   final void Function(double xMin, double xMax, double yMin, double yMax)?
       onVisibleRangeChanged;
@@ -55,6 +60,7 @@ class InteractiveChart extends StatefulWidget {
     required this.showMinorGridLines,
     required this.majorGridLineColor,
     required this.minorGridLineColor,
+    this.annotations = const [],
     this.onVisibleRangeChanged,
   });
 
@@ -104,10 +110,91 @@ class _InteractiveChartState extends State<InteractiveChart>
   // Last known widget size (from LayoutBuilder)
   Size _lastSize = Size.zero;
 
+  // Legend state
+  final Set<int> _hiddenSeriesIndices = {};
+  final List<Rect> _legendHitRects = [];
+
+  // Hover state for crosshair
+  Offset? _hoverPosition;
+
+  // Undo/redo button hit rects (populated by ChartPainter)
+  final List<Rect> _undoRedoHitRects = [];
+
+  // Right-click detection
+  bool _isSecondaryButton = false;
+
+  // Rubber band zoom state (Shift+drag)
+  bool _isRubberBand = false;
+  Offset? _rubberBandStart;
+  Offset? _rubberBandEnd;
+
+  // Zoom history undo/redo stacks
+  static const int _maxHistoryDepth = 20;
+  final List<_ViewportState> _undoStack = [];
+  final List<_ViewportState> _redoStack = [];
+
+  /// Push current viewport onto undo stack (call before changing ranges).
+  void _pushViewportUndo() {
+    if (_xVisibleMin == null) return;
+    _undoStack.add(_ViewportState(
+      _xVisibleMin!, _xVisibleMax!, _yVisibleMin!, _yVisibleMax!));
+    if (_undoStack.length > _maxHistoryDepth) {
+      _undoStack.removeAt(0);
+    }
+    _redoStack.clear();
+  }
+
+  void _undoZoom() {
+    if (_undoStack.isEmpty) return;
+    // Save current state for redo
+    if (_xVisibleMin != null) {
+      _redoStack.add(_ViewportState(
+        _xVisibleMin!, _xVisibleMax!, _yVisibleMin!, _yVisibleMax!));
+    }
+    final prev = _undoStack.removeLast();
+    setState(() {
+      _xVisibleMin = prev.xMin;
+      _xVisibleMax = prev.xMax;
+      _yVisibleMin = prev.yMin;
+      _yVisibleMax = prev.yMax;
+      _userHasZoomed = true;
+    });
+    _notifyRangeChanged();
+  }
+
+  void _redoZoom() {
+    if (_redoStack.isEmpty) return;
+    // Save current state for undo
+    if (_xVisibleMin != null) {
+      _undoStack.add(_ViewportState(
+        _xVisibleMin!, _xVisibleMax!, _yVisibleMin!, _yVisibleMax!));
+    }
+    final next = _redoStack.removeLast();
+    setState(() {
+      _xVisibleMin = next.xMin;
+      _xVisibleMax = next.xMax;
+      _yVisibleMin = next.yMin;
+      _yVisibleMax = next.yMax;
+      _userHasZoomed = true;
+    });
+    _notifyRangeChanged();
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    if (kIsWeb) {
+      BrowserContextMenu.disableContextMenu();
+    }
+  }
+
   @override
   void dispose() {
     _scrollEndTimer?.cancel();
     _stopMomentum();
+    if (kIsWeb) {
+      BrowserContextMenu.enableContextMenu();
+    }
     super.dispose();
   }
 
@@ -259,6 +346,11 @@ class _InteractiveChartState extends State<InteractiveChart>
     final plotArea = _getPlotArea();
     if (plotArea == Rect.zero) return;
 
+    // Push undo on first scroll event of a sequence (not during momentum)
+    if (!_isGesturing) {
+      _pushViewportUndo();
+    }
+
     final zoomAmount = event.scrollDelta.dy / 1500.0;
     if (zoomAmount.abs() < 1e-6) return;
     final zoomFactor = 1.0 + zoomAmount.clamp(-0.15, 0.15);
@@ -309,10 +401,116 @@ class _InteractiveChartState extends State<InteractiveChart>
 
   void _onPointerDown(PointerDownEvent event) {
     _isTrackpadGesture = false;
+    _isSecondaryButton = event.buttons & kSecondaryMouseButton != 0;
+    // Detect Shift for rubber band zoom (not on right-click)
+    _isRubberBand = !_isSecondaryButton && HardwareKeyboard.instance.isShiftPressed;
+    if (_isRubberBand) {
+      _rubberBandStart = event.localPosition;
+      _rubberBandEnd = event.localPosition;
+    }
   }
 
   void _onPointerPanZoomStart(PointerPanZoomStartEvent event) {
     _isTrackpadGesture = true;
+  }
+
+  void _onPointerUp(PointerUpEvent event) {
+    // Right-click: undo zoom
+    if (_isSecondaryButton) {
+      _isSecondaryButton = false;
+      _undoZoom();
+      return;
+    }
+
+    // Click detection: only if this wasn't a drag
+    if (_scaleStartFocalPoint != null) return; // was a drag
+
+    // Undo/redo button clicks
+    if (_undoRedoHitRects.length >= 2) {
+      if (_undoRedoHitRects[0] != Rect.zero &&
+          _undoRedoHitRects[0].contains(event.localPosition)) {
+        _undoZoom();
+        return;
+      }
+      if (_undoRedoHitRects[1] != Rect.zero &&
+          _undoRedoHitRects[1].contains(event.localPosition)) {
+        _redoZoom();
+        return;
+      }
+    }
+
+    // Legend click detection
+    for (int i = 0; i < _legendHitRects.length; i++) {
+      if (_legendHitRects[i].contains(event.localPosition)) {
+        setState(() {
+          if (_hiddenSeriesIndices.contains(i)) {
+            _hiddenSeriesIndices.remove(i);
+          } else {
+            _hiddenSeriesIndices.add(i);
+          }
+        });
+        return;
+      }
+    }
+  }
+
+  void _onHover(PointerHoverEvent event) {
+    final region = _hitTest(event.localPosition);
+    setState(() {
+      _hoverPosition = region == _HitRegion.chart ? event.localPosition : null;
+    });
+  }
+
+  void _onExit(PointerExitEvent event) {
+    setState(() {
+      _hoverPosition = null;
+    });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Rubber band zoom
+  // ---------------------------------------------------------------------------
+
+  /// Computed rubber band rect for the painter (null when not active).
+  Rect? get _rubberBandRect {
+    if (!_isRubberBand || _rubberBandStart == null || _rubberBandEnd == null) {
+      return null;
+    }
+    return Rect.fromPoints(_rubberBandStart!, _rubberBandEnd!);
+  }
+
+  void _applyRubberBandZoom() {
+    final plotArea = _getPlotArea();
+    if (plotArea == Rect.zero) return;
+
+    final start = _rubberBandStart!;
+    final end = _rubberBandEnd!;
+
+    // Clamp to plot area
+    final left = math.min(start.dx, end.dx).clamp(plotArea.left, plotArea.right);
+    final right = math.max(start.dx, end.dx).clamp(plotArea.left, plotArea.right);
+    final top = math.min(start.dy, end.dy).clamp(plotArea.top, plotArea.bottom);
+    final bottom = math.max(start.dy, end.dy).clamp(plotArea.top, plotArea.bottom);
+
+    // Minimum selection size (avoid degenerate zooms from accidental clicks)
+    if ((right - left) < 10 || (bottom - top) < 10) return;
+
+    _ensureExplicitRanges();
+    _pushViewportUndo();
+
+    final newXMin = _screenToDataX(left, plotArea, _xVisibleMin!, _xVisibleMax!);
+    final newXMax = _screenToDataX(right, plotArea, _xVisibleMin!, _xVisibleMax!);
+    final newYMin = _screenToDataY(bottom, plotArea, _yVisibleMin!, _yVisibleMax!);
+    final newYMax = _screenToDataY(top, plotArea, _yVisibleMin!, _yVisibleMax!);
+
+    setState(() {
+      _xVisibleMin = newXMin;
+      _xVisibleMax = newXMax;
+      _yVisibleMin = newYMin;
+      _yVisibleMax = newYMax;
+    });
+
+    _notifyRangeChanged();
   }
 
   // ---------------------------------------------------------------------------
@@ -325,11 +523,15 @@ class _InteractiveChartState extends State<InteractiveChart>
 
   void _onScaleStart(ScaleStartDetails details) {
     _stopMomentum(); // cancel any in-flight momentum from previous gesture
+    if (_isSecondaryButton) return; // right-click handled separately
 
     final region = _hitTest(details.localFocalPoint);
     if (region == _HitRegion.none) return;
 
     _ensureExplicitRanges();
+    if (!_isRubberBand) {
+      _pushViewportUndo(); // rubber band pushes in _applyRubberBandZoom
+    }
 
     _scaleStartFocalPoint = details.localFocalPoint;
     _lastTrackpadFocalPoint = details.localFocalPoint;
@@ -346,6 +548,14 @@ class _InteractiveChartState extends State<InteractiveChart>
 
   void _onScaleUpdate(ScaleUpdateDetails details) {
     if (_scaleStartFocalPoint == null) return;
+
+    // Rubber band mode: just track the drag rectangle
+    if (_isRubberBand) {
+      setState(() {
+        _rubberBandEnd = details.localFocalPoint;
+      });
+      return;
+    }
 
     final plotArea = _getPlotArea();
     if (plotArea == Rect.zero || plotArea.width == 0 || plotArea.height == 0) {
@@ -440,6 +650,17 @@ class _InteractiveChartState extends State<InteractiveChart>
   }
 
   void _onScaleEnd(ScaleEndDetails details) {
+    // Rubber band zoom: apply selection
+    if (_isRubberBand && _rubberBandStart != null && _rubberBandEnd != null) {
+      _applyRubberBandZoom();
+      _isRubberBand = false;
+      _rubberBandStart = null;
+      _rubberBandEnd = null;
+      _scaleStartFocalPoint = null;
+      _endGesture();
+      return;
+    }
+
     if (_isTrackpadGesture && _scaleStartFocalPoint != null) {
       // Start momentum animation if there's enough velocity.
       final vy = details.velocity.pixelsPerSecond.dy;
@@ -555,6 +776,7 @@ class _InteractiveChartState extends State<InteractiveChart>
   // ---------------------------------------------------------------------------
 
   void _onDoubleTap() {
+    _pushViewportUndo(); // allow undo back to pre-reset view
     setState(() {
       _xVisibleMin = null;
       _xVisibleMax = null;
@@ -612,6 +834,8 @@ class _InteractiveChartState extends State<InteractiveChart>
           onPointerSignal: _onPointerSignal,
           onPointerDown: _onPointerDown,
           onPointerPanZoomStart: _onPointerPanZoomStart,
+          onPointerUp: _onPointerUp,
+          onPointerHover: _onHover,
           child: RawGestureDetector(
             gestures: <Type, GestureRecognizerFactory>{
               _EagerScaleGestureRecognizer:
@@ -635,9 +859,12 @@ class _InteractiveChartState extends State<InteractiveChart>
               ),
             },
             child: MouseRegion(
-              cursor: _isGesturing
-                  ? SystemMouseCursors.grabbing
-                  : SystemMouseCursors.grab,
+              cursor: _isRubberBand
+                  ? SystemMouseCursors.precise
+                  : _isGesturing
+                      ? SystemMouseCursors.grabbing
+                      : SystemMouseCursors.grab,
+              onExit: _onExit,
               child: CustomPaint(
                 painter: ChartPainter(
                   xAxis: _effectiveXAxis,
@@ -649,6 +876,14 @@ class _InteractiveChartState extends State<InteractiveChart>
                   majorGridLineColor: widget.majorGridLineColor,
                   minorGridLineColor: widget.minorGridLineColor,
                   gestureActive: _isGesturing,
+                  legendHitRects: _legendHitRects,
+                  hiddenSeriesIndices: _hiddenSeriesIndices,
+                  hoverPosition: _isGesturing ? null : _hoverPosition,
+                  rubberBandRect: _rubberBandRect,
+                  annotations: widget.annotations,
+                  canUndo: _undoStack.isNotEmpty,
+                  canRedo: _redoStack.isNotEmpty,
+                  undoRedoHitRects: _undoRedoHitRects,
                 ),
                 child: const SizedBox.expand(),
               ),
@@ -658,6 +893,12 @@ class _InteractiveChartState extends State<InteractiveChart>
       },
     );
   }
+}
+
+/// Snapshot of viewport ranges for undo/redo history.
+class _ViewportState {
+  final double xMin, xMax, yMin, yMax;
+  const _ViewportState(this.xMin, this.xMax, this.yMin, this.yMax);
 }
 
 enum _HitRegion { chart, xAxis, yAxis, none }

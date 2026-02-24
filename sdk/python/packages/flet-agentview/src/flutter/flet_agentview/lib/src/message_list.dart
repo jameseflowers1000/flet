@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:highlight/highlight.dart' show highlight, Node;
@@ -9,12 +11,14 @@ import 'models.dart';
 class MessageList extends StatefulWidget {
   final List<ChatMessage> messages;
   final String placeholderText;
+  final String placeholderIcon;
   final Color bgColor;
 
   const MessageList({
     super.key,
     required this.messages,
     required this.placeholderText,
+    this.placeholderIcon = '',
     required this.bgColor,
   });
 
@@ -55,8 +59,15 @@ class _MessageListState extends State<MessageList> {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(Icons.chat_bubble_outline,
-              color: AgentTheme.mutedTextColor, size: 48),
+          if (widget.placeholderIcon.isNotEmpty)
+            Image.memory(
+              base64Decode(widget.placeholderIcon),
+              height: 64,
+              filterQuality: FilterQuality.medium,
+            )
+          else
+            Icon(Icons.chat_bubble_outline,
+                color: AgentTheme.mutedTextColor, size: 48),
           const SizedBox(height: 16),
           Text(
             widget.placeholderText,

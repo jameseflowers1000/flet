@@ -66,6 +66,9 @@ class SuperPlot(ft.LayoutControl):
     
     # JSON-encoded series list
     series: Optional[str] = None
+
+    # JSON-encoded annotations list
+    annotations: Optional[str] = None
     
     # Chart title
     title: Optional[str] = None
@@ -88,6 +91,7 @@ class SuperPlot(ft.LayoutControl):
     _x_axis_obj: Optional[NumericAxis] = field(default=None, repr=False, metadata={"skip": True})
     _y_axis_obj: Optional[NumericAxis] = field(default=None, repr=False, metadata={"skip": True})
     _series_list: List[FastLineSeries] = field(default_factory=list, repr=False, metadata={"skip": True})
+    _annotations_list: List[Any] = field(default_factory=list, repr=False, metadata={"skip": True})
     
     def __post_init__(self, ref=None):
         super().__post_init__(ref)
@@ -101,6 +105,8 @@ class SuperPlot(ft.LayoutControl):
             self.y_axis = json.dumps(self._y_axis_obj.to_dict())
         if self._series_list:
             self.series = json.dumps([s.to_dict() for s in self._series_list])
+        if self._annotations_list:
+            self.annotations = json.dumps([a.to_dict() for a in self._annotations_list])
     
     def set_x_axis(self, value: NumericAxis):
         """Set the X axis configuration."""
@@ -129,6 +135,24 @@ class SuperPlot(ft.LayoutControl):
         """Remove all series from the chart."""
         self._series_list.clear()
         self.series = json.dumps([])
+
+    def set_annotations(self, value: List[Any]):
+        """Set the annotations list."""
+        self._annotations_list = value
+        if value:
+            self.annotations = json.dumps([a.to_dict() for a in value])
+        else:
+            self.annotations = json.dumps([])
+
+    def add_annotation(self, annotation: Any):
+        """Add an annotation to the chart."""
+        self._annotations_list.append(annotation)
+        self.annotations = json.dumps([a.to_dict() for a in self._annotations_list])
+
+    def clear_annotations(self):
+        """Remove all annotations from the chart."""
+        self._annotations_list.clear()
+        self.annotations = json.dumps([])
     
     def update_data(self):
         """Trigger re-serialization and update after data changes."""

@@ -40,7 +40,7 @@ class _AgentViewControlState extends State<AgentViewControl> {
 
   // Theme
   Color _bgColor = const Color(0xFF1A191F);
-  String _placeholderText = 'What can I help you with today?';
+  String _placeholderText = 'How can epyx help you?';
   String _inputHint = 'Ask something...';
   String _modeLabel = '';
   String _modeIcon = '';
@@ -223,6 +223,7 @@ class _AgentViewControlState extends State<AgentViewControl> {
               child: MessageList(
                 messages: _messages,
                 placeholderText: _placeholderText,
+                placeholderIcon: _modeIcon,
                 bgColor: _bgColor,
               ),
             ),

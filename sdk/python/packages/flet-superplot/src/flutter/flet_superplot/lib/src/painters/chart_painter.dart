@@ -25,6 +25,28 @@ class ChartPainter extends CustomPainter {
   /// Set during active pan/zoom gestures to maintain 60fps.
   final bool gestureActive;
 
+  /// Legend support: mutable list populated during paint() for hit testing.
+  final List<Rect> legendHitRects;
+
+  /// Set of series indices to hide (toggled via legend clicks).
+  final Set<int> hiddenSeriesIndices;
+
+  /// Hover position for crosshair/tooltip (null when not hovering or during gesture).
+  final Offset? hoverPosition;
+
+  /// Rubber band selection rectangle (null when not selecting).
+  final Rect? rubberBandRect;
+
+  /// Chart annotations (horizontal/vertical lines, text, boxes).
+  final List<Map<String, dynamic>> annotations;
+
+  /// Whether undo/redo are available (controls button rendering).
+  final bool canUndo;
+  final bool canRedo;
+
+  /// Hit rects for undo/redo buttons, populated during paint: [0]=undo, [1]=redo.
+  final List<Rect> undoRedoHitRects;
+
   // Computed during paint
   late Rect _plotArea;
   late Rect _chartClip;
@@ -58,6 +80,14 @@ class ChartPainter extends CustomPainter {
     required this.majorGridLineColor,
     required this.minorGridLineColor,
     this.gestureActive = false,
+    required this.legendHitRects,
+    required this.hiddenSeriesIndices,
+    this.hoverPosition,
+    this.rubberBandRect,
+    this.annotations = const [],
+    this.canUndo = false,
+    this.canRedo = false,
+    required this.undoRedoHitRects,
   });
 
   @override
@@ -134,11 +164,25 @@ class ChartPainter extends CustomPainter {
       _axesCacheKey = axesCacheKey;
     }
 
-    // Draw: grid → series → axes
+    // Draw: grid → annotations → series → axes
     canvas.drawPicture(_gridCache!);
 
-    for (final s in series) {
-      if (s.isVisible && s.data != null && s.data!.length > 0) {
+    // Annotations: render between grid and series
+    if (annotations.isNotEmpty) {
+      canvas.save();
+      canvas.clipRect(_chartClip);
+      try {
+        _drawAnnotations(canvas);
+      } catch (e) {
+        debugPrint('[SuperPlot] _drawAnnotations error: $e');
+      }
+      canvas.restore();
+    }
+
+    for (int i = 0; i < series.length; i++) {
+      final s = series[i];
+      if (s.isVisible && !hiddenSeriesIndices.contains(i) &&
+          s.data != null && s.data!.length > 0) {
         try {
           _drawSeries(canvas, s);
         } catch (e) {
@@ -149,6 +193,48 @@ class ChartPainter extends CustomPainter {
 
     if (_axesCache != null) {
       canvas.drawPicture(_axesCache!);
+    }
+
+    // Legend: draw after axes, only when multiple series
+    if (series.length > 1) {
+      try {
+        _drawLegend(canvas, size);
+      } catch (e) {
+        debugPrint('[SuperPlot] _drawLegend error: $e');
+      }
+    }
+
+    // Undo/redo buttons: draw after legend, before crosshair
+    try {
+      _drawUndoRedo(canvas, size);
+    } catch (e) {
+      debugPrint('[SuperPlot] _drawUndoRedo error: $e');
+    }
+
+    // Crosshair + tooltip on hover
+    if (hoverPosition != null) {
+      try {
+        _drawCrosshair(canvas, size);
+      } catch (e) {
+        debugPrint('[SuperPlot] _drawCrosshair error: $e');
+      }
+    }
+
+    // Rubber band selection rectangle
+    if (rubberBandRect != null) {
+      // Semi-transparent fill
+      canvas.drawRect(
+        rubberBandRect!,
+        Paint()..color = const Color(0x224488FF),
+      );
+      // Dashed-style border
+      canvas.drawRect(
+        rubberBandRect!,
+        Paint()
+          ..color = const Color(0xAA4488FF)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.0,
+      );
     }
   }
 
@@ -529,7 +615,8 @@ class ChartPainter extends CustomPainter {
     }
   }
 
-  /// Get visible data range and optional LTTB decimation indices.
+  /// Get visible data range and optional decimation indices.
+  /// Uses LTTB for line/mountain series, grid-bin for scatter.
   /// Returns null if insufficient visible points.
   _VisibleData? _getVisibleData(SeriesModel series, {int minPoints = 2}) {
     final data = series.data!;
@@ -554,9 +641,17 @@ class ChartPainter extends CustomPainter {
         Float64List.sublistView(yValues, visibleStart, visibleEnd + 1);
 
     final targetPoints = (_chartClip.width * 2).toInt().clamp(100, 10000);
-    final indices = visibleCount > targetPoints
-        ? _lttbDecimate(visibleX, visibleY, visibleCount, targetPoints)
-        : null;
+    List<int>? indices;
+
+    if (visibleCount > targetPoints) {
+      final isScatter = series.type == 'scatter' || series.type == 'xy_scatter';
+      if (isScatter) {
+        final cellSize = math.max(series.pointMarkerSize, 4.0);
+        indices = _gridBinDecimate(visibleX, visibleY, visibleCount, cellSize);
+      } else {
+        indices = _lttbDecimate(visibleX, visibleY, visibleCount, targetPoints);
+      }
+    }
 
     return _VisibleData(
       visibleX: visibleX,
@@ -565,6 +660,79 @@ class ChartPainter extends CustomPainter {
       indices: indices,
       drawCount: indices?.length ?? visibleCount,
     );
+  }
+
+  /// Build a path through visible data points using the specified draw mode.
+  Path _buildLinePath(_VisibleData vd, String drawMode) {
+    final path = Path();
+    if (vd.drawCount == 0) return path;
+
+    final firstIdx = vd.indices?[0] ?? 0;
+    path.moveTo(
+      _dataToScreenX(vd.visibleX[firstIdx]),
+      _dataToScreenY(vd.visibleY[firstIdx]),
+    );
+
+    switch (drawMode) {
+      case 'step':
+        // Step mode: horizontal then vertical (step-after)
+        double prevY = _dataToScreenY(vd.visibleY[firstIdx]);
+        for (int i = 1; i < vd.drawCount; i++) {
+          final idx = vd.indices?[i] ?? i;
+          final x = _dataToScreenX(vd.visibleX[idx]);
+          final y = _dataToScreenY(vd.visibleY[idx]);
+          path.lineTo(x, prevY); // horizontal to new x at old y
+          path.lineTo(x, y);     // vertical to new y
+          prevY = y;
+        }
+        break;
+
+      case 'spline':
+        // Catmull-Rom spline: convert to cubic Bezier segments
+        // Collect screen points first
+        final pts = <Offset>[];
+        for (int i = 0; i < vd.drawCount; i++) {
+          final idx = vd.indices?[i] ?? i;
+          pts.add(Offset(
+            _dataToScreenX(vd.visibleX[idx]),
+            _dataToScreenY(vd.visibleY[idx]),
+          ));
+        }
+        if (pts.length < 2) break;
+        if (pts.length == 2) {
+          path.lineTo(pts[1].dx, pts[1].dy);
+          break;
+        }
+        // Catmull-Rom with tension 0.5 → cubic Bezier control points
+        const double t = 0.5; // tension (0 = sharp, 1 = loose)
+        for (int i = 0; i < pts.length - 1; i++) {
+          final p0 = i > 0 ? pts[i - 1] : pts[i];
+          final p1 = pts[i];
+          final p2 = pts[i + 1];
+          final p3 = i + 2 < pts.length ? pts[i + 2] : pts[i + 1];
+
+          final cp1x = p1.dx + (p2.dx - p0.dx) / (6 * t);
+          final cp1y = p1.dy + (p2.dy - p0.dy) / (6 * t);
+          final cp2x = p2.dx - (p3.dx - p1.dx) / (6 * t);
+          final cp2y = p2.dy - (p3.dy - p1.dy) / (6 * t);
+
+          path.cubicTo(cp1x, cp1y, cp2x, cp2y, p2.dx, p2.dy);
+        }
+        break;
+
+      case 'linear':
+      default:
+        for (int i = 1; i < vd.drawCount; i++) {
+          final idx = vd.indices?[i] ?? i;
+          path.lineTo(
+            _dataToScreenX(vd.visibleX[idx]),
+            _dataToScreenY(vd.visibleY[idx]),
+          );
+        }
+        break;
+    }
+
+    return path;
   }
 
   void _drawLineSeries(Canvas canvas, SeriesModel series) {
@@ -579,21 +747,7 @@ class ChartPainter extends CustomPainter {
       ..strokeJoin = StrokeJoin.round
       ..isAntiAlias = series.antiAliasing;
 
-    final path = Path();
-    bool started = false;
-
-    for (int i = 0; i < vd.drawCount; i++) {
-      final idx = vd.indices?[i] ?? i;
-      final x = _dataToScreenX(vd.visibleX[idx]);
-      final y = _dataToScreenY(vd.visibleY[idx]);
-
-      if (!started) {
-        path.moveTo(x, y);
-        started = true;
-      } else {
-        path.lineTo(x, y);
-      }
-    }
+    final path = _buildLinePath(vd, series.drawMode);
 
     canvas.save();
     canvas.clipRect(_chartClip);
@@ -671,27 +825,15 @@ class ChartPainter extends CustomPainter {
       ..isAntiAlias = series.antiAliasing;
 
     // Build line path
-    final linePath = Path();
-    double firstScreenX = 0;
-    double lastScreenX = 0;
-    bool started = false;
+    final linePath = _buildLinePath(vd, series.drawMode);
 
-    for (int i = 0; i < vd.drawCount; i++) {
-      final idx = vd.indices?[i] ?? i;
-      final x = _dataToScreenX(vd.visibleX[idx]);
-      final y = _dataToScreenY(vd.visibleY[idx]);
+    // Get first/last screen X for fill closure
+    final firstIdx = vd.indices?[0] ?? 0;
+    final lastIdx = vd.indices?[vd.drawCount - 1] ?? (vd.drawCount - 1);
+    final firstScreenX = _dataToScreenX(vd.visibleX[firstIdx]);
+    final lastScreenX = _dataToScreenX(vd.visibleX[lastIdx]);
 
-      if (!started) {
-        linePath.moveTo(x, y);
-        firstScreenX = x;
-        started = true;
-      } else {
-        linePath.lineTo(x, y);
-      }
-      lastScreenX = x;
-    }
-
-    if (!started) return;
+    if (vd.drawCount == 0) return;
 
     // Build fill path: close the line down to zeroLineY baseline
     final baselineY = _dataToScreenY(series.zeroLineY);
@@ -876,6 +1018,616 @@ class ChartPainter extends CustomPainter {
     return result;
   }
 
+  /// Grid-bin decimation for scatter series. Divides the plot area into
+  /// pixel-sized grid cells and keeps the first point per cell. Preserves
+  /// density distribution (unlike LTTB which biases toward outliers).
+  List<int> _gridBinDecimate(
+    Float64List xValues,
+    Float64List yValues,
+    int dataLength,
+    double cellSize,
+  ) {
+    final xRange = _xMax - _xMin;
+    final yRange = _yMax - _yMin;
+    if (xRange <= 0 || yRange <= 0) {
+      return List<int>.generate(dataLength, (i) => i);
+    }
+
+    // Number of grid cells in each dimension
+    final int cols = (_plotArea.width / cellSize).ceil().clamp(1, 10000);
+    final int rows = (_plotArea.height / cellSize).ceil().clamp(1, 10000);
+
+    // Track which cells have been occupied
+    final occupied = <int>{};
+    final result = <int>[];
+
+    for (int i = 0; i < dataLength; i++) {
+      final nx = ((xValues[i] - _xMin) / xRange).clamp(0.0, 1.0);
+      final ny = ((yValues[i] - _yMin) / yRange).clamp(0.0, 1.0);
+      final col = (nx * (cols - 1)).round();
+      final row = (ny * (rows - 1)).round();
+      final key = row * cols + col;
+      if (occupied.add(key)) {
+        result.add(i);
+      }
+    }
+
+    return result;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Annotations
+  // ---------------------------------------------------------------------------
+
+  void _drawAnnotations(Canvas canvas) {
+    for (final ann in annotations) {
+      final type = ann['type'] as String? ?? '';
+      final opacity = (ann['opacity'] as num?)?.toDouble() ?? 1.0;
+
+      switch (type) {
+        case 'horizontal_line':
+          _drawHorizontalLineAnnotation(canvas, ann, opacity);
+          break;
+        case 'vertical_line':
+          _drawVerticalLineAnnotation(canvas, ann, opacity);
+          break;
+        case 'box':
+          _drawBoxAnnotation(canvas, ann, opacity);
+          break;
+        case 'text':
+          _drawTextAnnotation(canvas, ann, opacity);
+          break;
+      }
+    }
+  }
+
+  void _drawHorizontalLineAnnotation(
+      Canvas canvas, Map<String, dynamic> ann, double opacity) {
+    final y = (ann['y'] as num?)?.toDouble();
+    if (y == null) return;
+
+    final screenY = _dataToScreenY(y);
+    if (screenY < _chartClip.top || screenY > _chartClip.bottom) return;
+
+    final color = SeriesModel.parseColorStatic(
+        ann['color'] as String?, const Color(0xFFFFFF00));
+    final thickness = (ann['thickness'] as num?)?.toDouble() ?? 1.0;
+
+    canvas.drawLine(
+      Offset(_chartClip.left, screenY),
+      Offset(_chartClip.right, screenY),
+      Paint()
+        ..color = color.withValues(alpha: opacity)
+        ..strokeWidth = thickness,
+    );
+
+    // Label
+    final label = ann['label'] as String?;
+    if (label != null && label.isNotEmpty) {
+      final labelColor = SeriesModel.parseColorStatic(
+          ann['label_color'] as String?, const Color(0xFFFFFFFF));
+      final tp = TextPainter(
+        text: TextSpan(
+          text: label,
+          style: TextStyle(color: labelColor.withValues(alpha: opacity), fontSize: 10),
+        ),
+        textDirection: TextDirection.ltr,
+      );
+      tp.layout();
+      // Paint label at left edge, slightly above the line
+      tp.paint(canvas, Offset(_chartClip.left + 4, screenY - tp.height - 2));
+    }
+  }
+
+  void _drawVerticalLineAnnotation(
+      Canvas canvas, Map<String, dynamic> ann, double opacity) {
+    final x = (ann['x'] as num?)?.toDouble();
+    if (x == null) return;
+
+    final screenX = _dataToScreenX(x);
+    if (screenX < _chartClip.left || screenX > _chartClip.right) return;
+
+    final color = SeriesModel.parseColorStatic(
+        ann['color'] as String?, const Color(0xFFFFFF00));
+    final thickness = (ann['thickness'] as num?)?.toDouble() ?? 1.0;
+
+    canvas.drawLine(
+      Offset(screenX, _chartClip.top),
+      Offset(screenX, _chartClip.bottom),
+      Paint()
+        ..color = color.withValues(alpha: opacity)
+        ..strokeWidth = thickness,
+    );
+
+    final label = ann['label'] as String?;
+    if (label != null && label.isNotEmpty) {
+      final labelColor = SeriesModel.parseColorStatic(
+          ann['label_color'] as String?, const Color(0xFFFFFFFF));
+      final tp = TextPainter(
+        text: TextSpan(
+          text: label,
+          style: TextStyle(color: labelColor.withValues(alpha: opacity), fontSize: 10),
+        ),
+        textDirection: TextDirection.ltr,
+      );
+      tp.layout();
+      tp.paint(canvas, Offset(screenX + 4, _chartClip.top + 4));
+    }
+  }
+
+  void _drawBoxAnnotation(
+      Canvas canvas, Map<String, dynamic> ann, double opacity) {
+    final xMin = (ann['x_min'] as num?)?.toDouble();
+    final xMax = (ann['x_max'] as num?)?.toDouble();
+    final yMin = (ann['y_min'] as num?)?.toDouble();
+    final yMax = (ann['y_max'] as num?)?.toDouble();
+    if (xMin == null || xMax == null || yMin == null || yMax == null) return;
+
+    final left = _dataToScreenX(xMin);
+    final right = _dataToScreenX(xMax);
+    final top = _dataToScreenY(yMax);
+    final bottom = _dataToScreenY(yMin);
+    final rect = Rect.fromLTRB(left, top, right, bottom);
+
+    final fillColor = SeriesModel.parseColorStatic(
+        ann['fill_color'] as String?, const Color(0x334488FF));
+    canvas.drawRect(rect, Paint()..color = fillColor.withValues(alpha: opacity));
+
+    final borderColor = ann['border_color'] as String?;
+    if (borderColor != null) {
+      final bc = SeriesModel.parseColorStatic(borderColor, const Color(0xFF4488FF));
+      final bt = (ann['border_thickness'] as num?)?.toDouble() ?? 1.0;
+      canvas.drawRect(
+        rect,
+        Paint()
+          ..color = bc.withValues(alpha: opacity)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = bt,
+      );
+    }
+  }
+
+  void _drawTextAnnotation(
+      Canvas canvas, Map<String, dynamic> ann, double opacity) {
+    final x = (ann['x'] as num?)?.toDouble();
+    final y = (ann['y'] as num?)?.toDouble();
+    final text = ann['text'] as String?;
+    if (x == null || y == null || text == null || text.isEmpty) return;
+
+    final screenX = _dataToScreenX(x);
+    final screenY = _dataToScreenY(y);
+
+    final color = SeriesModel.parseColorStatic(
+        ann['color'] as String?, const Color(0xFFFFFFFF));
+    final fontSize = (ann['font_size'] as num?)?.toDouble() ?? 12.0;
+
+    final tp = TextPainter(
+      text: TextSpan(
+        text: text,
+        style: TextStyle(color: color.withValues(alpha: opacity), fontSize: fontSize),
+      ),
+      textDirection: TextDirection.ltr,
+    );
+    tp.layout();
+
+    // Background box
+    final bgColor = ann['background_color'] as String?;
+    if (bgColor != null) {
+      final bg = SeriesModel.parseColorStatic(bgColor, const Color(0x88000000));
+      final bgRect = Rect.fromLTWH(
+        screenX - 2, screenY - tp.height - 2,
+        tp.width + 4, tp.height + 4,
+      );
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(bgRect, const Radius.circular(2)),
+        Paint()..color = bg.withValues(alpha: opacity),
+      );
+    }
+
+    tp.paint(canvas, Offset(screenX, screenY - tp.height));
+  }
+
+  // ---------------------------------------------------------------------------
+  // Legend
+  // ---------------------------------------------------------------------------
+
+  void _drawLegend(Canvas canvas, Size size) {
+    legendHitRects.clear();
+
+    const double swatchSize = 10.0;
+    const double itemPadding = 6.0;
+    const double boxPadding = 8.0;
+    const double itemSpacing = 4.0;
+
+    final textStyle = TextStyle(
+      color: const Color(0xFFCCCCCC),
+      fontSize: 11.0,
+    );
+    final dimTextStyle = TextStyle(
+      color: const Color(0xFF666666),
+      fontSize: 11.0,
+    );
+
+    // Measure all items first
+    final labels = <String>[];
+    final painters = <TextPainter>[];
+    double maxItemWidth = 0;
+
+    for (int i = 0; i < series.length; i++) {
+      final s = series[i];
+      final label = s.seriesName ?? s.seriesId ?? 'Series ${i + 1}';
+      labels.add(label);
+      final isHidden = hiddenSeriesIndices.contains(i);
+      final tp = TextPainter(
+        text: TextSpan(text: label, style: isHidden ? dimTextStyle : textStyle),
+        textDirection: TextDirection.ltr,
+      );
+      tp.layout();
+      painters.add(tp);
+      final itemWidth = swatchSize + itemSpacing + tp.width;
+      if (itemWidth > maxItemWidth) maxItemWidth = itemWidth;
+    }
+
+    final itemHeight = math.max(swatchSize, painters.first.height);
+    final boxWidth = maxItemWidth + boxPadding * 2;
+    final boxHeight = series.length * (itemHeight + itemPadding) - itemPadding + boxPadding * 2;
+
+    // Position: top-left of plot area, offset slightly
+    final boxLeft = _plotArea.left + 8;
+    final boxTop = _plotArea.top + 8;
+    final boxRect = Rect.fromLTWH(boxLeft, boxTop, boxWidth, boxHeight);
+
+    // Semi-transparent background
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(boxRect, const Radius.circular(4)),
+      Paint()..color = const Color(0xCC1A1A2E),
+    );
+    // Border
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(boxRect, const Radius.circular(4)),
+      Paint()
+        ..color = const Color(0xFF444466)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 0.5,
+    );
+
+    // Draw items
+    for (int i = 0; i < series.length; i++) {
+      final s = series[i];
+      final isHidden = hiddenSeriesIndices.contains(i);
+      final y = boxTop + boxPadding + i * (itemHeight + itemPadding);
+      final swatchY = y + (itemHeight - swatchSize) / 2;
+
+      // Color swatch
+      final swatchColor = isHidden
+          ? s.strokeColor.withValues(alpha: 0.3)
+          : s.strokeColor;
+      canvas.drawRect(
+        Rect.fromLTWH(boxLeft + boxPadding, swatchY, swatchSize, swatchSize),
+        Paint()..color = swatchColor,
+      );
+
+      // Label text
+      final textX = boxLeft + boxPadding + swatchSize + itemSpacing;
+      final textY = y + (itemHeight - painters[i].height) / 2;
+      painters[i].paint(canvas, Offset(textX, textY));
+
+      // Hit rect for click detection (full row)
+      final hitRect = Rect.fromLTWH(boxLeft, y - itemPadding / 2,
+          boxWidth, itemHeight + itemPadding);
+      legendHitRects.add(hitRect);
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Undo / Redo buttons (top-right of plot area)
+  // ---------------------------------------------------------------------------
+
+  void _drawUndoRedo(Canvas canvas, Size size) {
+    undoRedoHitRects.clear();
+    if (!canUndo && !canRedo) return;
+
+    const double btnSize = 22.0;
+    const double btnGap = 4.0;
+    const double margin = 8.0;
+    const double iconPad = 4.0;
+
+    // Position: top-right of plot area
+    final rightEdge = _plotArea.right - margin;
+    final topEdge = _plotArea.top + margin;
+
+    // Draw redo first (rightmost), then undo to its left
+    int btnCount = 0;
+    if (canRedo) btnCount++;
+    if (canUndo) btnCount++;
+
+    double x = rightEdge - btnCount * btnSize - (btnCount - 1) * btnGap;
+
+    // Undo button
+    if (canUndo) {
+      final rect = Rect.fromLTWH(x, topEdge, btnSize, btnSize);
+      _drawZoomButton(canvas, rect, isUndo: true, active: true);
+      undoRedoHitRects.add(rect); // index 0 = undo
+      x += btnSize + btnGap;
+    } else {
+      undoRedoHitRects.add(Rect.zero); // placeholder
+    }
+
+    // Redo button
+    if (canRedo) {
+      final rect = Rect.fromLTWH(x, topEdge, btnSize, btnSize);
+      _drawZoomButton(canvas, rect, isUndo: false, active: true);
+      undoRedoHitRects.add(rect); // index 1 = redo
+    } else {
+      undoRedoHitRects.add(Rect.zero); // placeholder
+    }
+  }
+
+  void _drawZoomButton(Canvas canvas, Rect rect,
+      {required bool isUndo, required bool active}) {
+    // Background pill
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(rect, const Radius.circular(4)),
+      Paint()..color = Color(active ? 0xAA1A1A2E : 0x551A1A2E),
+    );
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(rect, const Radius.circular(4)),
+      Paint()
+        ..color = Color(active ? 0xFF555577 : 0xFF333355)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 0.5,
+    );
+
+    // Arrow icon — curved arrow pointing left (undo) or right (redo)
+    final arrowPaint = Paint()
+      ..color = Color(active ? 0xFFCCCCCC : 0xFF666666)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.5
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round;
+
+    final cx = rect.center.dx;
+    final cy = rect.center.dy;
+    final r = rect.width * 0.25;
+
+    if (isUndo) {
+      // Curved arrow pointing left (counterclockwise)
+      final arc = Path()
+        ..addArc(Rect.fromCircle(center: Offset(cx + 1, cy), radius: r),
+            -math.pi * 0.8, math.pi * 1.1);
+      canvas.drawPath(arc, arrowPaint);
+      // Arrowhead at start of arc
+      final tipX = cx + 1 + r * math.cos(-math.pi * 0.8);
+      final tipY = cy + r * math.sin(-math.pi * 0.8);
+      canvas.drawLine(Offset(tipX, tipY), Offset(tipX - 3, tipY - 1), arrowPaint);
+      canvas.drawLine(Offset(tipX, tipY), Offset(tipX + 1, tipY - 3.5), arrowPaint);
+    } else {
+      // Curved arrow pointing right (clockwise)
+      final arc = Path()
+        ..addArc(Rect.fromCircle(center: Offset(cx - 1, cy), radius: r),
+            -math.pi * 0.2, -math.pi * 1.1);
+      canvas.drawPath(arc, arrowPaint);
+      // Arrowhead at start of arc
+      final tipX = cx - 1 + r * math.cos(-math.pi * 0.2);
+      final tipY = cy + r * math.sin(-math.pi * 0.2);
+      canvas.drawLine(Offset(tipX, tipY), Offset(tipX + 3, tipY - 1), arrowPaint);
+      canvas.drawLine(Offset(tipX, tipY), Offset(tipX - 1, tipY - 3.5), arrowPaint);
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Crosshair + Hover Tooltips
+  // ---------------------------------------------------------------------------
+
+  void _drawCrosshair(Canvas canvas, Size size) {
+    final pos = hoverPosition!;
+    if (!_plotArea.contains(pos)) return;
+
+    final xIsLog = xAxis?.isLogarithmic == true;
+    final yIsLog = yAxis?.isLogarithmic == true;
+    final xLogBase = xAxis?.logarithmicBase ?? 10.0;
+
+    // Vertical crosshair line
+    final crosshairPaint = Paint()
+      ..color = const Color(0x66FFFFFF)
+      ..strokeWidth = 0.5;
+    canvas.drawLine(
+      Offset(pos.dx, _plotArea.top),
+      Offset(pos.dx, _plotArea.bottom),
+      crosshairPaint,
+    );
+
+    // Horizontal crosshair line
+    canvas.drawLine(
+      Offset(_plotArea.left, pos.dy),
+      Offset(_plotArea.right, pos.dy),
+      crosshairPaint,
+    );
+
+    // Data X at cursor
+    final double dataX;
+    if (xIsLog) {
+      final logBase = math.log(xLogBase);
+      final logMin = math.log(_xMin.clamp(1e-100, double.infinity)) / logBase;
+      final logMax = math.log(_xMax.clamp(1e-100, double.infinity)) / logBase;
+      final ratio = (pos.dx - _plotArea.left) / _plotArea.width;
+      dataX = math.pow(xLogBase, logMin + ratio * (logMax - logMin)).toDouble();
+    } else {
+      final ratio = (pos.dx - _plotArea.left) / _plotArea.width;
+      dataX = _xMin + ratio * (_xMax - _xMin);
+    }
+
+    // X-value label pill on bottom axis
+    final xLabel = xIsLog
+        ? _formatLogNumber(dataX, xLogBase, labelFormat: xAxis?.labelFormat)
+        : _formatNumber(dataX, labelFormat: xAxis?.labelFormat);
+    final xLabelTp = TextPainter(
+      text: TextSpan(
+        text: xLabel,
+        style: const TextStyle(color: Color(0xFFFFFFFF), fontSize: 10.0),
+      ),
+      textDirection: TextDirection.ltr,
+    );
+    xLabelTp.layout();
+    final pillW = xLabelTp.width + 10;
+    final pillH = xLabelTp.height + 6;
+    final pillX = (pos.dx - pillW / 2).clamp(_plotArea.left, _plotArea.right - pillW);
+    final pillY = _chartClip.bottom + 2;
+    final pillRect = RRect.fromRectAndRadius(
+      Rect.fromLTWH(pillX, pillY, pillW, pillH),
+      const Radius.circular(3),
+    );
+    canvas.drawRRect(pillRect, Paint()..color = const Color(0xFF2060BB));
+    xLabelTp.paint(canvas, Offset(pillX + 5, pillY + 3));
+
+    // Find nearest point per visible series and build tooltip entries
+    final tooltipEntries = <_TooltipEntry>[];
+
+    for (int i = 0; i < series.length; i++) {
+      final s = series[i];
+      if (!s.isVisible || hiddenSeriesIndices.contains(i) ||
+          s.data == null || s.data!.length == 0) continue;
+
+      final xValues = s.data!.xValues;
+      final yValues = s.data!.yValues;
+      final len = s.data!.length;
+
+      // Binary search for nearest X
+      int idx = _lowerBound(xValues, dataX, 0, len);
+      if (idx >= len) idx = len - 1;
+      if (idx > 0) {
+        // Pick whichever neighbor is closer in data-X
+        final dLeft = (dataX - xValues[idx - 1]).abs();
+        final dRight = (dataX - xValues[idx]).abs();
+        if (dLeft < dRight) idx = idx - 1;
+      }
+
+      final ptX = _dataToScreenX(xValues[idx]);
+      final ptY = _dataToScreenY(yValues[idx]);
+
+      // Only show if point is within plot area
+      if (ptX < _plotArea.left - 5 || ptX > _plotArea.right + 5 ||
+          ptY < _plotArea.top - 5 || ptY > _plotArea.bottom + 5) continue;
+
+      // Draw marker dot at intersection
+      canvas.drawCircle(
+        Offset(ptX, ptY),
+        4.0,
+        Paint()..color = s.strokeColor,
+      );
+      canvas.drawCircle(
+        Offset(ptX, ptY),
+        4.0,
+        Paint()
+          ..color = const Color(0xFFFFFFFF)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.0,
+      );
+
+      final yLabel = yIsLog
+          ? _formatLogNumber(yValues[idx], yAxis?.logarithmicBase ?? 10.0,
+              labelFormat: yAxis?.labelFormat)
+          : _formatNumber(yValues[idx], labelFormat: yAxis?.labelFormat);
+      final name = s.seriesName ?? s.seriesId ?? 'Series ${i + 1}';
+      tooltipEntries.add(_TooltipEntry(
+        color: s.strokeColor,
+        name: name,
+        value: yLabel,
+      ));
+    }
+
+    if (tooltipEntries.isEmpty) return;
+
+    // Draw tooltip box
+    const double tooltipPadding = 8.0;
+    const double swatchSize = 8.0;
+    const double spacing = 4.0;
+    const double lineHeight = 16.0;
+
+    // Measure tooltip content
+    double maxNameWidth = 0;
+    double maxValueWidth = 0;
+    final namePainters = <TextPainter>[];
+    final valuePainters = <TextPainter>[];
+
+    for (final entry in tooltipEntries) {
+      final nameTp = TextPainter(
+        text: TextSpan(
+          text: entry.name,
+          style: const TextStyle(color: Color(0xFFBBBBBB), fontSize: 10.0),
+        ),
+        textDirection: TextDirection.ltr,
+      );
+      nameTp.layout();
+      namePainters.add(nameTp);
+      if (nameTp.width > maxNameWidth) maxNameWidth = nameTp.width;
+
+      final valTp = TextPainter(
+        text: TextSpan(
+          text: entry.value,
+          style: const TextStyle(
+            color: Color(0xFFFFFFFF),
+            fontSize: 10.0,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+        textDirection: TextDirection.ltr,
+      );
+      valTp.layout();
+      valuePainters.add(valTp);
+      if (valTp.width > maxValueWidth) maxValueWidth = valTp.width;
+    }
+
+    final tooltipWidth = tooltipPadding * 2 + swatchSize + spacing +
+        maxNameWidth + spacing * 2 + maxValueWidth;
+    final tooltipHeight = tooltipPadding * 2 +
+        tooltipEntries.length * lineHeight - (lineHeight - 12);
+
+    // Position tooltip near cursor, flip left/right based on space
+    final bool flipRight = pos.dx + tooltipWidth + 16 > _plotArea.right;
+    final tooltipX = flipRight
+        ? pos.dx - tooltipWidth - 12
+        : pos.dx + 12;
+    final tooltipY = (pos.dy - tooltipHeight / 2)
+        .clamp(_plotArea.top, _plotArea.bottom - tooltipHeight);
+
+    final tooltipRect = Rect.fromLTWH(tooltipX, tooltipY, tooltipWidth, tooltipHeight);
+
+    // Background
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(tooltipRect, const Radius.circular(4)),
+      Paint()..color = const Color(0xE6141428),
+    );
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(tooltipRect, const Radius.circular(4)),
+      Paint()
+        ..color = const Color(0xFF555577)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 0.5,
+    );
+
+    // Draw entries
+    for (int i = 0; i < tooltipEntries.length; i++) {
+      final entry = tooltipEntries[i];
+      final rowY = tooltipY + tooltipPadding + i * lineHeight;
+
+      // Color swatch
+      canvas.drawRect(
+        Rect.fromLTWH(tooltipX + tooltipPadding, rowY + 1, swatchSize, swatchSize),
+        Paint()..color = entry.color,
+      );
+
+      // Name
+      namePainters[i].paint(canvas,
+          Offset(tooltipX + tooltipPadding + swatchSize + spacing, rowY));
+
+      // Value (right-aligned within its column)
+      final valueX = tooltipX + tooltipPadding + swatchSize + spacing +
+          maxNameWidth + spacing * 2;
+      valuePainters[i].paint(canvas, Offset(valueX, rowY));
+    }
+  }
+
   void _drawXAxis(Canvas canvas, Size size) {
     final axisPaint = Paint()
       ..color = xAxis?.axisLineColor ?? const Color(0xFFAAAAAA)
@@ -949,7 +1701,9 @@ class ChartPainter extends CustomPainter {
         tickPaint,
       );
 
-      final label = xIsLog ? _formatLogNumber(tick, xLogBase) : _formatNumber(tick);
+      final label = xIsLog
+          ? _formatLogNumber(tick, xLogBase, labelFormat: xAxis?.labelFormat)
+          : _formatNumber(tick, labelFormat: xAxis?.labelFormat);
       final textSpan = TextSpan(text: label, style: textStyle);
       final textPainter = TextPainter(
         text: textSpan,
@@ -1056,7 +1810,9 @@ class ChartPainter extends CustomPainter {
         tickPaint,
       );
 
-      final label = yIsLog ? _formatLogNumber(tick, yLogBase) : _formatNumber(tick);
+      final label = yIsLog
+          ? _formatLogNumber(tick, yLogBase, labelFormat: yAxis?.labelFormat)
+          : _formatNumber(tick, labelFormat: yAxis?.labelFormat);
       final textSpan = TextSpan(text: label, style: textStyle);
       final textPainter = TextPainter(
         text: textSpan,
@@ -1091,7 +1847,42 @@ class ChartPainter extends CustomPainter {
     }
   }
 
-  String _formatNumber(double value) {
+  /// Try to apply a Python-style format string like "{:.2f}", "{:.3e}", "{:.4g}", "{:.1%}".
+  /// Returns null if format is unrecognized (caller should fall back to default).
+  static String? _applyLabelFormat(double value, String? format) {
+    if (format == null || format.isEmpty) return null;
+
+    // Match Python format specs: {:.Nf}, {:.Ne}, {:.Ng}, {:.N%}
+    final match = RegExp(r'^\{:\.(\d+)([fFeEgG%])\}$').firstMatch(format);
+    if (match == null) return null;
+
+    final int precision = int.parse(match.group(1)!);
+    final String specifier = match.group(2)!.toLowerCase();
+
+    switch (specifier) {
+      case 'f':
+        return value.toStringAsFixed(precision);
+      case 'e':
+        return value.toStringAsExponential(precision);
+      case 'g':
+        // 'g' uses exponential if exponent < -4 or >= precision, else fixed
+        if (value == 0) return value.toStringAsFixed(0);
+        final exp = (math.log(value.abs()) / math.ln10).floor();
+        if (exp < -4 || exp >= precision) {
+          return value.toStringAsExponential(precision - 1);
+        }
+        return value.toStringAsPrecision(precision);
+      case '%':
+        return '${(value * 100).toStringAsFixed(precision)}%';
+      default:
+        return null;
+    }
+  }
+
+  String _formatNumber(double value, {String? labelFormat}) {
+    final formatted = _applyLabelFormat(value, labelFormat);
+    if (formatted != null) return formatted;
+
     if (value.abs() >= 1000000) {
       return '${(value / 1000000).toStringAsFixed(1)}M';
     } else if (value.abs() >= 1000) {
@@ -1101,7 +1892,10 @@ class ChartPainter extends CustomPainter {
     }
   }
 
-  String _formatLogNumber(double value, double base) {
+  String _formatLogNumber(double value, double base, {String? labelFormat}) {
+    final formatted = _applyLabelFormat(value, labelFormat);
+    if (formatted != null) return formatted;
+
     if (value <= 0) return '0';
     // SciChart-style format: "Nx10^P" — e.g., "1x10²", "3x10²"
     final logBase = math.log(base);
@@ -1153,7 +1947,21 @@ class ChartPainter extends CustomPainter {
         oldDelegate.showMajorGridLines != showMajorGridLines ||
         oldDelegate.showMinorGridLines != showMinorGridLines ||
         oldDelegate.majorGridLineColor != majorGridLineColor ||
-        oldDelegate.minorGridLineColor != minorGridLineColor;
+        oldDelegate.minorGridLineColor != minorGridLineColor ||
+        !_setEquals(oldDelegate.hiddenSeriesIndices, hiddenSeriesIndices) ||
+        oldDelegate.hoverPosition != hoverPosition ||
+        oldDelegate.rubberBandRect != rubberBandRect ||
+        oldDelegate.annotations != annotations ||
+        oldDelegate.canUndo != canUndo ||
+        oldDelegate.canRedo != canRedo;
+  }
+
+  static bool _setEquals<T>(Set<T> a, Set<T> b) {
+    if (a.length != b.length) return false;
+    for (final item in a) {
+      if (!b.contains(item)) return false;
+    }
+    return true;
   }
 }
 
@@ -1172,4 +1980,13 @@ class _VisibleData {
     required this.indices,
     required this.drawCount,
   });
+}
+
+/// Helper for crosshair tooltip entries.
+class _TooltipEntry {
+  final Color color;
+  final String name;
+  final String value;
+
+  _TooltipEntry({required this.color, required this.name, required this.value});
 }

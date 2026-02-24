@@ -65,6 +65,7 @@ class DataPoints {
 class SeriesModel {
   final String type; // "fast_line", "scatter", "mountain"
   final String? seriesId;
+  final String? seriesName;
   final DataPoints? data;
   final Color strokeColor;
   final double strokeThickness;
@@ -85,6 +86,7 @@ class SeriesModel {
   SeriesModel({
     required this.type,
     this.seriesId,
+    this.seriesName,
     this.data,
     this.strokeColor = const Color(0xFF4083FF),
     this.strokeThickness = 2.0,
@@ -115,6 +117,7 @@ class SeriesModel {
     return SeriesModel(
       type: json['type'] ?? 'fast_line',
       seriesId: json['series_id'],
+      seriesName: json['series_name'] ?? json['series_id'],
       data: dataPoints,
       strokeColor: _parseColor(json['stroke_color'], const Color(0xFF4083FF)),
       strokeThickness: (json['stroke_thickness'] ?? 2.0).toDouble(),
@@ -136,6 +139,11 @@ class SeriesModel {
           : null,
       zeroLineY: (json['zero_line_y'] ?? 0.0).toDouble(),
     );
+  }
+
+  /// Public color parser for use by annotation rendering.
+  static Color parseColorStatic(String? colorStr, Color defaultColor) {
+    return _parseColor(colorStr, defaultColor);
   }
 
   static Color _parseColor(String? colorStr, Color? defaultColor) {

@@ -32,6 +32,7 @@ class _SuperPlotControlState extends State<SuperPlotControl> {
   AxisModel? _xAxis;
   AxisModel? _yAxis;
   List<SeriesModel> _series = [];
+  List<Map<String, dynamic>> _annotations = [];
   bool _versionSent = false;
   
   // Chart styling from control
@@ -83,6 +84,19 @@ class _SuperPlotControlState extends State<SuperPlotControl> {
       } catch (e) {
         debugPrint('[SuperPlot] ERROR parsing series: $e');
       }
+    }
+
+    // Parse annotations
+    final annotationsJson = widget.control.getString("annotations");
+    if (annotationsJson != null && annotationsJson.isNotEmpty) {
+      try {
+        final annList = jsonDecode(annotationsJson) as List;
+        _annotations = annList.cast<Map<String, dynamic>>();
+      } catch (e) {
+        debugPrint('[SuperPlot] ERROR parsing annotations: $e');
+      }
+    } else {
+      _annotations = [];
     }
 
     // Parse styling
@@ -143,6 +157,7 @@ class _SuperPlotControlState extends State<SuperPlotControl> {
           showMinorGridLines: _showMinorGridLines,
           majorGridLineColor: _majorGridLineColor,
           minorGridLineColor: _minorGridLineColor,
+          annotations: _annotations,
         ),
       ),
     );

@@ -60,12 +60,16 @@ class FastLineSeries:
     
     # Series ID for referencing
     series_id: Optional[str] = None
-    
+
+    # Display name for legend
+    series_name: Optional[str] = None
+
     def to_dict(self) -> Dict[str, Any]:
         """Serialize to dictionary for JSON encoding."""
         return {
             "type": "fast_line",
             "series_id": self.series_id,
+            "series_name": self.series_name,
             "data": self.data_series.to_dict() if self.data_series else None,
             "stroke_color": self.stroke_color,
             "stroke_thickness": self.stroke_thickness,
@@ -107,12 +111,16 @@ class XyScatterSeries:
     
     # Series ID
     series_id: Optional[str] = None
-    
+
+    # Display name for legend
+    series_name: Optional[str] = None
+
     def to_dict(self) -> Dict[str, Any]:
         """Serialize to dictionary for JSON encoding."""
         return {
             "type": "scatter",
             "series_id": self.series_id,
+            "series_name": self.series_name,
             "data": self.data_series.to_dict() if self.data_series else None,
             "point_color": self.point_color,
             "point_size": self.point_size,
@@ -156,12 +164,16 @@ class FastMountainSeries:
     is_visible: bool = True
     
     series_id: Optional[str] = None
-    
+
+    # Display name for legend
+    series_name: Optional[str] = None
+
     def to_dict(self) -> Dict[str, Any]:
         """Serialize to dictionary for JSON encoding."""
         return {
             "type": "mountain",
             "series_id": self.series_id,
+            "series_name": self.series_name,
             "data": self.data_series.to_dict() if self.data_series else None,
             "stroke_color": self.stroke_color,
             "stroke_thickness": self.stroke_thickness,

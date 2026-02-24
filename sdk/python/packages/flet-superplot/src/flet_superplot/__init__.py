@@ -14,6 +14,7 @@ from .series import (
     PointMarkerType,
 )
 from .data import XyDataSeries, OhlcDataSeries
+from .annotations import HorizontalLine, VerticalLine, TextAnnotation, BoxAnnotation
 
 __all__ = [
     # Main control
@@ -35,4 +36,9 @@ __all__ = [
     # Data
     "XyDataSeries",
     "OhlcDataSeries",
+    # Annotations
+    "HorizontalLine",
+    "VerticalLine",
+    "TextAnnotation",
+    "BoxAnnotation",
 ]
