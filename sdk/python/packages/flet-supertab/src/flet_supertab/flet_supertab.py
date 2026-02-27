@@ -17,6 +17,8 @@ class SuperTab(ft.LayoutControl):
     columns: Optional[str] = field(default=None, metadata={"data_field": "columns"})
     # JSON-encoded rows
     rows: Optional[str] = field(default=None, metadata={"data_field": "rows"})
+    # JSON-encoded raw (unformatted) rows for cell editing
+    raw_rows: Optional[str] = field(default=None, metadata={"data_field": "raw_rows"})
     # Enable inline editing
     editable: bool = False
 
@@ -58,6 +60,9 @@ class SuperTab(ft.LayoutControl):
     grid_line_width: float = field(default=1.0, metadata={"data_field": "grid_line_width"})
     current_cell_border_width: float = field(default=2.0, metadata={"data_field": "current_cell_border_width"})
 
+    # Error message to display as a banner above the grid
+    error_message: str = field(default="", metadata={"data_field": "error_message"})
+
     # Event: called when a cell is edited
     # Event data (in e.data as JSON): {"row_index": int, "column_name": str, "old_value": str, "new_value": str}
     on_cell_edit: Optional[ft.ControlEventHandler["SuperTab"]] = None
@@ -83,6 +88,9 @@ class SuperTab(ft.LayoutControl):
     def set_rows(self, rows: list[list[Any]]):
         self._rows_data = rows
         self.rows = json.dumps(rows)
+
+    def set_raw_rows(self, raw_rows: list[list[Any]]):
+        self.raw_rows = json.dumps(raw_rows)
 
     def set_data(self, columns: list[dict[str, Any]], rows: list[list[Any]]):
         """Convenience: set both columns and rows, then update."""

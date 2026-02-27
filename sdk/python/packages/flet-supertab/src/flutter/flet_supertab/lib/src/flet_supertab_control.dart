@@ -23,6 +23,7 @@ class _SuperTabControlState extends State<SuperTabControl> {
   late FletDataGridSource _source;
   List<dynamic> _cols = [];
   List<List<Object?>> _dataRows = [];
+  List<List<Object?>> _rawRows = [];
   List<String> _columnNames = [];
 
   /// Tracks user-resized column widths (columnName → width).
@@ -56,6 +57,13 @@ class _SuperTabControlState extends State<SuperTabControl> {
     _dataRows = (rows as List)
         .map<List<Object?>>((r) => (r as List).cast<Object?>())
         .toList();
+
+    final rawRowsJson = widget.control.getString("raw_rows");
+    _rawRows = rawRowsJson != null && rawRowsJson.isNotEmpty
+        ? (jsonDecode(rawRowsJson) as List)
+              .map<List<Object?>>((r) => (r as List).cast<Object?>())
+              .toList()
+        : [];
   }
 
   /// Build the data source. [context] is used for Flet color name resolution;
@@ -72,6 +80,7 @@ class _SuperTabControlState extends State<SuperTabControl> {
 
     _source = FletDataGridSource(
       rows: _dataRows,
+      rawRows: _rawRows,
       columnNames: _columnNames,
       columnDefs: _cols,
       onCellEdit: _handleCellEdit,
@@ -245,7 +254,30 @@ class _SuperTabControlState extends State<SuperTabControl> {
       child: grid,
     );
 
-    return ConstrainedControl(control: widget.control, child: themed);
+    final errorMessage = widget.control.getString("error_message") ?? "";
+    final child = errorMessage.isNotEmpty
+        ? Column(children: [
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              color: Colors.red.shade900,
+              child: Row(children: [
+                Icon(Icons.error_outline, color: Colors.red.shade200, size: 16),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    errorMessage,
+                    style: TextStyle(color: Colors.red.shade200, fontSize: 12),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ]),
+            ),
+            Expanded(child: themed),
+          ])
+        : themed;
+
+    return ConstrainedControl(control: widget.control, child: child);
   }
 
   GridColumn _buildRowNumberColumn(Color headerBgColor, Color headerTextColor, double fontSize, String? fontFamily) {

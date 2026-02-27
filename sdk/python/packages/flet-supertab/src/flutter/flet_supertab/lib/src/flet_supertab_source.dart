@@ -7,6 +7,7 @@ typedef CellEditCallback = void Function(
 class FletDataGridSource extends DataGridSource {
   FletDataGridSource({
     required List<List<Object?>> rows,
+    List<List<Object?>>? rawRows,
     required List<String> columnNames,
     List<dynamic>? columnDefs,
     this.onCellEdit,
@@ -19,7 +20,8 @@ class FletDataGridSource extends DataGridSource {
     this.cellPaddingHorizontal = 12.0,
     this.cellPaddingVertical = 4.0,
   })  : _columnNames = columnNames,
-        _columnDefs = columnDefs ?? [] {
+        _columnDefs = columnDefs ?? [],
+        _rawRows = rawRows ?? [] {
     _dataRows = rows;
     _buildColumnTypes();
     _buildDataGridRows();
@@ -28,6 +30,7 @@ class FletDataGridSource extends DataGridSource {
   final List<String> _columnNames;
   final List<dynamic> _columnDefs;
   List<List<Object?>> _dataRows = [];
+  final List<List<Object?>> _rawRows;
   List<DataGridRow> _rows = [];
 
   /// Per-column type hints: "int", "float", "bool", "str"
@@ -267,11 +270,23 @@ class FletDataGridSource extends DataGridSource {
 
     final isNumeric = _isNumericColumn(column.columnName);
 
-    _newCellValue = displayValue;
-    _editingController.text = displayValue;
+    // Use raw (unformatted) value for editing when available
+    final rowIndex = rowColumnIndex.rowIndex;
+    final colIndex = _columnNames.indexOf(column.columnName);
+    String editValue;
+    if (colIndex >= 0 && rowIndex >= 0 && rowIndex < _rawRows.length &&
+        colIndex < _rawRows[rowIndex].length &&
+        _rawRows[rowIndex][colIndex] != null) {
+      editValue = _rawRows[rowIndex][colIndex].toString();
+    } else {
+      editValue = displayValue;
+    }
+
+    _newCellValue = editValue;
+    _editingController.text = editValue;
     _editingController.selection = TextSelection(
       baseOffset: 0,
-      extentOffset: displayValue.length,
+      extentOffset: editValue.length,
     );
 
     return Container(
