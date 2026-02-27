@@ -3,6 +3,8 @@ import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
+import 'package:flet_micropython/src/micropython_service.dart'
+    if (dart.library.io) 'package:flet_micropython/src/micropython_service_native.dart';
 
 import '../models/axis_model.dart';
 import '../models/series_model.dart';
@@ -1524,11 +1526,11 @@ class ChartPainter extends CustomPainter {
           ..strokeWidth = 1.0,
       );
 
-      final yLabel = yIsLog
-          ? _formatLogNumber(yValues[idx], yAxis?.logarithmicBase ?? 10.0,
-              labelFormat: yAxis?.labelFormat)
-          : _formatNumber(yValues[idx], labelFormat: yAxis?.labelFormat);
       final name = s.seriesName ?? s.seriesId ?? 'Series ${i + 1}';
+      final yLabel = _formatTooltipValue(
+          yValues[idx], xValues[idx], s.tooltipFormat,
+          yAxis?.labelFormat, yIsLog, yAxis?.logarithmicBase ?? 10.0,
+          seriesName: name, seriesIndex: i);
       tooltipEntries.add(_TooltipEntry(
         color: s.strokeColor,
         name: name,
@@ -1847,36 +1849,224 @@ class ChartPainter extends CustomPainter {
     }
   }
 
+  /// Format a tooltip value using per-series tooltipFormat, falling back to axis labelFormat.
+  ///
+  /// Format a tooltip value. Tries MicroPython f-string evaluation first,
+  /// falls back to Dart regex parser, then to axis label format.
+  ///
+  /// tooltipFormat can be:
+  ///   - Legacy placeholder: "{y:.2f}", "{y:,.0f}", "{x:.1f} / {y:.2f}"
+  ///   - Python f-string:   f"{y:.1f}°C ({y * 9/5 + 32:.1f}°F)"
+  /// Context variables: x, y, series_name, series_index
+  String _formatTooltipValue(double yValue, double xValue, String? tooltipFormat,
+      String? axisLabelFormat, bool yIsLog, double logBase,
+      {String? seriesName, int seriesIndex = 0}) {
+    if (tooltipFormat != null && tooltipFormat.isNotEmpty) {
+      // Try MicroPython f-string evaluation first
+      final mpResult = _formatViaMicroPython(
+          tooltipFormat, yValue, xValue, seriesName, seriesIndex);
+      if (mpResult != null) return mpResult;
+
+      // Fall back to Dart regex formatter
+      final result = _applyTooltipTemplate(tooltipFormat, yValue, xValue);
+      if (result != null) return result;
+    }
+    // Fall back to axis label format
+    return yIsLog
+        ? _formatLogNumber(yValue, logBase, labelFormat: axisLabelFormat)
+        : _formatNumber(yValue, labelFormat: axisLabelFormat);
+  }
+
+  /// Cache for MicroPython format results to avoid redundant evals
+  /// when hovering over the same data point across consecutive frames.
+  static final Map<String, String> _fmtCache = {};
+
+  /// Attempt to format a tooltip value via MicroPython f-string evaluation.
+  /// Returns null if MicroPython is not available or eval fails (caller
+  /// should fall back to the Dart regex formatter).
+  /// Regex to rewrite {:,.Nf} specs to cfmt() calls since MicroPython
+  /// doesn't support the comma thousands separator in format specs.
+  /// Matches: {expr:,.Nf} and rewrites to {cfmt(expr, N)}
+  static final _commaFmtPattern = RegExp(r'\{([^}]*?):\s*,\.(\d+)f\}');
+
+  static String? _formatViaMicroPython(
+      String tooltipFormat, double yValue, double xValue,
+      String? seriesName, int seriesIndex) {
+    if (!MicroPythonService.isReady) return null;
+
+    // Normalize format string to a Python f-string expression.
+    // Legacy "{y:.2f}" becomes f"{y:.2f}" which is valid Python.
+    String fStringCode;
+    if (tooltipFormat.startsWith('f"') || tooltipFormat.startsWith("f'")) {
+      fStringCode = tooltipFormat;
+    } else {
+      fStringCode = 'f"$tooltipFormat"';
+    }
+
+    // Rewrite {:,.Nf} to {cfmt(expr, N)} for MicroPython compatibility.
+    // e.g. f"{y+100:,.2f}" -> f"{cfmt(y+100, 2)}"
+    fStringCode = fStringCode.replaceAllMapped(_commaFmtPattern,
+        (m) => '{cfmt(${m.group(1)}, ${m.group(2)})}');
+
+    // Check cache — same format + same data point = same result
+    final cacheKey = '$fStringCode|$xValue|$yValue|$seriesIndex';
+    final cached = _fmtCache[cacheKey];
+    if (cached != null) return cached;
+
+    try {
+      final context = <String, dynamic>{
+        'x': xValue,
+        'y': yValue,
+        'series_name': seriesName ?? '',
+        'series_index': seriesIndex,
+      };
+
+      final result = MicroPythonService.fmt(fStringCode, context);
+      if (result != null) {
+        // Keep cache small — clear when it grows beyond a paint cycle's worth
+        if (_fmtCache.length > 50) _fmtCache.clear();
+        _fmtCache[cacheKey] = result;
+        return result;
+      }
+    } catch (_) {
+      // Silently fall through to Dart formatter
+    }
+    return null;
+  }
+
+  /// Apply a tooltip template string with {y...} and {x...} placeholders.
+  /// Returns null if the template can't be parsed.
+  static String? _applyTooltipTemplate(String template, double yValue, double xValue) {
+    // Match all {y...} and {x...} placeholders
+    final pattern = RegExp(r'\{([xy])(?::([^}]*))?\}');
+    if (!pattern.hasMatch(template)) return null;
+
+    return template.replaceAllMapped(pattern, (m) {
+      final axis = m.group(1)!;
+      final spec = m.group(2); // format spec after the colon, e.g. ",.2f"
+      final value = axis == 'y' ? yValue : xValue;
+      if (spec == null || spec.isEmpty) {
+        return value.toStringAsFixed(1);
+      }
+      return _applyFormatSpec(value, spec) ?? value.toString();
+    });
+  }
+
+  /// Apply a Python-style format spec like ".2f", ",.2f", ".1%", ".3e", ".4g".
+  static String? _applyFormatSpec(double value, String spec) {
+    // Parse optional comma flag and format spec: [,][.N][type]
+    final match = RegExp(r'^(,?)\.(\d+)([fFeEgG%])$').firstMatch(spec);
+    if (match == null) return null;
+
+    final bool useCommas = match.group(1) == ',';
+    final int precision = int.parse(match.group(2)!);
+    final String specifier = match.group(3)!.toLowerCase();
+
+    String result;
+    switch (specifier) {
+      case 'f':
+        result = value.toStringAsFixed(precision);
+        break;
+      case 'e':
+        result = value.toStringAsExponential(precision);
+        break;
+      case 'g':
+        if (value == 0) {
+          result = value.toStringAsFixed(0);
+        } else {
+          final exp = (math.log(value.abs()) / math.ln10).floor();
+          if (exp < -4 || exp >= precision) {
+            result = value.toStringAsExponential(precision - 1);
+          } else {
+            result = value.toStringAsPrecision(precision);
+          }
+        }
+        break;
+      case '%':
+        result = '${(value * 100).toStringAsFixed(precision)}%';
+        break;
+      default:
+        return null;
+    }
+
+    if (useCommas && specifier != '%') {
+      result = _addThousandsSeparator(result);
+    } else if (useCommas && specifier == '%') {
+      // Apply commas to the numeric part before the %
+      final numPart = result.substring(0, result.length - 1);
+      result = '${_addThousandsSeparator(numPart)}%';
+    }
+    return result;
+  }
+
+  /// Add thousands separators (commas) to the integer part of a number string.
+  static String _addThousandsSeparator(String numStr) {
+    final isNegative = numStr.startsWith('-');
+    if (isNegative) numStr = numStr.substring(1);
+
+    final parts = numStr.split('.');
+    final intPart = parts[0];
+    final decPart = parts.length > 1 ? '.${parts[1]}' : '';
+
+    // Insert commas every 3 digits from the right
+    final buf = StringBuffer();
+    for (int i = 0; i < intPart.length; i++) {
+      if (i > 0 && (intPart.length - i) % 3 == 0) buf.write(',');
+      buf.write(intPart[i]);
+    }
+
+    return '${isNegative ? '-' : ''}$buf$decPart';
+  }
+
   /// Try to apply a Python-style format string like "{:.2f}", "{:.3e}", "{:.4g}", "{:.1%}".
+  /// Also supports comma separator: "{:,.2f}".
   /// Returns null if format is unrecognized (caller should fall back to default).
   static String? _applyLabelFormat(double value, String? format) {
     if (format == null || format.isEmpty) return null;
 
-    // Match Python format specs: {:.Nf}, {:.Ne}, {:.Ng}, {:.N%}
-    final match = RegExp(r'^\{:\.(\d+)([fFeEgG%])\}$').firstMatch(format);
+    // Match Python format specs: {:,.Nf}, {:.Nf}, {:.Ne}, {:.Ng}, {:.N%}
+    final match = RegExp(r'^\{:(,?)\.(\d+)([fFeEgG%])\}$').firstMatch(format);
     if (match == null) return null;
 
-    final int precision = int.parse(match.group(1)!);
-    final String specifier = match.group(2)!.toLowerCase();
+    final bool useCommas = match.group(1) == ',';
+    final int precision = int.parse(match.group(2)!);
+    final String specifier = match.group(3)!.toLowerCase();
 
+    String result;
     switch (specifier) {
       case 'f':
-        return value.toStringAsFixed(precision);
+        result = value.toStringAsFixed(precision);
+        break;
       case 'e':
-        return value.toStringAsExponential(precision);
+        result = value.toStringAsExponential(precision);
+        break;
       case 'g':
         // 'g' uses exponential if exponent < -4 or >= precision, else fixed
-        if (value == 0) return value.toStringAsFixed(0);
-        final exp = (math.log(value.abs()) / math.ln10).floor();
-        if (exp < -4 || exp >= precision) {
-          return value.toStringAsExponential(precision - 1);
+        if (value == 0) {
+          result = value.toStringAsFixed(0);
+        } else {
+          final exp = (math.log(value.abs()) / math.ln10).floor();
+          if (exp < -4 || exp >= precision) {
+            result = value.toStringAsExponential(precision - 1);
+          } else {
+            result = value.toStringAsPrecision(precision);
+          }
         }
-        return value.toStringAsPrecision(precision);
+        break;
       case '%':
-        return '${(value * 100).toStringAsFixed(precision)}%';
+        result = '${(value * 100).toStringAsFixed(precision)}%';
+        break;
       default:
         return null;
     }
+
+    if (useCommas && specifier != '%') {
+      result = _addThousandsSeparator(result);
+    } else if (useCommas && specifier == '%') {
+      final numPart = result.substring(0, result.length - 1);
+      result = '${_addThousandsSeparator(numPart)}%';
+    }
+    return result;
   }
 
   String _formatNumber(double value, {String? labelFormat}) {

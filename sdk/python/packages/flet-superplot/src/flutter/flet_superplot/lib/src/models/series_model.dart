@@ -77,6 +77,9 @@ class SeriesModel {
   final double opacity;
   final bool isVisible;
   
+  // Per-series tooltip format string (e.g. "${y:,.2f}", "{y:.1%}")
+  final String? tooltipFormat;
+
   // For mountain/area series
   final Color? fillColor;
   final Color? gradientStartColor;
@@ -97,6 +100,7 @@ class SeriesModel {
     this.pointMarkerColor = const Color(0xFF4083FF),
     this.opacity = 1.0,
     this.isVisible = true,
+    this.tooltipFormat,
     this.fillColor,
     this.gradientStartColor,
     this.gradientEndColor,
@@ -130,6 +134,7 @@ class SeriesModel {
           const Color(0xFF4083FF)),
       opacity: (json['opacity'] ?? 1.0).toDouble(),
       isVisible: json['is_visible'] ?? true,
+      tooltipFormat: json['tooltip_format'],
       fillColor: json['fill_color'] != null ? _parseColor(json['fill_color'], null) : null,
       gradientStartColor: json['gradient_start_color'] != null
           ? _parseColor(json['gradient_start_color'], null)

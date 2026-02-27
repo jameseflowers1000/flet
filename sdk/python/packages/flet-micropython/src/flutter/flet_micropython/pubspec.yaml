@@ -1,0 +1,17 @@
+name: flet_micropython
+description: MicroPython WASM runtime for client-side Python evaluation
+version: 0.1.0
+publish_to: none
+
+environment:
+  sdk: '>=3.3.0 <4.0.0'
+  flutter: ">=1.17.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  ffi: ^2.1.0
+
+  flet:
+    path: ../../../../../../../packages/flet

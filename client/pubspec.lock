@@ -333,7 +333,7 @@ packages:
       path: "../sdk/python/packages/flet-agentview/src/flutter/flet_agentview"
       relative: true
     source: path
-    version: "0.1.0"
+    version: "0.2.0"
   flet_audio:
     dependency: "direct main"
     description:
@@ -387,6 +387,13 @@ packages:
     dependency: "direct main"
     description:
       path: "../sdk/python/packages/flet-map/src/flutter/flet_map"
+      relative: true
+    source: path
+    version: "0.1.0"
+  flet_micropython:
+    dependency: "direct main"
+    description:
+      path: "../sdk/python/packages/flet-micropython/src/flutter/flet_micropython"
       relative: true
     source: path
     version: "0.1.0"
@@ -1471,14 +1478,6 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "0.3.1"
-  syncfusion_flutter_chat:
-    dependency: transitive
-    description:
-      name: syncfusion_flutter_chat
-      sha256: e992af7dbe753f182b0b89646f098c3431e116129e07b4d0ae762f202ccd5816
-      url: "https://pub.dev"
-    source: hosted
-    version: "32.2.3"
   syncfusion_flutter_core:
     dependency: "direct main"
     description:

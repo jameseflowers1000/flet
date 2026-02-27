@@ -64,12 +64,19 @@ class FastLineSeries:
     # Display name for legend
     series_name: Optional[str] = None
 
+    # Per-series tooltip format. Evaluated client-side via MicroPython.
+    # Legacy placeholders: "{y:.2f}", "{y:,.0f}", "{x:.1f} / {y:.2f}"
+    # Python f-strings:    'f"{y:.1f}°C ({y * 9/5 + 32:.1f}°F)"'
+    # Context variables:   x, y, series_name, series_index
+    tooltip_format: Optional[str] = None
+
     def to_dict(self) -> Dict[str, Any]:
         """Serialize to dictionary for JSON encoding."""
         return {
             "type": "fast_line",
             "series_id": self.series_id,
             "series_name": self.series_name,
+            "tooltip_format": self.tooltip_format,
             "data": self.data_series.to_dict() if self.data_series else None,
             "stroke_color": self.stroke_color,
             "stroke_thickness": self.stroke_thickness,
@@ -115,12 +122,19 @@ class XyScatterSeries:
     # Display name for legend
     series_name: Optional[str] = None
 
+    # Per-series tooltip format. Evaluated client-side via MicroPython.
+    # Legacy placeholders: "{y:.2f}", "{y:,.0f}"
+    # Python f-strings:    'f"{y:.1f} units"'
+    # Context variables:   x, y, series_name, series_index
+    tooltip_format: Optional[str] = None
+
     def to_dict(self) -> Dict[str, Any]:
         """Serialize to dictionary for JSON encoding."""
         return {
             "type": "scatter",
             "series_id": self.series_id,
             "series_name": self.series_name,
+            "tooltip_format": self.tooltip_format,
             "data": self.data_series.to_dict() if self.data_series else None,
             "point_color": self.point_color,
             "point_size": self.point_size,
@@ -168,12 +182,19 @@ class FastMountainSeries:
     # Display name for legend
     series_name: Optional[str] = None
 
+    # Per-series tooltip format. Evaluated client-side via MicroPython.
+    # Legacy placeholders: "{y:.2f}", "{y:,.0f}"
+    # Python f-strings:    'f"{y:.1f} units"'
+    # Context variables:   x, y, series_name, series_index
+    tooltip_format: Optional[str] = None
+
     def to_dict(self) -> Dict[str, Any]:
         """Serialize to dictionary for JSON encoding."""
         return {
             "type": "mountain",
             "series_id": self.series_id,
             "series_name": self.series_name,
+            "tooltip_format": self.tooltip_format,
             "data": self.data_series.to_dict() if self.data_series else None,
             "stroke_color": self.stroke_color,
             "stroke_thickness": self.stroke_thickness,

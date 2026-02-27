@@ -91,6 +91,9 @@ dependencies:
   flet_terminal:
     path: ../sdk/python/packages/flet-terminal/src/flutter/flet_terminal
 
+  flet_micropython:
+    path: ../sdk/python/packages/flet-micropython/src/flutter/flet_micropython
+
   cupertino_icons:
   syncfusion_flutter_core: any
   wakelock_plus: ^1.4.0
