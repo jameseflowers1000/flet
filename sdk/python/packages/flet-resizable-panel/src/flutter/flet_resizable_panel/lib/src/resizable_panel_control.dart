@@ -71,6 +71,19 @@ class _ResizablePanelControlState extends State<ResizablePanelControl>
           debugPrint('[ResizablePanel] ERROR parsing initial_sizes: $e');
         }
       }
+      // Invalidate stale drag/hover indices after flex values change
+      _sanitizeIndices();
+    }
+  }
+
+  /// Clear drag/hover indices that are no longer valid for current flex count.
+  void _sanitizeIndices() {
+    final maxDivider = _flexValues.length - 2; // divider i sits between i and i+1
+    if (_draggingIndex != null && _draggingIndex! > maxDivider) {
+      _draggingIndex = null;
+    }
+    if (_hoveredIndex != null && _hoveredIndex! > maxDivider) {
+      _hoveredIndex = null;
     }
   }
 
@@ -87,6 +100,44 @@ class _ResizablePanelControlState extends State<ResizablePanelControl>
 
   @override
   Widget build(BuildContext context) {
+    try {
+      return _buildInner(context);
+    } catch (e, st) {
+      // Surface error visually instead of red crash screen
+      final errorLine = _extractLine(st);
+      debugPrint('[ResizablePanel] build error at $errorLine: $e\n$st');
+      return ConstrainedControl(
+        control: widget.control,
+        child: Container(
+          color: const Color(0xFF1A1A2E),
+          padding: const EdgeInsets.all(12),
+          child: Text(
+            'ResizablePanel error at $errorLine:\n$e',
+            style: const TextStyle(
+              color: Color(0xFFFF6B6B),
+              fontSize: 12,
+              fontFamily: 'monospace',
+              decoration: TextDecoration.none,
+            ),
+          ),
+        ),
+      );
+    }
+  }
+
+  /// Extract "file:line" from the first frame of a StackTrace.
+  String _extractLine(StackTrace st) {
+    final firstLine = st.toString().split('\n').firstWhere(
+          (l) => l.contains('resizable_panel_control'),
+          orElse: () => st.toString().split('\n').first,
+        );
+    // Dart web traces: "at Object.xxx (file:line:col)"
+    // Dart VM traces:  "#0  Class.method (file:line:col)"
+    final match = RegExp(r'[( ]([^( ]+:\d+)[:\)]').firstMatch(firstLine);
+    return match?.group(1) ?? firstLine.trim();
+  }
+
+  Widget _buildInner(BuildContext context) {
     final isHorizontal =
         (widget.control.getString("orientation") ?? "horizontal") ==
             "horizontal";
@@ -105,6 +156,7 @@ class _ResizablePanelControlState extends State<ResizablePanelControl>
     if (_flexValues.length > children.length) {
       _flexValues = _flexValues.sublist(0, children.length);
     }
+    _sanitizeIndices();
 
     if (children.isEmpty) {
       return ConstrainedControl(
@@ -135,7 +187,7 @@ class _ResizablePanelControlState extends State<ResizablePanelControl>
               child: const ColoredBox(color: Color(0x66000000)),
             ),
           ),
-          // Size badge
+          // Size badge — adapts to available space via FittedBox
           IgnorePointer(
             child: Opacity(
               opacity: isDragging ? 1.0 : 0.0,
@@ -167,6 +219,8 @@ class _ResizablePanelControlState extends State<ResizablePanelControl>
   }
 
   Widget _buildSizeBadge(int index, bool isHorizontal, double totalFlex) {
+    if (index >= _flexValues.length) return const SizedBox.shrink();
+
     final percentage = totalFlex > 0
         ? (_flexValues[index] / totalFlex * 100).round()
         : 0;
@@ -182,11 +236,11 @@ class _ResizablePanelControlState extends State<ResizablePanelControl>
               ? '${pixelSize.round()}px  $percentage%'
               : '$percentage%';
 
-          return Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          final badge = Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
             decoration: BoxDecoration(
               color: const Color(0xDD1A1A2E),
-              borderRadius: BorderRadius.circular(6),
+              borderRadius: BorderRadius.circular(8),
               border: Border.all(
                 color: const Color(0x44FFFFFF),
                 width: 1,
@@ -194,13 +248,25 @@ class _ResizablePanelControlState extends State<ResizablePanelControl>
             ),
             child: Text(
               sizeText,
+              maxLines: 1,
+              softWrap: false,
               style: const TextStyle(
                 color: Colors.white,
-                fontSize: 12,
+                fontSize: 30,
                 fontFamily: 'monospace',
                 fontWeight: FontWeight.w500,
                 decoration: TextDecoration.none,
               ),
+            ),
+          );
+
+          // FittedBox with scaleDown renders at 30px but shrinks to fit
+          // when the panel is too narrow. Margin keeps it off the edges.
+          return Padding(
+            padding: const EdgeInsets.all(8),
+            child: FittedBox(
+              fit: BoxFit.scaleDown,
+              child: badge,
             ),
           );
         },
@@ -281,7 +347,7 @@ class _ResizablePanelControlState extends State<ResizablePanelControl>
     final t = Curves.easeOutCubic.transform(_animController.value);
 
     setState(() {
-      for (int i = 0; i < _flexValues.length; i++) {
+      for (int i = 0; i < _flexValues.length && i < start.length && i < target.length; i++) {
         _flexValues[i] = start[i] + (target[i] - start[i]) * t;
       }
     });
@@ -312,6 +378,14 @@ class _ResizablePanelControlState extends State<ResizablePanelControl>
 
   void _onDragUpdate(
       int index, DragUpdateDetails details, bool isHorizontal) {
+    // Bounds guard — flex values may have been truncated by didUpdateWidget
+    if (index < 0 || index + 1 >= _flexValues.length) {
+      debugPrint('[ResizablePanel] _onDragUpdate: index $index out of range '
+          '(flexValues.length=${_flexValues.length}), cancelling drag');
+      setState(() => _draggingIndex = null);
+      return;
+    }
+
     final RenderBox? box = context.findRenderObject() as RenderBox?;
     if (box == null) return;
 
