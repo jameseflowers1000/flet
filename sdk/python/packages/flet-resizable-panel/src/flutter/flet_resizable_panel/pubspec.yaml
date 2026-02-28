@@ -1,5 +1,5 @@
-name: flet_superplot
-description: High-performance charting control for Flet - pixel-compatible with SciChart
+name: flet_resizable_panel
+description: Client-side resizable panel splitter for Flet
 version: 0.1.0
 publish_to: none
 
@@ -13,9 +13,6 @@ dependencies:
 
   flet:
     path: ../../../../../../../packages/flet
-
-  flet_micropython:
-    path: ../../../../flet-micropython/src/flutter/flet_micropython
 
 dev_dependencies:
   flutter_test:

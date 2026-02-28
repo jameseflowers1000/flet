@@ -404,6 +404,13 @@ packages:
       relative: true
     source: path
     version: "0.1.0"
+  flet_resizable_panel:
+    dependency: "direct main"
+    description:
+      path: "../sdk/python/packages/flet-resizable-panel/src/flutter/flet_resizable_panel"
+      relative: true
+    source: path
+    version: "0.1.0"
   flet_secure_storage:
     dependency: "direct main"
     description:

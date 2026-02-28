@@ -30,6 +30,7 @@ import 'package:flet_superplot/flet_superplot.dart' as flet_superplot;
 import 'package:flet_agentview/flet_agentview.dart' as flet_agentview;
 import 'package:flet_terminal/flet_terminal.dart' as flet_terminal;
 import 'package:flet_micropython/flet_micropython.dart' as flet_micropython;
+import 'package:flet_resizable_panel/flet_resizable_panel.dart' as flet_resizable_panel;
 import 'package:syncfusion_flutter_core/core.dart';
 
 const bool isProduction = bool.fromEnvironment('dart.vm.product');
@@ -64,6 +65,7 @@ void main([List<String>? args]) async {
     flet_agentview.Extension(),
     flet_terminal.Extension(),
     flet_micropython.Extension(),
+    flet_resizable_panel.Extension(),
     flet_secure_storage.Extension(),
     // --FAT_CLIENT_START--
     // --RIVE_EXTENSION_START--

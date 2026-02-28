@@ -94,6 +94,9 @@ dependencies:
   flet_micropython:
     path: ../sdk/python/packages/flet-micropython/src/flutter/flet_micropython
 
+  flet_resizable_panel:
+    path: ../sdk/python/packages/flet-resizable-panel/src/flutter/flet_resizable_panel
+
   cupertino_icons:
   syncfusion_flutter_core: any
   wakelock_plus: ^1.4.0
