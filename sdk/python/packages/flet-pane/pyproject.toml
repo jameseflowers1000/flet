@@ -1,0 +1,33 @@
+[project]
+name = "flet-pane"
+version = "0.1.0"
+description = "Custom pane with 60fps gutter alley for Flet"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [
+    { name = "Flet contributors", email = "hello@flet.dev" }
+]
+dependencies = [
+    "flet",
+]
+
+[dependency-groups]
+dev = [
+    "flet[all]",
+    "pytest",
+    "playwright",
+]
+
+[project.urls]
+Homepage = "https://flet.dev"
+Repository = "https://github.com/flet-dev/flet"
+
+[tool.setuptools.package-data]
+"flutter.flet_pane" = ["**/*"]
+
+[tool.setuptools]
+license-files = []
+
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"

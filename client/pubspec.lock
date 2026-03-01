@@ -474,6 +474,13 @@ packages:
       relative: true
     source: path
     version: "0.1.0"
+  flet_pane:
+    dependency: "direct main"
+    description:
+      path: "../sdk/python/packages/flet-pane/src/flutter/flet_pane"
+      relative: true
+    source: path
+    version: "0.1.0"
   flet_permission_handler:
     dependency: "direct main"
     description:
