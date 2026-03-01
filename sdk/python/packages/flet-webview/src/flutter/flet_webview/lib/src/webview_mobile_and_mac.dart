@@ -14,6 +14,7 @@ class WebviewMobileAndMac extends StatefulWidget {
 
 class _WebviewMobileAndMacState extends State<WebviewMobileAndMac> {
   late WebViewController controller;
+  String _currentUrl = "";
   bool _scrollHandlerRegistered = false;
   bool _consoleHandlerRegistered = false;
   bool _alertHandlerRegistered = false;
@@ -108,12 +109,25 @@ class _WebviewMobileAndMacState extends State<WebviewMobileAndMac> {
     );
 
     // request
+    _currentUrl = widget.control.getString("url", "https://flet.dev")!;
     controller.loadRequest(
-        Uri.parse(widget.control.getString("url", "https://flet.dev")!),
+        Uri.parse(_currentUrl),
         method: parseLoadRequestMethod(
             widget.control.getString("method"), LoadRequestMethod.get)!);
 
     _setOptionalEventHandlers();
+  }
+
+  @override
+  void didUpdateWidget(covariant WebviewMobileAndMac oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final newUrl = widget.control.getString("url", "https://flet.dev")!;
+    if (newUrl != _currentUrl) {
+      _currentUrl = newUrl;
+      controller.loadRequest(Uri.parse(newUrl),
+          method: parseLoadRequestMethod(
+              widget.control.getString("method"), LoadRequestMethod.get)!);
+    }
   }
 
   Future<dynamic> _invokeMethod(String name, dynamic args) async {

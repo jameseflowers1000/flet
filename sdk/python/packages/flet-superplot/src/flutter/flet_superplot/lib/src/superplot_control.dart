@@ -145,7 +145,7 @@ class _SuperPlotControlState extends State<SuperPlotControl> {
       });
     }
     
-    return ConstrainedControl(
+    return LayoutControl(
       control: widget.control,
       child: ClipRect(
         child: InteractiveChart(

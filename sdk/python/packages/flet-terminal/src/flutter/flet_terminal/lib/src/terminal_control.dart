@@ -228,7 +228,7 @@ class _TerminalControlState extends State<TerminalControl> {
 
     print('[TerminalControl] build() called');
 
-    return ConstrainedControl(
+    return LayoutControl(
       control: widget.control,
       child: LayoutBuilder(
         builder: (context, constraints) {

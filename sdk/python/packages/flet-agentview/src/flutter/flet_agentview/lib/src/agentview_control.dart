@@ -213,7 +213,7 @@ class _AgentViewControlState extends State<AgentViewControl> {
       });
     }
 
-    return ConstrainedControl(
+    return LayoutControl(
       control: widget.control,
       child: Container(
         color: _bgColor,

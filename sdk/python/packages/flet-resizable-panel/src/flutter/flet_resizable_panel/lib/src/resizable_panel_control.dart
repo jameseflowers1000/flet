@@ -106,7 +106,7 @@ class _ResizablePanelControlState extends State<ResizablePanelControl>
       // Surface error visually instead of red crash screen
       final errorLine = _extractLine(st);
       debugPrint('[ResizablePanel] build error at $errorLine: $e\n$st');
-      return ConstrainedControl(
+      return LayoutControl(
         control: widget.control,
         child: Container(
           color: const Color(0xFF1A1A2E),
@@ -159,7 +159,7 @@ class _ResizablePanelControlState extends State<ResizablePanelControl>
     _sanitizeIndices();
 
     if (children.isEmpty) {
-      return ConstrainedControl(
+      return LayoutControl(
         control: widget.control,
         child: const SizedBox.shrink(),
       );
@@ -210,7 +210,7 @@ class _ResizablePanelControlState extends State<ResizablePanelControl>
       }
     }
 
-    return ConstrainedControl(
+    return LayoutControl(
       control: widget.control,
       child: isHorizontal
           ? Row(children: widgets)

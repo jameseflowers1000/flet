@@ -277,7 +277,7 @@ class _SuperTabControlState extends State<SuperTabControl> {
           ])
         : themed;
 
-    return ConstrainedControl(control: widget.control, child: child);
+    return LayoutControl(control: widget.control, child: child);
   }
 
   GridColumn _buildRowNumberColumn(Color headerBgColor, Color headerTextColor, double fontSize, String? fontFamily) {
