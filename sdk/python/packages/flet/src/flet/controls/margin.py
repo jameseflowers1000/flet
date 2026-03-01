@@ -43,7 +43,7 @@ class Margin:
     @classmethod
     def symmetric(cls, *, vertical: Number = 0, horizontal: Number = 0) -> "Margin":
         """
-        Applies `vertical` margin to top and bottom sides and `horizontal` margin to
+        Applies `vertical` margin to top and bottom sides and `horizontal` margin to \
         left and right sides.
         """
         return Margin(left=horizontal, top=vertical, right=horizontal, bottom=vertical)
@@ -91,3 +91,9 @@ def only(
 
 
 MarginValue = Union[Number, Margin]
+"""Type alias for margin values.
+
+Represents margin as either:
+- a single numeric value applied to all sides,
+- or an explicit [`Margin`][flet.] configuration.
+"""

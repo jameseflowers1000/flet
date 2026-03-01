@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from enum import Enum
-from typing import Optional
+from typing import Any, Optional
 
 from flet.controls.base_control import control
 from flet.controls.control_event import Event, EventHandler
@@ -18,8 +18,7 @@ __all__ = [
 
 class FilePickerFileType(Enum):
     """
-    Defines the file types that can be selected using the
-    [`FilePicker`][flet.].
+    Defines the file types that can be selected using the [`FilePicker`][flet.].
     """
 
     ANY = "any"
@@ -55,26 +54,66 @@ class FilePickerFileType(Enum):
 
 @dataclass
 class FilePickerUploadFile:
+    """
+    Upload descriptor for one file selected by [`FilePicker`][flet.].
+
+    Instances are passed to [`FilePicker.upload()`][flet.FilePicker.upload].
+    During upload, Flet resolves the selected file by [`id`][(c).] first and,
+    when `id` is absent or not found, falls back to [`name`][(c).].
+
+    At least one of [`id`][(c).] or [`name`][(c).] should be provided.
+    """
+
     upload_url: str
+    """
+    Upload destination URL.
+
+    Can be an absolute URL or a page-relative URL returned by
+    [`Page.get_upload_url()`][flet.Page.get_upload_url].
+    """
+
     method: str = "PUT"
+    """
+    HTTP method used for the upload request, usually `PUT` or `POST`.
+    """
+
     id: Optional[int] = None
+    """
+    Selected file identifier returned by
+    [`FilePicker.pick_files()`][flet.FilePicker.pick_files].
+
+    This is the preferred lookup key when both `id` and `name` are specified.
+    """
+
     name: Optional[str] = None
+    """
+    Selected file name used as fallback lookup when [`id`][(c).] is missing
+    or does not match any currently selected file.
+    """
 
 
 @dataclass
 class FilePickerFile:
     """
-    A file selected via the [`FilePicker`][flet.]
+    Metadata for a file selected via
+    [`FilePicker.pick_files()`][flet.FilePicker.pick_files].
+
+    Returned by [`FilePicker.pick_files()`][flet.FilePicker.pick_files] and
+    used as input context for [`FilePickerUploadFile`][flet.FilePickerUploadFile]
+    when uploading selected files.
     """
 
     id: int
     """
-    Unique file identifier.
+    Selection-scoped file identifier assigned by Flet.
+
+    This value is stable for the current picker selection and is preferred for
+    upload matching in [`FilePickerUploadFile`][flet.FilePickerUploadFile].
     """
 
     name: str
     """
-    File name without a path.
+    File name (basename), without directory path.
     """
 
     size: int
@@ -84,17 +123,27 @@ class FilePickerFile:
 
     path: Optional[str] = None
     """
-    Full path to a file.
+    Absolute path to the selected file, when available.
 
     Note:
-        Works for desktop and mobile only. Will be `None` in web mode.
+        - Web mode always returns `None`.
+        - On native platforms, this can still be `None` if the platform picker
+            does not expose a filesystem path.
+    """
+
+    bytes: Optional[bytes] = None
+    """
+    File contents.
+
+    Returned only when [`pick_files()`][flet.FilePicker.pick_files] is called with
+    `with_data=True`. Otherwise this value is `None`.
     """
 
 
 @dataclass
 class FilePickerUploadEvent(Event["FilePicker"]):
     """
-    Event emitted when a file is uploaded via
+    Event emitted when a file is uploaded via \
     [`FilePicker.upload()`][flet.FilePicker.upload] method.
     """
 
@@ -117,8 +166,8 @@ class FilePickerUploadEvent(Event["FilePicker"]):
 @control("FilePicker")
 class FilePicker(Service):
     """
-    A control that allows you to use the native file explorer to pick single
-    or multiple files, with extensions filtering support and upload.
+    A control that allows you to use the native file explorer to pick single or \
+    multiple files, with extensions filtering support and upload.
 
     Danger: Important
         On Linux, this control requires
@@ -205,8 +254,8 @@ class FilePicker(Service):
         src_bytes: Optional[bytes] = None,
     ) -> Optional[str]:
         """
-        Opens a save file dialog which lets the user select a file path and a file name
-        to save a file.
+        Opens a save file dialog which lets the user select a file path and a file \
+        name to save a file.
 
         Note:
             - On desktop this method only opens a dialog for the user to select
@@ -258,6 +307,7 @@ class FilePicker(Service):
         file_type: FilePickerFileType = FilePickerFileType.ANY,
         allowed_extensions: Optional[list[str]] = None,
         allow_multiple: bool = False,
+        with_data: bool = False,
     ) -> list[FilePickerFile]:
         """
         Opens a pick file dialog.
@@ -271,6 +321,8 @@ class FilePicker(Service):
             initial_directory: The initial directory where the dialog should open.
             file_type: The file types allowed to be selected.
             allow_multiple: Allow the selection of multiple files at once.
+            with_data: Read selected file contents into
+                [`bytes`][flet.FilePickerFile.].
             allowed_extensions: The allowed file extensions. Has effect only if
                 `file_type` is [`FilePickerFileType.CUSTOM`][flet.].
 
@@ -285,7 +337,14 @@ class FilePicker(Service):
                 "file_type": file_type,
                 "allowed_extensions": allowed_extensions,
                 "allow_multiple": allow_multiple,
+                "with_data": with_data,
             },
             timeout=3600,
         )
-        return [FilePickerFile(**file) for file in files]
+        return [FilePickerFile(**self._normalize_file(file)) for file in files]
+
+    def _normalize_file(self, file: dict[str, Any]) -> dict[str, Any]:
+        value = file.get("bytes")
+        if isinstance(value, list):
+            file["bytes"] = bytes(value)
+        return file

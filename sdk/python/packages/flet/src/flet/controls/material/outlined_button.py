@@ -20,9 +20,9 @@ __all__ = ["OutlinedButton"]
 @control("OutlinedButton")
 class OutlinedButton(LayoutControl, AdaptiveControl):
     """
-    Outlined buttons are medium-emphasis buttons. They contain actions that are
-    important, but aren't the primary action in an app. Outlined buttons pair well with
-    filled buttons to indicate an alternative, secondary action.
+    Outlined buttons are medium-emphasis buttons. They contain actions that are \
+    important, but aren't the primary action in an app. Outlined buttons pair well \
+    with filled buttons to indicate an alternative, secondary action.
 
     ```python
     ft.OutlinedButton(content="Outlined button")
@@ -111,4 +111,5 @@ class OutlinedButton(LayoutControl, AdaptiveControl):
             raise ValueError("at minimum, icon or a visible content must be provided")
 
     async def focus(self):
+        """Requests focus for this control."""
         await self._invoke_method("focus")

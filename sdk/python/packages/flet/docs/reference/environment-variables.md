@@ -44,6 +44,12 @@ Whether to skip running `flutter doctor` when a build fails.
 
 Defaults to `False`.
 
+### `FLET_HIDE_WINDOW_ON_START`
+
+Set to `true` to start app with the main window hidden.
+
+Defaults to `False`.
+
 ### `FLET_FORCE_WEB_SERVER`
 
 Set to `true` to force running app as a web app. Automatically set on headless Linux hosts.
@@ -109,6 +115,10 @@ A URL path after domain name to host web app under, e.g. `"/apps/myapp"`.
 
 Defaults to `"/"` - host app in the root.
 
+### `FLET_WEB_NO_CDN`
+
+Set to `true` to avoid loading CanvasKit, Pyodide, and fonts from CDNs.
+
 ### `FLET_WEBSOCKET_HANDLER_ENDPOINT`
 
 Custom path for WebSocket handler.
@@ -117,7 +127,7 @@ Defaults to `"/ws"`.
 
 ### `FLET_WEB_RENDERER`
 
-Web rendering mode: `"canvaskit"` (default), `"html"` or `"auto"`.
+Web rendering mode: `"canvaskit"` (default), `"skwasm"` or `"auto"`.
 
 ### `FLET_WEB_USE_COLOR_EMOJI`
 

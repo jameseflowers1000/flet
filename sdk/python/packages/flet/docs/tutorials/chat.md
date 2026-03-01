@@ -60,9 +60,9 @@ To implement this layout, we will be using these Flet controls:
 
 * [`Column`][flet.Column] - a container to display chat messages (`Text` controls) vertically.
 * [`Text`][flet.Text] - chat message displayed in the chat Column.
+* [`Row`][flet.Row] - a container to display `TextField` and `Button` horizontally.
 * [`TextField`][flet.TextField] - input control used for taking new message input from the user.
 * [`Button`][flet.Button] - "Send" button that will add new message to the chat Column.
-* [`Row`][flet.Row] - a container to display `TextField` and `Button` horizontally.
 
 Create `chat.py` with the following contents:
 
@@ -119,7 +119,7 @@ In the `handler` we will be adding new message (`Text`) to the list of chat `con
 Finally, you need to call `pubsub.send_all()` method when the user clicks on "Send" button:
 ```python
     def send_click(e):
-        page.pubsub.send_all(Message(user=page.session.id, text=new_message.value))
+        page.pubsub.send_all(Message(user=page.session.index, text=new_message.value))
         new_message.value = ""
         page.update()
 
@@ -201,10 +201,10 @@ Let's create `join_click` method:
 ```python
 def join_click(e):
     if not user_name.value:
-        user_name.error_text = "Name cannot be blank!"
+        user_name.error = "Name cannot be blank!"
         user_name.update()
     else:
-        page.session.set("user_name", user_name.value)
+        page.session.store.set("user_name", user_name.value)
         page.pop_dialog()
         page.pubsub.send_all(Message(user=user_name.value, text=f"{user_name.value} has joined the chat.", message_type="login_message"))
 ```
@@ -215,11 +215,11 @@ We used [page session storage](../cookbook/session-storage.md) to store user_nam
 User name dialog will close as soon as we call `page.pop_dialog()` method.
 ///
 
-Finally, let's update `send_click` method to use `user_name` that we previously saved using `page.session`:
+Finally, let's update `send_click` method to use `user_name` that we previously saved using `page.session.store`:
 
 ```python
 def send_click(e):
-    page.pubsub.send_all(Message(user=page.session.get('user_name'), text=new_message.value, message_type="chat_message"))
+    page.pubsub.send_all(Message(user=page.session.store.get('user_name'), text=new_message.value, message_type="chat_message"))
     new_message.value = ""
 ```
 
@@ -397,7 +397,7 @@ initial focus to the control. If there is more than one control on a page with `
 We set `autofocus=True` on a username TextField inside a dialog and then on a TextField for entering chat message to set initial focus on it when the dialog is closed.
 
 When a user click "Send" button or presses Enter to submit a chat message, TextField loses focus.
-To programmatically set control focus we used [`TextField.focus()`][flet.TextField.focus] method.
+To programmatically set control focus we used [`TextField.focus()`][flet.FormFieldControl.focus] method.
 
 #### Submitting forms on `Enter`
 

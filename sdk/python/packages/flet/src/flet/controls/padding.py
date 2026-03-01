@@ -49,7 +49,7 @@ class Padding:
     @classmethod
     def symmetric(cls, *, vertical: Number = 0, horizontal: Number = 0) -> "Padding":
         """
-        Applies `vertical` padding to top and bottom sides and `horizontal` padding to
+        Applies `vertical` padding to top and bottom sides and `horizontal` padding to \
         left and right sides.
         """
         return Padding(left=horizontal, top=vertical, right=horizontal, bottom=vertical)
@@ -101,3 +101,9 @@ def only(
 
 
 PaddingValue = Union[Number, Padding]
+"""Type alias for padding values.
+
+Represents padding as either:
+- a single numeric value applied to all sides,
+- or an explicit [`Padding`][flet.] configuration.
+"""

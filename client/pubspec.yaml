@@ -52,8 +52,14 @@ dependencies:
   flet_audio_recorder:
     path: ../sdk/python/packages/flet-audio-recorder/src/flutter/flet_audio_recorder
 
+  flet_camera:
+    path: ../sdk/python/packages/flet-camera/src/flutter/flet_camera
+
   flet_charts:
     path: ../sdk/python/packages/flet-charts/src/flutter/flet_charts
+
+  flet_color_pickers:
+    path: ../sdk/python/packages/flet-color-pickers/src/flutter/flet_color_pickers
 
   flet_datatable2:
     path: ../sdk/python/packages/flet-datatable2/src/flutter/flet_datatable2
@@ -79,6 +85,10 @@ dependencies:
   flet_webview:
     path: ../sdk/python/packages/flet-webview/src/flutter/flet_webview
 
+  flet_code_editor:
+    path: ../sdk/python/packages/flet-code-editor/src/flutter/flet_code_editor
+
+  # Epyx custom extensions:
   flet_supertab:
     path: ../sdk/python/packages/flet-supertab/src/flutter/flet_supertab
 
@@ -97,7 +107,7 @@ dependencies:
   flet_resizable_panel:
     path: ../sdk/python/packages/flet-resizable-panel/src/flutter/flet_resizable_panel
 
-  cupertino_icons:
+  cupertino_icons: ^1.0.6
   syncfusion_flutter_core: any
   wakelock_plus: ^1.4.0
   package_info_plus: ^9.0.0

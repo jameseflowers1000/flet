@@ -58,6 +58,7 @@ import 'controls/flet_app_control.dart';
 import 'controls/floating_action_button.dart';
 import 'controls/gesture_detector.dart';
 import 'controls/grid_view.dart';
+import 'controls/hero.dart';
 import 'controls/icon.dart';
 import 'controls/icon_button.dart';
 import 'controls/image.dart';
@@ -74,6 +75,7 @@ import 'controls/navigation_bar_destination.dart';
 import 'controls/navigation_drawer.dart';
 import 'controls/navigation_rail.dart';
 import 'controls/page.dart';
+import 'controls/page_view.dart';
 import 'controls/pagelet.dart';
 import 'controls/placeholder.dart';
 import 'controls/popup_menu_button.dart';
@@ -84,6 +86,7 @@ import 'controls/range_slider.dart';
 import 'controls/reorderable_drag_handle.dart';
 import 'controls/reorderable_list_view.dart';
 import 'controls/responsive_row.dart';
+import 'controls/rotated_box.dart';
 import 'controls/row.dart';
 import 'controls/safe_area.dart';
 import 'controls/screenshot.dart';
@@ -263,6 +266,8 @@ class FletCoreExtension extends FletExtension {
         return GestureDetectorControl(key: key, control: control);
       case "GridView":
         return GridViewControl(key: key, control: control);
+      case "Hero":
+        return HeroControl(key: key, control: control);
       case "Icon":
         return IconControl(key: key, control: control);
       case "IconButton":
@@ -300,6 +305,8 @@ class FletCoreExtension extends FletExtension {
         return PageControl(key: key, control: control);
       case "Pagelet":
         return PageletControl(key: key, control: control);
+      case "PageView":
+        return PageViewControl(key: key, control: control);
       case "Placeholder":
         return PlaceholderControl(key: key, control: control);
       case "PopupMenuButton":
@@ -320,6 +327,8 @@ class FletCoreExtension extends FletExtension {
         return ReorderableListViewControl(key: key, control: control);
       case "ResponsiveRow":
         return ResponsiveRowControl(key: key, control: control);
+      case "RotatedBox":
+        return RotatedBoxControl(key: key, control: control);
       case "Row":
         return RowControl(key: key, control: control);
       case "SafeArea":

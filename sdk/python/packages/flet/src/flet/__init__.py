@@ -1,6 +1,6 @@
 from typing import TYPE_CHECKING
 
-from flet.app import app, app_async, run, run_async
+from flet.app import AppCallable, app, app_async, run, run_async
 from flet.components.component import Component
 from flet.components.component_decorator import component
 from flet.components.hooks.use_callback import use_callback
@@ -105,6 +105,7 @@ from flet.controls.core.draggable import Draggable
 from flet.controls.core.flet_app import FletApp
 from flet.controls.core.gesture_detector import GestureDetector
 from flet.controls.core.grid_view import GridView
+from flet.controls.core.hero import Hero, HeroTag
 from flet.controls.core.icon import Icon
 from flet.controls.core.image import Image
 from flet.controls.core.interactive_viewer import InteractiveViewer
@@ -123,10 +124,12 @@ from flet.controls.core.markdown import (
     MarkdownStyleSheet,
 )
 from flet.controls.core.merge_semantics import MergeSemantics
+from flet.controls.core.page_view import PageView
 from flet.controls.core.pagelet import Pagelet
 from flet.controls.core.placeholder import Placeholder
 from flet.controls.core.reorderable_drag_handle import ReorderableDragHandle
 from flet.controls.core.responsive_row import ResponsiveRow
+from flet.controls.core.rotated_box import RotatedBox
 from flet.controls.core.row import Row
 from flet.controls.core.safe_area import SafeArea
 from flet.controls.core.screenshot import Screenshot
@@ -253,7 +256,11 @@ from flet.controls.gradients import (
 from flet.controls.icon_data import IconData
 from flet.controls.id_counter import IdCounter
 from flet.controls.keys import Key, KeyValue, ScrollKey, ValueKey
-from flet.controls.layout_control import ConstrainedControl, LayoutControl
+from flet.controls.layout_control import (
+    ConstrainedControl,
+    LayoutControl,
+    LayoutSizeChangeEvent,
+)
 from flet.controls.margin import Margin, MarginValue
 from flet.controls.material import dropdown, dropdownm2
 from flet.controls.material.alert_dialog import AlertDialog
@@ -390,6 +397,7 @@ from flet.controls.padding import Padding, PaddingValue
 from flet.controls.page import (
     AppLifecycleStateChangeEvent,
     KeyboardEvent,
+    LocaleChangeEvent,
     LoginEvent,
     MultiViewAddEvent,
     MultiViewRemoveEvent,
@@ -480,12 +488,15 @@ from flet.controls.text_style import (
     TextThemeStyle,
 )
 from flet.controls.transform import (
+    Flip,
+    Matrix4,
     Offset,
     OffsetValue,
     Rotate,
     RotateValue,
     Scale,
     ScaleValue,
+    Transform,
 )
 from flet.controls.types import (
     AppLifecycleState,
@@ -600,6 +611,7 @@ __all__ = [
     "AnimationValue",
     "AppBar",
     "AppBarTheme",
+    "AppCallable",
     "AppLifecycleState",
     "AppLifecycleStateChangeEvent",
     "AppView",
@@ -781,6 +793,7 @@ __all__ = [
     "FletPageDisconnectedException",
     "FletUnimplementedPlatformException",
     "FletUnsupportedPlatformException",
+    "Flip",
     "FloatingActionButton",
     "FloatingActionButtonLocation",
     "FloatingActionButtonTheme",
@@ -794,6 +807,8 @@ __all__ = [
     "Gyroscope",
     "GyroscopeReadingEvent",
     "HapticFeedback",
+    "Hero",
+    "HeroTag",
     "HoverEvent",
     "Icon",
     "IconButton",
@@ -821,6 +836,7 @@ __all__ = [
     "LabelPosition",
     "LaunchMode",
     "LayoutControl",
+    "LayoutSizeChangeEvent",
     "LinearGradient",
     "LinuxDeviceInfo",
     "ListTile",
@@ -829,6 +845,7 @@ __all__ = [
     "ListTileTitleAlignment",
     "ListView",
     "Locale",
+    "LocaleChangeEvent",
     "LocaleConfiguration",
     "LoginEvent",
     "LongPressDownEvent",
@@ -846,6 +863,7 @@ __all__ = [
     "MarkdownCustomCodeTheme",
     "MarkdownExtensionSet",
     "MarkdownStyleSheet",
+    "Matrix4",
     "MenuBar",
     "MenuItemButton",
     "MenuStyle",
@@ -888,6 +906,7 @@ __all__ = [
     "PageResizeEvent",
     "PageTransitionTheme",
     "PageTransitionsTheme",
+    "PageView",
     "Pagelet",
     "Paint",
     "PaintGradient",
@@ -923,6 +942,7 @@ __all__ = [
     "ResponsiveRowBreakpoint",
     "Rotate",
     "RotateValue",
+    "RotatedBox",
     "RoundedRectangleBorder",
     "RouteChangeEvent",
     "RouteUrlStrategy",
@@ -1030,6 +1050,7 @@ __all__ = [
     "TooltipTheme",
     "TooltipTriggerMode",
     "TooltipValue",
+    "Transform",
     "TransparentPointer",
     "UnderlineTabIndicator",
     "Url",

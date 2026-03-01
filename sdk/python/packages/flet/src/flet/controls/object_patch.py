@@ -126,6 +126,27 @@ class PatchOperation:
         return doc
 
 
+def _control_setattr(obj, name, value):
+    control_cls = getattr(type(obj), "__flet_control_cls__", None)
+    if not name.startswith("_") and (
+        name != "data" or not control_cls or not isinstance(obj, control_cls)
+    ):
+        if hasattr(obj, "_frozen"):
+            raise RuntimeError("Frozen controls cannot be updated.") from None
+
+        if hasattr(obj, "__changes"):
+            current_value = getattr(obj, name, None)
+            if current_value != value:
+                changes = getattr(obj, "__changes")
+                if name not in changes:
+                    changes[name] = current_value
+                elif changes[name] == value:
+                    del changes[name]
+                if hasattr(obj, "_notify"):
+                    obj._notify(name, value)
+    object.__setattr__(obj, name, value)
+
+
 class RemoveOperation(PatchOperation):
     """Removes an object property or an array element."""
 
@@ -333,6 +354,27 @@ class DiffBuilder:
         self.dst_doc = dst_doc
         root[:] = [root, root, None]
 
+    @staticmethod
+    def _update_list_snapshot(
+        snapshots: dict[Any, list[Any]], key: Any, value: list[Any]
+    ) -> None:
+        snap = snapshots.get(key)
+        if snap is None:
+            snapshots[key] = value[:]
+            return
+        snap[:] = value
+
+    @staticmethod
+    def _update_dict_snapshot(
+        snapshots: dict[Any, dict[Any, Any]], key: Any, value: dict[Any, Any]
+    ) -> None:
+        snap = snapshots.get(key)
+        if snap is None:
+            snapshots[key] = value.copy()
+            return
+        snap.clear()
+        snap.update(value)
+
     def teardown(self):
         """Break cycles and release strong references to allow GC."""
         # clear indexes
@@ -363,30 +405,39 @@ class DiffBuilder:
             yield from self._removed_controls(dc, recurse)
 
     def store_index(self, value, index, st):
-        typed_key = (value, type(value))
+        value_type = type(value)
         try:
             storage = self.index_storage[st]
-            stored = storage.get(typed_key)
+            typed_storage = storage.get(value_type)
+            if typed_storage is None:
+                typed_storage = {}
+                storage[value_type] = typed_storage
+            stored = typed_storage.get(value)
             if stored is None:
-                storage[typed_key] = [index]
+                typed_storage[value] = [index]
             else:
-                storage[typed_key].append(index)
+                stored.append(index)
 
         except TypeError:
-            self.index_storage2[st].append((typed_key, index))
+            self.index_storage2[st].append([value_type, value, index])
 
     def take_index(self, value, st):
-        typed_key = (value, type(value))
+        value_type = type(value)
         try:
-            stored = self.index_storage[st].get(typed_key)
+            typed_storage = self.index_storage[st].get(value_type)
+            if typed_storage is None:
+                return None
+            stored = typed_storage.get(value)
             if stored:
                 return stored.pop()
 
         except TypeError:
             storage = self.index_storage2[st]
             for i in range(len(storage) - 1, -1, -1):
-                if storage[i][0] == typed_key:
-                    return storage.pop(i)[1]
+                item_type, item_value, item_index = storage[i]
+                if item_type is value_type and item_value == value:
+                    storage.pop(i)
+                    return item_index
 
     def insert(self, op):
         root = self.__root
@@ -439,15 +490,14 @@ class DiffBuilder:
 
     def _index_key(self, item, item_key, path):
         """
-        Return the composite key used to pair add/remove
-        (by control key if present).
+        Return the composite key used to pair add/remove (by control key if present).
         """
         return item_key if item_key is not None else item
 
     def _maybe_compare_dataclasses(self, parent, path, src, dst, frozen):
         """
-        Compare dataclasses only when both are dataclasses and
-        identity/"frozen" rules allow it.
+        Compare dataclasses only when both are dataclasses and identity/"frozen" rules \
+        allow it.
         """
         if (
             dataclasses.is_dataclass(src)
@@ -672,10 +722,19 @@ class DiffBuilder:
                         )
                         old_control_key = k(old)
                         new_control_key = k(new)
+                        same_component_fn = True
+                        if (
+                            getattr(old, "_c", None) == "C"
+                            and getattr(new, "_c", None) == "C"
+                        ):
+                            same_component_fn = getattr(old, "fn", None) is getattr(
+                                new, "fn", None
+                            )
                         if (not frozen_local and old is new) or (
                             frozen_local
                             and old is not new
                             and type(old) is type(new)
+                            and same_component_fn
                             and (
                                 old_control_key is None
                                 or new_control_key is None
@@ -727,9 +786,20 @@ class DiffBuilder:
                 elif isinstance(old, list) and isinstance(new, list):
                     self._compare_lists(parent, _path_join(path, idx), old, new, frozen)
                 elif dataclasses.is_dataclass(old) and dataclasses.is_dataclass(new):
-                    self._compare_dataclasses(
-                        parent, _path_join(path, idx), old, new, frozen
-                    )
+                    same_component_fn = True
+                    if (
+                        getattr(old, "_c", None) == "C"
+                        and getattr(new, "_c", None) == "C"
+                    ):
+                        same_component_fn = getattr(old, "fn", None) is getattr(
+                            new, "fn", None
+                        )
+                    if same_component_fn:
+                        self._compare_dataclasses(
+                            parent, _path_join(path, idx), old, new, frozen
+                        )
+                    else:
+                        self._item_replaced(path, idx, new)
                 elif type(old) is not type(new) or old != new:
                     self._item_replaced(path, idx, new)
             return
@@ -786,11 +856,23 @@ class DiffBuilder:
                     )
 
                 same_type = type(old_item) is type(new_item)
+                same_component_fn = True
+                # Component controls (type "C") must only be diffed/migrated when
+                # their underlying component function is the same. Otherwise we
+                # need a replace to force remount and fresh hook state.
+                if (
+                    getattr(old_item, "_c", None) == "C"
+                    and getattr(new_item, "_c", None) == "C"
+                ):
+                    same_component_fn = getattr(old_item, "fn", None) is getattr(
+                        new_item, "fn", None
+                    )
 
                 if (not frozen_local and old_item is new_item) or (
                     frozen_local
                     and old_item is not new_item
                     and same_type
+                    and same_component_fn
                     and _keys_match()
                 ):
                     self._compare_dataclasses(
@@ -918,10 +1000,9 @@ class DiffBuilder:
 
             # TODO - should optimize performance?
             fields = {f.name: f for f in dataclasses.fields(dst)}
-            for field_name, change in changes.items():
+            for field_name, old in changes.items():
                 if field_name in fields:
-                    old = change[0]
-                    new = change[1]
+                    new = getattr(dst, field_name)
 
                     if field_name.startswith("on_") and fields[field_name].metadata.get(
                         "event", True
@@ -942,44 +1023,45 @@ class DiffBuilder:
 
                     # update prev value
                     if isinstance(new, list):
-                        new = new[:]
-                        prev_lists[field_name] = new
+                        self._update_list_snapshot(prev_lists, field_name, new)
                     elif isinstance(new, dict):
-                        new = new.copy()
-                        prev_dicts[field_name] = new
+                        self._update_dict_snapshot(prev_dicts, field_name, new)
                     elif dataclasses.is_dataclass(new):
                         prev_classes[field_name] = new
 
             # compare lists
             for field_name, old in list(prev_lists.items()):
                 if field_name in changes:
-                    if new is None:
+                    changed_value = getattr(dst, field_name, None)
+                    if changed_value is None:
                         del prev_lists[field_name]
                     continue
                 new = getattr(dst, field_name)
                 if not isinstance(new, list):
                     del prev_lists[field_name]
-                else:
-                    prev_lists[field_name] = new[:]
                 self._compare_values(dst, path, field_name, old, new, frozen)
+                if isinstance(new, list):
+                    self._update_list_snapshot(prev_lists, field_name, new)
 
             # compare dicts
             for field_name, old in list(prev_dicts.items()):
                 if field_name in changes:
-                    if new is None:
+                    changed_value = getattr(dst, field_name, None)
+                    if changed_value is None:
                         del prev_dicts[field_name]
                     continue
                 new = getattr(dst, field_name)
                 if not isinstance(new, dict):
                     del prev_dicts[field_name]
-                else:
-                    prev_dicts[field_name] = new.copy()
                 self._compare_values(dst, path, field_name, old, new, frozen)
+                if isinstance(new, dict):
+                    self._update_dict_snapshot(prev_dicts, field_name, new)
 
             # compare dataclasses
             for field_name, old in list(prev_classes.items()):
                 if field_name in changes:
-                    if new is None:
+                    changed_value = getattr(dst, field_name, None)
+                    if changed_value is None:
                         del prev_classes[field_name]
                     continue
                 new = getattr(dst, field_name)
@@ -1022,7 +1104,12 @@ class DiffBuilder:
         )
 
         if isinstance(src, dict) and isinstance(dst, dict):
-            self._compare_dicts(parent, _path_join(path, key), src, dst, frozen)
+            if (len(src) == 0 and len(dst) > 0) or (len(src) > 0 and len(dst) == 0):
+                self._item_replaced(path, key, dst)
+                self._dataclass_removed(src)
+                self._dataclass_added(dst, parent, frozen)
+            else:
+                self._compare_dicts(parent, _path_join(path, key), src, dst, frozen)
 
         elif isinstance(src, list) and isinstance(dst, list):
             if (len(src) == 0 and len(dst) > 0) or (len(src) > 0 and len(dst) == 0):
@@ -1081,9 +1168,9 @@ class DiffBuilder:
                 if dataclasses.is_dataclass(src) and key in prev_classes:
                     del prev_classes[key]
                 if isinstance(dst, list) and key is not None:
-                    prev_lists[key] = dst[:]
+                    self._update_list_snapshot(prev_lists, key, dst)
                 if isinstance(dst, dict) and key is not None:
-                    prev_dicts[key] = dst.copy()
+                    self._update_dict_snapshot(prev_dicts, key, dst)
                 if dataclasses.is_dataclass(dst) and key is not None:
                     prev_classes[key] = dst
 
@@ -1154,33 +1241,11 @@ class DiffBuilder:
             elif frozen:
                 item._frozen = frozen
 
-            control_cls = self.control_cls
-
-            def control_setattr(obj, name, value):
-                if not name.startswith("_") and (
-                    name != "data"
-                    or not control_cls
-                    or not isinstance(obj, control_cls)
-                ):
-                    if hasattr(obj, "_frozen"):
-                        raise RuntimeError(
-                            "Frozen controls cannot be updated."
-                        ) from None
-
-                    if hasattr(obj, "__changes"):
-                        old_value = getattr(obj, name, None)
-                        if old_value != value:
-                            # logger.debug(
-                            #     f"\n\nset_attr: {obj.__class__.__name__}.{name} = "
-                            #     f"{new_value}, old: {old_value}"
-                            # )
-                            changes = getattr(obj, "__changes")
-                            changes[name] = (old_value, value)
-                            if hasattr(obj, "_notify"):
-                                obj._notify(name, value)
-                object.__setattr__(obj, name, value)
-
-            item.__class__.__setattr__ = control_setattr  # type: ignore
+            item_cls = item.__class__
+            if item_cls.__setattr__ is not _control_setattr:
+                item_cls.__setattr__ = _control_setattr  # type: ignore
+            if getattr(item_cls, "__flet_control_cls__", None) is None:
+                item_cls.__flet_control_cls__ = self.control_cls
 
             if self.control_cls and isinstance(item, self.control_cls):
                 if not configure_setattr_only:

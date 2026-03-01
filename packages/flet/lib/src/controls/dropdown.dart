@@ -210,6 +210,7 @@ class _DropdownControlState extends State<DropdownControl> {
     var options = widget.control
         .children("options")
         .map<DropdownMenuEntry<String>?>((Control itemCtrl) {
+          itemCtrl.notifyParent = true;
           bool itemDisabled = widget.control.disabled || itemCtrl.disabled;
           ButtonStyle? style = itemCtrl.getButtonStyle("style", theme);
 
@@ -238,6 +239,12 @@ class _DropdownControlState extends State<DropdownControl> {
     var value = widget.control.getString("value");
     var selectedOption = options.firstWhereOrNull((o) => o.value == value);
     value = selectedOption?.value;
+
+    // Force DropdownMenu to rebuild when option set changes so it recalculates
+    // its intrinsic width (otherwise a long option added later can keep the
+    // old, narrower menu size).
+    final dropdownMenuKey = ValueKey<int>(
+        Object.hashAll(options.map((o) => Object.hash(o.value, o.label))));
 
     // keep controller text in sync with backend-driven value changes
     if (_value != value) {
@@ -275,6 +282,7 @@ class _DropdownControlState extends State<DropdownControl> {
     EdgeInsets? expandedInsets = expand > 0 ? EdgeInsets.zero : null;
 
     Widget dropDown = DropdownMenu<String>(
+      key: dropdownMenuKey,
       enabled: !widget.control.disabled,
       focusNode: _focusNode,
       controller: _controller,

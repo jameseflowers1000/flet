@@ -14,7 +14,10 @@ dependencies = [
     "flet-ads",
     "flet-audio",
     "flet-audio-recorder",
+    "flet-camera",
     "flet-charts",
+    "flet-code-editor",
+    "flet-color-pickers",
     "flet-datatable2",
     "flet-flashlight",
     "flet-geolocator",
@@ -36,6 +39,7 @@ flet-web = { workspace = true }
 flet-ads = { workspace = true }
 flet-audio = { workspace = true }
 flet-audio-recorder = { workspace = true }
+flet-camera = { workspace = true }
 flet-charts = { workspace = true }
 flet-datatable2 = { workspace = true }
 flet-flashlight = { workspace = true }
@@ -47,7 +51,9 @@ flet-rive = { workspace = true }
 flet-secure-storage = { workspace = true }
 flet-video = { workspace = true }
 flet-webview = { workspace = true }
+flet-code-editor = { workspace = true }
 mkdocs-external-images = { git = "https://github.com/flet-dev/mkdocs-external-images", tag = "v0.2.0" }
+flet-color-pickers = { workspace = true }
 
 [tool.uv.workspace]
 members = ["packages/*"]
@@ -87,7 +93,6 @@ docs = [
     "mkdocs-glightbox >=0.5.1",
     "mkdocs-open-in-new-tab >=1.0.8",
     "mkdocs-section-index >=0.3.10",
-    "griffe-modernized-annotations >=1.0.8",
     "griffe-warnings-deprecated >=1.1.0",
     "pygments >=2.16",
     "markdown-exec[ansi] >=1.11.0",
@@ -123,7 +128,9 @@ isort = { known-first-party = [
     "flet_ads",
     "flet_audio",
     "flet_audio_recorder",
+    "flet_camera",
     "flet_charts",
+    "flet_color_pickers",
     "flet_datatable2",
     "flet_flashlight",
     "flet_geolocator",
