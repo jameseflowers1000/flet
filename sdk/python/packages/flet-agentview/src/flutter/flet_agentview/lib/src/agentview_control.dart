@@ -95,6 +95,13 @@ class _AgentViewControlState extends State<AgentViewControl> {
                   label: c['label'] as String? ?? '',
                   icon: c['icon'] as String?,
                   category: c['category'] as String?,
+                  argsHint: c['args_hint'] as String?,
+                  args: (c['args'] as List<dynamic>?)
+                      ?.map((a) => SlashArg(
+                            value: a['value'] as String? ?? '',
+                            label: a['label'] as String?,
+                          ))
+                      .toList(),
                 ))
             .toList();
       } catch (e) {

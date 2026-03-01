@@ -15,19 +15,34 @@ class ChatMessage {
   bool get isUser => role == 'user' || role == 'request';
 }
 
+/// An argument suggestion for a slash command.
+class SlashArg {
+  final String value; // e.g. 'amort'
+  final String? label; // e.g. 'SuperTab'
+
+  const SlashArg({required this.value, this.label});
+}
+
 /// A slash command shown in the popup menu.
 class SlashCommand {
   final String command; // '/python'
   final String label; // 'Python REPL'
   final String? icon; // Material icon name
   final String? category; // 'navigation', 'control', 'code', 'table', 'chat', 'panel'
+  final String? argsHint; // e.g. '<control_name>'
+  final List<SlashArg>? args; // argument suggestions from provider
 
   const SlashCommand({
     required this.command,
     required this.label,
     this.icon,
     this.category,
+    this.argsHint,
+    this.args,
   });
+
+  /// Whether this command has argument suggestions to show.
+  bool get hasArgs => args != null && args!.isNotEmpty;
 }
 
 /// Theme constants matching orchestrator.py colors.
@@ -92,6 +107,8 @@ class AgentTheme {
         return Icons.table_chart;
       case 'close':
         return Icons.close;
+      case 'dashboard':
+        return Icons.dashboard;
       default:
         return Icons.chevron_right;
     }

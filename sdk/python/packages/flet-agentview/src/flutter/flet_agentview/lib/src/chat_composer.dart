@@ -12,7 +12,12 @@ import 'slash_menu.dart';
 ///   Enter          → submit
 ///   Shift+Enter    → insert newline
 ///   CMD/Ctrl+Enter → submit
-///   Escape         → dismiss slash menu + clear input
+///   Escape         → dismiss slash menu / exit arg phase / clear input
+///
+/// Two-phase slash menu:
+///   Phase 1 (commands): type `/` to see commands, pick one
+///   Phase 2 (args): if the command has arg suggestions, show them
+///     for the user to pick or type-filter
 ///
 /// The slash menu renders inline (above the input row in a Column),
 /// avoiding Overlay positioning issues in the Flet framework.
@@ -48,6 +53,10 @@ class _ChatComposerState extends State<ChatComposer> {
   bool _showSlashMenu = false;
   String _slashFilter = '';
 
+  // Two-phase arg selection state
+  SlashCommand? _selectedCommand; // non-null = arg phase
+  String _argFilter = '';
+
   @override
   void initState() {
     super.initState();
@@ -66,8 +75,13 @@ class _ChatComposerState extends State<ChatComposer> {
   KeyEventResult _handleKeyEvent(FocusNode node, KeyEvent event) {
     if (event is! KeyDownEvent) return KeyEventResult.ignored;
 
-    // Escape → dismiss slash menu and clear input
+    // Escape handling
     if (event.logicalKey == LogicalKeyboardKey.escape) {
+      if (_selectedCommand != null) {
+        // In arg phase → back to command phase
+        _exitArgPhase();
+        return KeyEventResult.handled;
+      }
       if (_showSlashMenu) {
         _textController.clear();
         setState(() {
@@ -79,11 +93,46 @@ class _ChatComposerState extends State<ChatComposer> {
       return KeyEventResult.ignored;
     }
 
+    // Tab handling — auto-complete slash command instead of tab-order navigation
+    if (event.logicalKey == LogicalKeyboardKey.tab) {
+      if (_selectedCommand != null) {
+        // In arg phase — select best arg match
+        final match = _bestArgMatch();
+        if (match != null) {
+          _onSlashArgSelected(match);
+        }
+        return KeyEventResult.handled;
+      }
+      if (_showSlashMenu) {
+        final match = _bestSlashMatch();
+        if (match != null) {
+          _onSlashCommandSelected(match);
+        }
+        return KeyEventResult.handled;
+      }
+      // No slash menu — still consume Tab to prevent focus escape
+      if (_textController.text.startsWith('/')) {
+        return KeyEventResult.handled;
+      }
+      return KeyEventResult.ignored;
+    }
+
     // Enter handling
     if (event.logicalKey == LogicalKeyboardKey.enter) {
       // Shift+Enter → insert newline (let TextField handle it)
       if (HardwareKeyboard.instance.isShiftPressed) {
         return KeyEventResult.ignored;
+      }
+      // In arg phase → select best arg match or submit as-is
+      if (_selectedCommand != null) {
+        final match = _bestArgMatch();
+        if (match != null) {
+          _onSlashArgSelected(match);
+        } else {
+          // Submit as-is (user typed a custom value)
+          _submit();
+        }
+        return KeyEventResult.handled;
       }
       // If slash menu is showing, auto-select the best match
       if (_showSlashMenu) {
@@ -109,6 +158,8 @@ class _ChatComposerState extends State<ChatComposer> {
     setState(() {
       _showSlashMenu = false;
       _slashFilter = '';
+      _selectedCommand = null;
+      _argFilter = '';
     });
     widget.onSubmit(text);
 
@@ -117,7 +168,45 @@ class _ChatComposerState extends State<ChatComposer> {
   }
 
   void _onTextChanged(String text) {
+    if (_selectedCommand != null) {
+      // In arg phase — extract filter text after the command prefix
+      final prefix = '${_selectedCommand!.command} ';
+      if (text.startsWith(prefix)) {
+        setState(() {
+          _argFilter = text.substring(prefix.length).toLowerCase();
+        });
+      } else if (!text.startsWith(_selectedCommand!.command)) {
+        // User edited back past the prefix → exit arg phase
+        _exitArgPhase();
+        // Re-evaluate for command mode
+        _evaluateCommandMode(text);
+      }
+      return;
+    }
+
+    _evaluateCommandMode(text);
+  }
+
+  void _evaluateCommandMode(String text) {
     if (text.startsWith('/')) {
+      // Check for "/command " pattern — exact command match followed by space
+      final spaceIdx = text.indexOf(' ');
+      if (spaceIdx > 0) {
+        final cmdText = text.substring(0, spaceIdx);
+        final cmd = widget.slashCommands
+            .where((c) => c.command == cmdText)
+            .firstOrNull;
+        if (cmd != null && cmd.hasArgs) {
+          // Enter arg phase with whatever is after the space as filter
+          setState(() {
+            _selectedCommand = cmd;
+            _argFilter = text.substring(spaceIdx + 1).toLowerCase();
+            _showSlashMenu = true;
+            _slashFilter = '';
+          });
+          return;
+        }
+      }
       setState(() {
         _slashFilter = text.substring(1).toLowerCase();
         _showSlashMenu = true;
@@ -130,11 +219,20 @@ class _ChatComposerState extends State<ChatComposer> {
     }
   }
 
+  void _exitArgPhase() {
+    setState(() {
+      _selectedCommand = null;
+      _argFilter = '';
+      _textController.text = '/';
+      _textController.selection = TextSelection.fromPosition(
+        TextPosition(offset: _textController.text.length),
+      );
+      _slashFilter = '';
+      _showSlashMenu = true;
+    });
+  }
+
   /// Return the best slash command match for the current filter, or null.
-  ///
-  /// If there's exactly one match, return it. If the filter is an exact
-  /// command name (minus the slash), return that. Otherwise null — let the
-  /// user pick from the menu.
   SlashCommand? _bestSlashMatch() {
     final filtered = widget.slashCommands.where((cmd) {
       final name = cmd.command.substring(1).toLowerCase();
@@ -153,11 +251,64 @@ class _ChatComposerState extends State<ChatComposer> {
     return null;
   }
 
+  /// Return the best arg match for the current arg filter, or null.
+  SlashArg? _bestArgMatch() {
+    final argList = _selectedCommand?.args ?? [];
+    if (argList.isEmpty) return null;
+
+    final lowerFilter = _argFilter.toLowerCase();
+    if (lowerFilter.isEmpty) return null;
+
+    final filtered = argList.where((a) {
+      return a.value.toLowerCase().contains(lowerFilter) ||
+          (a.label?.toLowerCase().contains(lowerFilter) ?? false);
+    }).toList();
+
+    if (filtered.length == 1) return filtered.first;
+
+    // Exact value match
+    for (final a in filtered) {
+      if (a.value.toLowerCase() == lowerFilter) return a;
+    }
+    return null;
+  }
+
   void _onSlashCommandSelected(SlashCommand cmd) {
-    _textController.text = cmd.command;
+    if (cmd.hasArgs) {
+      // Enter arg phase — show arg suggestions
+      final prefix = '${cmd.command} ';
+      _textController.text = prefix;
+      _textController.selection = TextSelection.fromPosition(
+        TextPosition(offset: prefix.length),
+      );
+      setState(() {
+        _showSlashMenu = true;
+        _slashFilter = '';
+        _selectedCommand = cmd;
+        _argFilter = '';
+      });
+    } else {
+      // No args — auto-submit immediately
+      _textController.text = cmd.command;
+      setState(() {
+        _showSlashMenu = false;
+        _slashFilter = '';
+        _selectedCommand = null;
+        _argFilter = '';
+      });
+      _submit();
+    }
+  }
+
+  void _onSlashArgSelected(SlashArg arg) {
+    if (_selectedCommand != null) {
+      _textController.text = '${_selectedCommand!.command} ${arg.value}';
+    }
     setState(() {
       _showSlashMenu = false;
       _slashFilter = '';
+      _selectedCommand = null;
+      _argFilter = '';
     });
     _submit();
   }
@@ -171,11 +322,22 @@ class _ChatComposerState extends State<ChatComposer> {
         if (_showSlashMenu)
           Padding(
             padding: const EdgeInsets.only(left: 8, right: 8, bottom: 4),
-            child: SlashMenu(
-              commands: widget.slashCommands,
-              filter: _slashFilter,
-              onSelected: _onSlashCommandSelected,
-            ),
+            child: _selectedCommand != null
+                ? SlashMenu(
+                    commands: widget.slashCommands,
+                    filter: _slashFilter,
+                    onSelected: _onSlashCommandSelected,
+                    mode: SlashMenuMode.args,
+                    args: _selectedCommand!.args,
+                    onArgSelected: _onSlashArgSelected,
+                    selectedCommandLabel: _selectedCommand!.command,
+                    argFilter: _argFilter,
+                  )
+                : SlashMenu(
+                    commands: widget.slashCommands,
+                    filter: _slashFilter,
+                    onSelected: _onSlashCommandSelected,
+                  ),
           ),
         // Input row
         Container(

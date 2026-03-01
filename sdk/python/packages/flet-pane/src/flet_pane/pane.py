@@ -57,6 +57,13 @@ class PaneControl(ft.LayoutControl):
     # Indexed by position matching controls list order.
     gutter_metadata: Optional[str] = None
 
+    # MicroPython formula strings — evaluated client-side at 60fps.
+    # Each formula receives a context dict with the item's metadata fields.
+    # Use Python f-string syntax: f"#FF0000" or f"#{r:02x}{g:02x}{b:02x}"
+    gutter_color_formula: Optional[str] = None
+    gutter_width_formula: Optional[str] = None
+    gutter_opacity_formula: Optional[str] = None
+
     # Events
     on_gutter_tap: Optional[ft.ControlEventHandler] = None
     on_scroll: Optional[ft.ControlEventHandler] = None

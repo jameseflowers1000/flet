@@ -2,6 +2,8 @@ import 'dart:convert';
 
 import 'package:flet/flet.dart';
 import 'package:flutter/material.dart';
+import 'package:flet_micropython/src/micropython_service.dart'
+    if (dart.library.io) 'package:flet_micropython/src/micropython_service_native.dart';
 
 import 'gutter_row.dart';
 
@@ -44,6 +46,14 @@ class _PaneWidgetState extends State<PaneWidget>
 
   // Cached gutter metadata (parsed from JSON once per config update)
   List<Map<String, dynamic>>? _gutterMetaList;
+
+  // MicroPython formula strings (evaluated client-side per row)
+  String? _colorFormula;
+  String? _widthFormula;
+  String? _opacityFormula;
+
+  // Formula evaluation cache: "formula|contextHash" → result
+  final Map<String, dynamic> _formulaCache = {};
 
   // Config from Python control
   double _idleWidth = 18;
@@ -104,6 +114,14 @@ class _PaneWidgetState extends State<PaneWidget>
     }
 
     _borderRadius = widget.control.getDouble("border_radius") ?? 0;
+
+    // MicroPython formulas
+    _colorFormula = widget.control.getString("gutter_color_formula");
+    _widthFormula = widget.control.getString("gutter_width_formula");
+    _opacityFormula = widget.control.getString("gutter_opacity_formula");
+
+    // Clear formula cache when config changes
+    _formulaCache.clear();
 
     // Parse gutter metadata JSON list
     final metaJson = widget.control.getString("gutter_metadata");
@@ -300,17 +318,9 @@ class _PaneWidgetState extends State<PaneWidget>
             cacheExtent: 500,
             itemBuilder: (context, index) {
               final child = childControls[index];
-              // Parse gutter metadata from parent's gutter_metadata JSON list
-              String? gutterIcon;
-              Color? indicatorColor;
               final meta = _getGutterMeta(index);
-              if (meta != null) {
-                gutterIcon = meta['gutter_icon'] as String?;
-                final colorStr = meta['gutter_color'] as String?;
-                if (colorStr != null) {
-                  indicatorColor = _parseColor(colorStr, null);
-                }
-              }
+              final gutterIcon = meta?['gutter_icon'] as String?;
+              final indicatorColor = _resolveIndicatorColor(meta);
 
               return GutterRow(
                 key: ValueKey(child.id),
@@ -393,6 +403,48 @@ class _PaneWidgetState extends State<PaneWidget>
       return null;
     }
     return _gutterMetaList![index];
+  }
+
+  /// Evaluate a MicroPython formula with the item's metadata as context.
+  /// Returns null on error or if MicroPython isn't ready.
+  /// Uses fmt() for f-string evaluation (same pattern as SuperPlot tooltips).
+  String? _evalFormula(String formula, Map<String, dynamic> context) {
+    if (!MicroPythonService.isReady) return null;
+
+    // Cache key: formula + serialized context
+    final cacheKey = '$formula|${context.hashCode}';
+    if (_formulaCache.containsKey(cacheKey)) {
+      return _formulaCache[cacheKey] as String?;
+    }
+
+    try {
+      final result = MicroPythonService.fmt(formula, context);
+      // Limit cache size
+      if (_formulaCache.length > 200) _formulaCache.clear();
+      _formulaCache[cacheKey] = result;
+      return result;
+    } catch (e) {
+      debugPrint('[PaneWidget] Formula eval error: $e');
+      return null;
+    }
+  }
+
+  /// Resolve the indicator color for a row, using formula if available.
+  Color? _resolveIndicatorColor(Map<String, dynamic>? meta) {
+    if (meta == null) return null;
+
+    // Try formula first
+    if (_colorFormula != null) {
+      final result = _evalFormula(_colorFormula!, meta);
+      if (result != null) {
+        final color = _parseColor(result, null);
+        if (color != null) return color;
+      }
+    }
+
+    // Fallback to static color from metadata
+    final colorStr = meta['gutter_color'] as String?;
+    return colorStr != null ? _parseColor(colorStr, null) : null;
   }
 
   static Color? _parseColor(String colorStr, Color? defaultColor) {
