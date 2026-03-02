@@ -471,7 +471,7 @@ class _PaneWidgetState extends State<PaneWidget>
   Widget _buildHorizontalContent(List<Control> childControls) {
     return Stack(
       children: [
-        // Main content: horizontal ListView above the gutter strip.
+        // Main content: horizontal scroll area above the gutter strip.
         // SuperPlot claims all pointer events inside charts, so we
         // don't try to handle scroll/drag here.
         Positioned(
@@ -479,23 +479,23 @@ class _PaneWidgetState extends State<PaneWidget>
           right: 0,
           top: 0,
           bottom: _gutterWidth.value,
-          child: ListView.builder(
+          // SingleChildScrollView + Row: eagerly builds ALL children so
+          // platform views (WebView iframes) are never destroyed by cache
+          // eviction.  Horizontal panes have few items (3-7) so no cost.
+          child: SingleChildScrollView(
             controller: _scrollController,
             scrollDirection: Axis.horizontal,
             physics: const NeverScrollableScrollPhysics(),
-            itemCount: childControls.length,
-            cacheExtent: 500,
-            itemBuilder: (context, index) {
-              final child = childControls[index];
-              return SizedBox(
+            child: Row(
+              children: childControls.map((child) => SizedBox(
                 key: ValueKey(child.id),
                 width: _layoutWidth,
                 child: Padding(
                   padding: EdgeInsets.all(_paddingTop),
                   child: ControlWidget(control: child),
                 ),
-              );
-            },
+              )).toList(),
+            ),
           ),
         ),
 

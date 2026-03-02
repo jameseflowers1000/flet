@@ -54,6 +54,7 @@ class FletBackend extends ChangeNotifier {
   final bool? forcePyodide;
   final Tester? tester;
   final Map<String, GlobalKey> globalKeys = {};
+  final Map<int, GlobalKey> captureKeys = {}; // controlId → RepaintBoundary key
 
   final WeakValueMap<int, Control> controlsIndex = WeakValueMap<int, Control>();
   final int? _reconnectIntervalMs;

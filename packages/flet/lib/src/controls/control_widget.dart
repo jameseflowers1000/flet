@@ -33,11 +33,19 @@ class ControlWidget extends StatelessWidget {
     }
 
     return control.buildInControlContext((context) {
+      Widget? result;
       for (var extension in FletBackend.of(context).extensions) {
-        final widget = extension.createWidget(key, control);
-        if (widget != null) return widget;
+        result = extension.createWidget(key, control);
+        if (result != null) break;
       }
-      return ErrorControl("Unknown control: ${control.type}");
+      if (result == null) return ErrorControl("Unknown control: ${control.type}");
+
+      // Wrap with RepaintBoundary if registered for thumbnail capture
+      final captureKey = FletBackend.of(context).captureKeys[control.id];
+      if (captureKey != null) {
+        return RepaintBoundary(key: captureKey, child: result);
+      }
+      return result;
     });
   }
 }

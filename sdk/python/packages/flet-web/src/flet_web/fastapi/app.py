@@ -3,6 +3,7 @@ import os
 from typing import Optional
 
 from fastapi import Request, WebSocket
+from fastapi.responses import Response
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from flet.app import AppCallable
@@ -127,6 +128,37 @@ def app(
         Handles OAuth provider callback redirect and returns auth response.
         """
         return await FletOAuth().handle(request)
+
+    # ── Thumbnail capture endpoints ──────────────────────────────────
+    # In-memory cache shared across requests. Populated by POST /api/thumbnail/{id}/capture.
+    # The ThumbnailManager (app layer) registers itself via set_thumbnail_manager().
+    _thumbnail_cache: dict[int, bytes] = {}
+    _thumbnail_manager = None
+
+    def set_thumbnail_manager(mgr):
+        nonlocal _thumbnail_manager
+        _thumbnail_manager = mgr
+
+    fastapi_app.set_thumbnail_manager = set_thumbnail_manager  # type: ignore[attr-defined]
+
+    @fastapi_app.get("/api/thumbnail/{control_id}")
+    async def get_thumbnail(control_id: int):
+        """Return cached thumbnail PNG for a control, or 404."""
+        png = _thumbnail_cache.get(control_id)
+        if png is None:
+            return Response(status_code=404, content="No cached thumbnail")
+        return Response(content=png, media_type="image/png")
+
+    @fastapi_app.post("/api/thumbnail/{control_id}/capture")
+    async def capture_thumbnail(control_id: int):
+        """Trigger a capture and return the PNG."""
+        if _thumbnail_manager is None:
+            return Response(status_code=503, content="ThumbnailManager not registered")
+        png = await _thumbnail_manager.capture(control_id, use_cache=False)
+        if png is None:
+            return Response(status_code=500, content="Capture failed")
+        _thumbnail_cache[control_id] = png
+        return Response(content=png, media_type="image/png")
 
     fastapi_app.mount(
         path="/",

@@ -523,6 +523,13 @@ packages:
       relative: true
     source: path
     version: "0.1.0"
+  flet_thumbnail:
+    dependency: "direct main"
+    description:
+      path: "../sdk/python/packages/flet-thumbnail/src/flutter/flet_thumbnail"
+      relative: true
+    source: path
+    version: "0.1.0"
   flet_video:
     dependency: "direct main"
     description:

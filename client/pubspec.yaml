@@ -110,6 +110,9 @@ dependencies:
   flet_pane:
     path: ../sdk/python/packages/flet-pane/src/flutter/flet_pane
 
+  flet_thumbnail:
+    path: ../sdk/python/packages/flet-thumbnail/src/flutter/flet_thumbnail
+
   cupertino_icons: ^1.0.6
   syncfusion_flutter_core: any
   wakelock_plus: ^1.4.0
