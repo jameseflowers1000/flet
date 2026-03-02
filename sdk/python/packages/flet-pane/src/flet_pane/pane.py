@@ -34,6 +34,7 @@ class PaneControl(ft.LayoutControl):
     # Layout
     bgcolor: Optional[str] = None
     border_radius: Optional[float] = None
+    orientation: str = 'vertical'     # 'vertical' = gutter left, 'horizontal' = gutter bottom
     gutter_width_idle: float = 18
     gutter_width_hover: float = 66
     gutter_color: str = '#0F1215'

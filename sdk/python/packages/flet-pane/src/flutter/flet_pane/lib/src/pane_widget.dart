@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:flet/flet.dart';
+import 'package:flutter/gestures.dart' show PointerScrollEvent;
 import 'package:flutter/material.dart';
 import 'package:flet_micropython/src/micropython_service.dart'
     if (dart.library.io) 'package:flet_micropython/src/micropython_service_native.dart';
@@ -9,19 +10,14 @@ import 'gutter_row.dart';
 
 /// Main PaneWidget — custom Dart pane with 60fps gutter alley.
 ///
-/// Hover strategy: A single MouseRegion wraps the entire pane. On every
-/// pointer move, we check if cursor X < hoverWidth to decide expand/collapse.
-/// This avoids all hit-test blocking — scroll and click events reach the
-/// ListView unimpeded. The entire animation runs in Dart at 60fps with
-/// zero Python round-trips.
+/// Supports two orientations:
+///   vertical   — gutter on left edge,  hover detection by X position
+///   horizontal — gutter on bottom edge, hover detection by Y position
 ///
-/// Architecture:
-///   MouseRegion (whole pane — hover detection by X position)
-///   └── Stack
-///       ├── ListView.builder          ← LOD: only builds visible rows
-///       │   └── GutterRow (per item)  ← per-row gutter + child widget
-///       ├── Positioned(top-left)      ← scroll-up arrow
-///       └── Positioned(bottom-left)   ← scroll-down arrow
+/// Hover strategy: A single MouseRegion wraps the entire pane. On every
+/// pointer move, we check the cursor position against the gutter zone.
+/// This avoids all hit-test blocking — scroll, click, etc. all pass through.
+/// The entire animation runs in Dart at 60fps with zero Python round-trips.
 class PaneWidget extends StatefulWidget {
   final Control control;
 
@@ -35,7 +31,7 @@ class _PaneWidgetState extends State<PaneWidget>
     with SingleTickerProviderStateMixin {
   late AnimationController _gutterAnim;
   late Animation<double> _gutterWidth;
-  late Animation<double> _contentLeft;
+  late Animation<double> _contentOffset; // left (vertical) or bottom (horizontal)
   late Animation<double> _iconOpacity;
   late Animation<Color?> _gutterBgColor;
 
@@ -54,6 +50,16 @@ class _PaneWidgetState extends State<PaneWidget>
 
   // Formula evaluation cache: "formula|contextHash" → result
   final Map<String, dynamic> _formulaCache = {};
+
+  // Orientation: false = vertical (gutter left), true = horizontal (gutter bottom)
+  bool _isHorizontal = false;
+
+  // Layout dimensions (height for hover detection, width for horizontal item sizing)
+  double _layoutHeight = 0;
+  double _layoutWidth = 0;
+
+  // Active item index for horizontal mode (which item is in view)
+  int _activeIndex = 0;
 
   // Config from Python control
   double _idleWidth = 18;
@@ -93,6 +99,8 @@ class _PaneWidgetState extends State<PaneWidget>
   }
 
   void _parseConfig() {
+    _isHorizontal =
+        (widget.control.getString("orientation") ?? 'vertical') == 'horizontal';
     _idleWidth = widget.control.getDouble("gutter_width_idle") ?? 18;
     _hoverWidth = widget.control.getDouble("gutter_width_hover") ?? 66;
     _animationMs = widget.control.getInt("animation_ms") ?? 180;
@@ -146,7 +154,7 @@ class _PaneWidgetState extends State<PaneWidget>
       curve: Curves.easeOut,
     ));
 
-    _contentLeft = Tween<double>(
+    _contentOffset = Tween<double>(
       begin: _idleWidth + 2,
       end: _hoverWidth + 2,
     ).animate(CurvedAnimation(
@@ -182,11 +190,20 @@ class _PaneWidgetState extends State<PaneWidget>
   // ── Hover (position-based detection) ───────────────────────────────
 
   void _onHover(PointerEvent event) {
-    // Expand when cursor is within the gutter detection zone
-    if (event.localPosition.dx < _hoverWidth) {
-      _expandAlley();
+    if (_isHorizontal) {
+      // Horizontal: gutter at bottom — expand when cursor near bottom edge
+      if (event.localPosition.dy > (_layoutHeight - _hoverWidth)) {
+        _expandAlley();
+      } else {
+        _collapseAlley();
+      }
     } else {
-      _collapseAlley();
+      // Vertical: gutter at left — expand when cursor near left edge
+      if (event.localPosition.dx < _hoverWidth) {
+        _expandAlley();
+      } else {
+        _collapseAlley();
+      }
     }
   }
 
@@ -215,10 +232,20 @@ class _PaneWidgetState extends State<PaneWidget>
     final pos = _scrollController.position;
     final newAtTop = pos.pixels <= pos.minScrollExtent + 1;
     final newAtBottom = pos.pixels >= pos.maxScrollExtent - 1;
-    if (newAtTop != _atTop || newAtBottom != _atBottom) {
+
+    // Track active index for horizontal mode
+    int newActiveIndex = _activeIndex;
+    if (_isHorizontal && _layoutWidth > 0) {
+      newActiveIndex = (pos.pixels / _layoutWidth).round().clamp(0,
+          (pos.maxScrollExtent / _layoutWidth).ceil());
+    }
+
+    if (newAtTop != _atTop || newAtBottom != _atBottom ||
+        newActiveIndex != _activeIndex) {
       setState(() {
         _atTop = newAtTop;
         _atBottom = newAtBottom;
+        _activeIndex = newActiveIndex;
       });
     }
 
@@ -274,11 +301,82 @@ class _PaneWidgetState extends State<PaneWidget>
     );
   }
 
+  // ── Horizontal page-based scrolling ─────────────────────────────────
+
+  void _scrollLeft() {
+    if (!_scrollController.hasClients || _layoutWidth <= 0) return;
+    final prevIndex = (_activeIndex - 1).clamp(0, _activeIndex);
+    final target = prevIndex * _layoutWidth;
+    _scrollController.animateTo(
+      target.clamp(
+        _scrollController.position.minScrollExtent,
+        _scrollController.position.maxScrollExtent,
+      ),
+      duration: const Duration(milliseconds: 300),
+      curve: Curves.easeOut,
+    );
+  }
+
+  void _scrollRight() {
+    if (!_scrollController.hasClients || _layoutWidth <= 0) return;
+    final target = (_activeIndex + 1) * _layoutWidth;
+    _scrollController.animateTo(
+      target.clamp(
+        _scrollController.position.minScrollExtent,
+        _scrollController.position.maxScrollExtent,
+      ),
+      duration: const Duration(milliseconds: 300),
+      curve: Curves.easeOut,
+    );
+  }
+
+  void _scrollToStart() {
+    if (!_scrollController.hasClients) return;
+    _scrollController.animateTo(
+      _scrollController.position.minScrollExtent,
+      duration: const Duration(milliseconds: 300),
+      curve: Curves.easeOut,
+    );
+  }
+
+  void _scrollToEnd() {
+    if (!_scrollController.hasClients) return;
+    _scrollController.animateTo(
+      _scrollController.position.maxScrollExtent,
+      duration: const Duration(milliseconds: 300),
+      curve: Curves.easeOut,
+    );
+  }
+
   // ── Build ──────────────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
     final childControls = widget.control.children("controls");
+
+    // Only use LayoutBuilder for horizontal mode (needs layout height for
+    // Y-position hover detection). Vertical mode uses no LayoutBuilder —
+    // adding one breaks Flet's LayoutControl constraint negotiation.
+    Widget content;
+    if (_isHorizontal) {
+      content = LayoutBuilder(
+        builder: (context, constraints) {
+          _layoutHeight = constraints.maxHeight;
+          _layoutWidth = constraints.maxWidth;
+          return MouseRegion(
+            onHover: _onHover,
+            onExit: _onExit,
+            child: _buildHorizontalContent(childControls),
+          );
+        },
+      );
+    } else {
+      content = MouseRegion(
+        onHover: _onHover,
+        onExit: _onExit,
+        child: _buildVerticalContent(childControls),
+      );
+    }
 
     return LayoutControl(
       control: widget.control,
@@ -286,26 +384,19 @@ class _PaneWidgetState extends State<PaneWidget>
         borderRadius: BorderRadius.circular(_borderRadius),
         child: Container(
           color: _bgColor,
-          // Wrap entire pane in MouseRegion for position-based hover detection.
-          // This doesn't block any events — scroll, click, etc. all pass through.
-          // Animation rebuilds via _gutterAnim.addListener(() => setState((){})).
-          child: MouseRegion(
-            onHover: _onHover,
-            onExit: _onExit,
-            child: _buildContent(childControls),
-          ),
+          child: content,
         ),
       ),
     );
   }
 
-  Widget _buildContent(List<Control> childControls) {
+  /// Vertical layout: gutter on left, content scrolls vertically.
+  Widget _buildVerticalContent(List<Control> childControls) {
     final arrowBtnSize = _arrowSize + 16;
     final arrowLeft = (_hoverWidth - arrowBtnSize) / 2;
 
     return Stack(
       children: [
-        // ── Main content: ListView.builder with gutter rows ──
         Positioned.fill(
           child: ListView.builder(
             controller: _scrollController,
@@ -326,12 +417,13 @@ class _PaneWidgetState extends State<PaneWidget>
                 key: ValueKey(child.id),
                 control: child,
                 gutterWidth: _gutterWidth,
-                contentLeft: _contentLeft,
+                contentOffset: _contentOffset,
                 iconOpacity: _iconOpacity,
                 gutterBgColor: _gutterBgColor,
                 gutterIcon: gutterIcon,
                 indicatorColor: indicatorColor,
                 hoverWidth: _hoverWidth,
+                isHorizontal: false,
                 onGutterTap: () {
                   widget.control.triggerEvent("gutter_tap", {"index": index});
                 },
@@ -340,7 +432,7 @@ class _PaneWidgetState extends State<PaneWidget>
           ),
         ),
 
-        // ── Scroll-up arrow (only when expanded) ──
+        // Scroll-up arrow
         if (_isExpanded)
           Positioned(
             left: arrowLeft,
@@ -353,7 +445,7 @@ class _PaneWidgetState extends State<PaneWidget>
             ),
           ),
 
-        // ── Scroll-down arrow (only when expanded) ──
+        // Scroll-down arrow
         if (_isExpanded)
           Positioned(
             left: arrowLeft,
@@ -366,6 +458,201 @@ class _PaneWidgetState extends State<PaneWidget>
             ),
           ),
       ],
+    );
+  }
+
+  /// Horizontal layout: gutter strip at bottom, content scrolls horizontally.
+  ///
+  /// Scrolling strategy: NeverScrollableScrollPhysics disables the ListView's
+  /// built-in Scrollable (which would claim pointer-signal events and then
+  /// discard vertical deltas). Instead we handle ALL scrolling manually:
+  ///   - GestureDetector.onHorizontalDragUpdate → drag to scroll
+  ///   - Listener.onPointerSignal → mouse wheel (vertical delta → horizontal)
+  Widget _buildHorizontalContent(List<Control> childControls) {
+    return Stack(
+      children: [
+        // Main content: horizontal ListView above the gutter strip.
+        // SuperPlot claims all pointer events inside charts, so we
+        // don't try to handle scroll/drag here.
+        Positioned(
+          left: 0,
+          right: 0,
+          top: 0,
+          bottom: _gutterWidth.value,
+          child: ListView.builder(
+            controller: _scrollController,
+            scrollDirection: Axis.horizontal,
+            physics: const NeverScrollableScrollPhysics(),
+            itemCount: childControls.length,
+            cacheExtent: 500,
+            itemBuilder: (context, index) {
+              final child = childControls[index];
+              return SizedBox(
+                key: ValueKey(child.id),
+                width: _layoutWidth,
+                child: Padding(
+                  padding: EdgeInsets.all(_paddingTop),
+                  child: ControlWidget(control: child),
+                ),
+              );
+            },
+          ),
+        ),
+
+        // Gutter strip at bottom — the tension-free swipe/scroll zone.
+        // Handles horizontal drag + mouse wheel → horizontal scroll.
+        Positioned(
+          left: 0,
+          right: 0,
+          bottom: 0,
+          height: _gutterWidth.value,
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            // Drag tracks the finger 1:1 (jumpTo for immediacy)
+            onHorizontalDragUpdate: (details) {
+              if (_scrollController.hasClients) {
+                final pos = _scrollController.position;
+                final newOffset =
+                    (_scrollController.offset - details.delta.dx)
+                        .clamp(pos.minScrollExtent, pos.maxScrollExtent);
+                _scrollController.jumpTo(newOffset);
+              }
+            },
+            // On release, coast with momentum based on fling velocity
+            onHorizontalDragEnd: (details) {
+              if (!_scrollController.hasClients) return;
+              final velocity = details.primaryVelocity ?? 0;
+              if (velocity.abs() < 50) return; // ignore tiny flicks
+              final pos = _scrollController.position;
+              // Friction factor: higher = more coast distance
+              final target = (_scrollController.offset - velocity * 0.4)
+                  .clamp(pos.minScrollExtent, pos.maxScrollExtent);
+              _scrollController.animateTo(
+                target,
+                duration: const Duration(milliseconds: 600),
+                curve: Curves.easeOutCubic,
+              );
+            },
+            child: Listener(
+              onPointerSignal: (event) {
+                // Mouse wheel: smooth animated scroll instead of jumpTo
+                if (event is PointerScrollEvent &&
+                    _scrollController.hasClients) {
+                  final pos = _scrollController.position;
+                  final newOffset = (_scrollController.offset +
+                          event.scrollDelta.dy)
+                      .clamp(pos.minScrollExtent, pos.maxScrollExtent);
+                  _scrollController.animateTo(
+                    newOffset,
+                    duration: const Duration(milliseconds: 200),
+                    curve: Curves.easeOut,
+                  );
+                }
+              },
+              child: CustomPaint(
+                painter: _HorizontalGutterPainter(
+                  backgroundColor:
+                      _gutterBgColor.value ?? Colors.transparent,
+                ),
+                child: _buildHorizontalGutterContent(childControls),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// Build horizontal gutter indicator row (icons + indicators arranged horizontally).
+  /// Scrollable, with the active item highlighted.
+  Widget _buildHorizontalGutterContent(List<Control> childControls) {
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.start,
+        children: [
+          for (int i = 0; i < childControls.length; i++)
+            _buildHorizontalGutterItem(i),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildHorizontalGutterItem(int index) {
+    final meta = _getGutterMeta(index);
+    final gutterIcon = meta?['gutter_icon'] as String?;
+    final indicatorColor = _resolveIndicatorColor(meta);
+    final isActive = index == _activeIndex;
+    final cellWidth = _gutterWidth.value.clamp(18.0, 48.0);
+
+    return GestureDetector(
+      onTap: () {
+        // Tap gutter item to scroll to that item
+        if (_scrollController.hasClients && _layoutWidth > 0) {
+          _scrollController.animateTo(
+            (index * _layoutWidth).clamp(
+              _scrollController.position.minScrollExtent,
+              _scrollController.position.maxScrollExtent,
+            ),
+            duration: const Duration(milliseconds: 300),
+            curve: Curves.easeOut,
+          );
+        }
+        widget.control.triggerEvent("gutter_tap", {"index": index});
+      },
+      child: Container(
+        width: cellWidth,
+        height: _gutterWidth.value,
+        decoration: isActive
+            ? BoxDecoration(
+                border: Border(
+                  bottom: BorderSide(
+                    color: indicatorColor ?? Colors.white70,
+                    width: 2,
+                  ),
+                ),
+              )
+            : null,
+        child: Stack(
+          children: [
+            // Indicator glow
+            if (indicatorColor != null)
+              Positioned.fill(
+                child: CustomPaint(
+                  painter: _IndicatorDotPainter(
+                    color: indicatorColor,
+                    opacity: isActive
+                        ? 1.0
+                        : _iconOpacity.value * 0.5,
+                  ),
+                ),
+              ),
+            // Icon
+            if (gutterIcon != null)
+              Center(
+                child: Opacity(
+                  opacity: isActive ? 1.0 : _iconOpacity.value,
+                  child: GutterRow.buildIconFromBase64(gutterIcon, 24),
+                ),
+              ),
+            // Dot indicator when collapsed (no icon)
+            if (gutterIcon == null)
+              Center(
+                child: Container(
+                  width: isActive ? 8 : 4,
+                  height: isActive ? 8 : 4,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: isActive
+                        ? (indicatorColor ?? Colors.white70)
+                        : (indicatorColor ?? Colors.white30)
+                            .withValues(alpha: _iconOpacity.value),
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
     );
   }
 
@@ -406,12 +693,9 @@ class _PaneWidgetState extends State<PaneWidget>
   }
 
   /// Evaluate a MicroPython formula with the item's metadata as context.
-  /// Returns null on error or if MicroPython isn't ready.
-  /// Uses fmt() for f-string evaluation (same pattern as SuperPlot tooltips).
   String? _evalFormula(String formula, Map<String, dynamic> context) {
     if (!MicroPythonService.isReady) return null;
 
-    // Cache key: formula + serialized context
     final cacheKey = '$formula|${context.hashCode}';
     if (_formulaCache.containsKey(cacheKey)) {
       return _formulaCache[cacheKey] as String?;
@@ -419,7 +703,6 @@ class _PaneWidgetState extends State<PaneWidget>
 
     try {
       final result = MicroPythonService.fmt(formula, context);
-      // Limit cache size
       if (_formulaCache.length > 200) _formulaCache.clear();
       _formulaCache[cacheKey] = result;
       return result;
@@ -433,7 +716,6 @@ class _PaneWidgetState extends State<PaneWidget>
   Color? _resolveIndicatorColor(Map<String, dynamic>? meta) {
     if (meta == null) return null;
 
-    // Try formula first
     if (_colorFormula != null) {
       final result = _evalFormula(_colorFormula!, meta);
       if (result != null) {
@@ -442,7 +724,6 @@ class _PaneWidgetState extends State<PaneWidget>
       }
     }
 
-    // Fallback to static color from metadata
     final colorStr = meta['gutter_color'] as String?;
     return colorStr != null ? _parseColor(colorStr, null) : null;
   }
@@ -458,4 +739,56 @@ class _PaneWidgetState extends State<PaneWidget>
     }
     return defaultColor;
   }
+}
+
+// ── Private painters for horizontal layout ──────────────────────────
+
+/// Simple background painter for the horizontal gutter strip.
+class _HorizontalGutterPainter extends CustomPainter {
+  final Color backgroundColor;
+
+  _HorizontalGutterPainter({required this.backgroundColor});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (backgroundColor != Colors.transparent) {
+      canvas.drawRect(Offset.zero & size, Paint()..color = backgroundColor);
+    }
+  }
+
+  @override
+  bool shouldRepaint(_HorizontalGutterPainter old) =>
+      old.backgroundColor != backgroundColor;
+}
+
+/// Radial indicator dot painter for each horizontal gutter item.
+class _IndicatorDotPainter extends CustomPainter {
+  final Color color;
+  final double opacity;
+
+  _IndicatorDotPainter({required this.color, required this.opacity});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (opacity < 0.01) return;
+    final center = Offset(size.width / 2, size.height / 2);
+    final radius = size.width * 0.4;
+    final gradient = RadialGradient(
+      center: Alignment.center,
+      radius: 0.8,
+      colors: [
+        color.withValues(alpha: opacity * 0.6),
+        color.withValues(alpha: 0),
+      ],
+    );
+    final paint = Paint()
+      ..shader = gradient.createShader(
+        Rect.fromCircle(center: center, radius: radius),
+      );
+    canvas.drawCircle(center, radius, paint);
+  }
+
+  @override
+  bool shouldRepaint(_IndicatorDotPainter old) =>
+      old.color != color || old.opacity != opacity;
 }

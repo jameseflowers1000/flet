@@ -9,41 +9,58 @@ import 'gutter_painter.dart';
 
 /// Per-row widget: gutter background + indicator + icon overlay + child.
 ///
-/// Layout (Stack):
-///   ├── Padding(left: contentLeft)    ← child widget from Python
-///   ├── Positioned(left:0, w:gutterWidth)
-///   │   └── CustomPaint              ← gutter background + gradient indicator
-///   └── TransparentPointer           ← icon overlay (passes scroll through)
-///       └── Positioned(centered)
-///           └── Opacity(iconOpacity)
-///               └── icon image
+/// Vertical mode (gutter on left):
+///   Stack[
+///     Padding(left: contentOffset)  → child widget
+///     Positioned(left:0, w:gutterWidth) → gutter paint + icon
+///   ]
+///
+/// Horizontal mode is handled by PaneWidget directly (gutter strip at bottom).
 class GutterRow extends StatelessWidget {
   final Control control;
   final Animation<double> gutterWidth;
-  final Animation<double> contentLeft;
+  final Animation<double> contentOffset;
   final Animation<double> iconOpacity;
   final Animation<Color?> gutterBgColor;
   final String? gutterIcon;       // base64 PNG data
   final Color? indicatorColor;    // gradient glow color
   final double hoverWidth;
+  final bool isHorizontal;
   final VoidCallback onGutterTap;
 
   const GutterRow({
     super.key,
     required this.control,
     required this.gutterWidth,
-    required this.contentLeft,
+    required this.contentOffset,
     required this.iconOpacity,
     required this.gutterBgColor,
     this.gutterIcon,
     this.indicatorColor,
     required this.hoverWidth,
+    this.isHorizontal = false,
     required this.onGutterTap,
   });
 
+  /// Build an icon widget from base64 PNG data. Used by both
+  /// GutterRow (vertical) and PaneWidget (horizontal gutter strip).
+  static Widget buildIconFromBase64(String base64Data, double size) {
+    try {
+      final bytes = base64Decode(base64Data);
+      return Image.memory(
+        Uint8List.fromList(bytes),
+        width: size,
+        height: size,
+        fit: BoxFit.contain,
+        gaplessPlayback: true,
+      );
+    } catch (_) {
+      return const SizedBox.shrink();
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
-    // Build the child widget from this control
     final childWidget = ControlWidget(control: control);
 
     return Stack(
@@ -52,7 +69,7 @@ class GutterRow extends StatelessWidget {
         // ── Child widget with animated left padding ──
         Padding(
           padding: EdgeInsets.only(
-            left: contentLeft.value,
+            left: contentOffset.value,
             top: 4,
             bottom: 4,
           ),
@@ -88,30 +105,13 @@ class GutterRow extends StatelessWidget {
               child: Center(
                 child: Opacity(
                   opacity: iconOpacity.value,
-                  child: _buildIcon(),
+                  child: buildIconFromBase64(gutterIcon!, 28),
                 ),
               ),
             ),
           ),
       ],
     );
-  }
-
-  Widget _buildIcon() {
-    if (gutterIcon == null) return const SizedBox.shrink();
-
-    try {
-      final bytes = base64Decode(gutterIcon!);
-      return Image.memory(
-        Uint8List.fromList(bytes),
-        width: 28,
-        height: 28,
-        fit: BoxFit.contain,
-        gaplessPlayback: true, // prevent flash on rebuild
-      );
-    } catch (_) {
-      return const SizedBox.shrink();
-    }
   }
 }
 
@@ -130,7 +130,6 @@ class _TransparentPointer extends SingleChildRenderObjectWidget {
 class _RenderTransparentPointer extends RenderProxyBox {
   @override
   bool hitTest(BoxHitTestResult result, {required Offset position}) {
-    // Forward hits to children but report "not hit" to parent
     super.hitTest(result, position: position);
     return false;
   }
