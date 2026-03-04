@@ -6,11 +6,9 @@ import 'thumbnail_widget.dart';
 class Extension extends FletExtension {
   @override
   Widget? createWidget(Key? key, Control control) {
-    switch (control.type) {
-      case "flet_thumbnail":
-        return ThumbnailWidget(key: key, control: control);
-      default:
-        return null;
+    if (control.type == "flet_thumbnail") {
+      return ThumbnailWidget(key: key, control: control);
     }
+    return null;
   }
 }

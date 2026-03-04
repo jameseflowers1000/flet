@@ -23,7 +23,7 @@ from flet.controls.types import Number
 
 
 @ft.control("flet_thumbnail")
-class ThumbnailService(ft.Control):
+class ThumbnailService(ft.LayoutControl):
     """Invisible service widget for capturing control thumbnails."""
 
     # JSON array of control IDs to register for capture
