@@ -19,6 +19,7 @@ class FletDataGridSource extends DataGridSource {
     this.fontFamily,
     this.cellPaddingHorizontal = 12.0,
     this.cellPaddingVertical = 4.0,
+    this.overrideCells = const {},
   })  : _columnNames = columnNames,
         _columnDefs = columnDefs ?? [],
         _rawRows = rawRows ?? [] {
@@ -53,6 +54,9 @@ class FletDataGridSource extends DataGridSource {
   final String? fontFamily;
   final double cellPaddingHorizontal;
   final double cellPaddingVertical;
+
+  /// Set of "rowIndex:columnName" keys identifying cells with overrides
+  final Set<String> overrideCells;
 
   /// Callback when a cell is edited
   final CellEditCallback? onCellEdit;
@@ -143,7 +147,7 @@ class FletDataGridSource extends DataGridSource {
           );
         }
         final isNumeric = _isNumericColumn(cell.columnName);
-        return Container(
+        final container = Container(
           alignment: isNumeric ? Alignment.centerRight : Alignment.centerLeft,
           padding: EdgeInsets.symmetric(
               horizontal: cellPaddingHorizontal, vertical: cellPaddingVertical),
@@ -157,6 +161,24 @@ class FletDataGridSource extends DataGridSource {
             overflow: TextOverflow.ellipsis,
           ),
         );
+        // Overlay a small triangle on cells with overrides
+        final cellKey = '$rowIndex:${cell.columnName}';
+        if (overrideCells.contains(cellKey)) {
+          return Stack(
+            children: [
+              container,
+              Positioned(
+                top: 0,
+                left: 0,
+                child: CustomPaint(
+                  size: const Size(6, 6),
+                  painter: _OverrideTrianglePainter(),
+                ),
+              ),
+            ],
+          );
+        }
+        return container;
       }).toList(),
     );
   }
@@ -346,4 +368,21 @@ class FletDataGridSource extends DataGridSource {
       onCellEdit?.call(rowIndex, columnName, oldValue, newValue);
     }
   }
+}
+
+/// Paints a small filled triangle in the top-left corner to indicate an override.
+class _OverrideTrianglePainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()..color = Colors.orange;
+    final path = Path()
+      ..moveTo(0, 0)
+      ..lineTo(size.width, 0)
+      ..lineTo(0, size.height)
+      ..close();
+    canvas.drawPath(path, paint);
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }

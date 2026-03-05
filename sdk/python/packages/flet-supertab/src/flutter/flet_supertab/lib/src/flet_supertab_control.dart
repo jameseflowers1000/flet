@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:flet/flet.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:syncfusion_flutter_datagrid/datagrid.dart';
 import 'package:syncfusion_flutter_core/theme.dart';
 
@@ -25,23 +26,27 @@ class _SuperTabControlState extends State<SuperTabControl> {
   List<List<Object?>> _dataRows = [];
   List<List<Object?>> _rawRows = [];
   List<String> _columnNames = [];
+  Set<String> _overrideCells = {};
 
   /// Tracks user-resized column widths (columnName → width).
   /// Columns not in this map use auto-fill sizing.
   final Map<String, double> _columnWidths = {};
 
+  /// Whether the source needs rebuilding (data changed since last build).
+  bool _sourceNeedsRebuild = true;
+
   @override
   void initState() {
     super.initState();
     _parseData();
-    _buildSource(null);
+    // _sourceNeedsRebuild starts true; first build() will create source with context
   }
 
   @override
   void didUpdateWidget(covariant SuperTabControl oldWidget) {
     super.didUpdateWidget(oldWidget);
     _parseData();
-    // Source will be rebuilt in build() where context is available
+    _sourceNeedsRebuild = true;
   }
 
   void _parseData() {
@@ -64,6 +69,11 @@ class _SuperTabControlState extends State<SuperTabControl> {
               .map<List<Object?>>((r) => (r as List).cast<Object?>())
               .toList()
         : [];
+
+    final overrideJson = widget.control.getString("override_cells");
+    _overrideCells = overrideJson != null && overrideJson.isNotEmpty
+        ? (jsonDecode(overrideJson) as List).cast<String>().toSet()
+        : {};
   }
 
   /// Build the data source. [context] is used for Flet color name resolution;
@@ -92,6 +102,7 @@ class _SuperTabControlState extends State<SuperTabControl> {
       fontFamily: fontFamily,
       cellPaddingHorizontal: cellPadH,
       cellPaddingVertical: cellPadV,
+      overrideCells: _overrideCells,
     );
   }
 
@@ -132,8 +143,12 @@ class _SuperTabControlState extends State<SuperTabControl> {
 
   @override
   Widget build(BuildContext context) {
-    // Rebuild source with context available for color name resolution
-    _buildSource(context);
+    // Only rebuild source when data has actually changed (didUpdateWidget),
+    // not on every build — recreating the source mid-edit kills _newCellValue.
+    if (_sourceNeedsRebuild) {
+      _buildSource(context);
+      _sourceNeedsRebuild = false;
+    }
 
     final editable = widget.control.getBool("editable", false)!;
 
@@ -224,6 +239,7 @@ class _SuperTabControlState extends State<SuperTabControl> {
               return true;
             }
           : null,
+      onCellSecondaryTap: _handleCellSecondaryTap,
       selectionMode: selectionMode,
       navigationMode: navMode,
       editingGestureType: EditingGestureType.tap,
@@ -278,6 +294,70 @@ class _SuperTabControlState extends State<SuperTabControl> {
         : themed;
 
     return LayoutControl(control: widget.control, child: child);
+  }
+
+  void _handleCellSecondaryTap(DataGridCellTapDetails details) {
+    // Row 0 is header in Syncfusion's RowColumnIndex
+    final rowIndex = details.rowColumnIndex.rowIndex - 1;
+    final columnName = details.column.columnName;
+    if (rowIndex < 0 || columnName == '__row_num__') return;
+
+    // Get the raw cell value for copy
+    final colIdx = _columnNames.indexOf(columnName);
+    String cellValue = '';
+    if (colIdx >= 0 && rowIndex < _rawRows.length && colIdx < _rawRows[rowIndex].length) {
+      cellValue = _rawRows[rowIndex][colIdx]?.toString() ?? '';
+    } else if (colIdx >= 0 && rowIndex < _dataRows.length && colIdx < _dataRows[rowIndex].length) {
+      cellValue = _dataRows[rowIndex][colIdx]?.toString() ?? '';
+    }
+
+    final cellKey = '$rowIndex:$columnName';
+    final hasOverride = _overrideCells.contains(cellKey);
+
+    showMenu<String>(
+      context: context,
+      position: RelativeRect.fromLTRB(
+        details.globalPosition.dx,
+        details.globalPosition.dy,
+        details.globalPosition.dx,
+        details.globalPosition.dy,
+      ),
+      items: [
+        const PopupMenuItem(value: 'copy', child: Text('Copy')),
+        const PopupMenuItem(value: 'paste', child: Text('Paste')),
+        const PopupMenuDivider(),
+        const PopupMenuItem(value: 'clear', child: Text('Clear Cell')),
+        if (hasOverride) ...[
+          const PopupMenuDivider(),
+          const PopupMenuItem(value: 'remove_override', child: Text('Remove Override')),
+        ],
+      ],
+    ).then((action) {
+      if (action == null) return;
+      if (action == 'copy') {
+        Clipboard.setData(ClipboardData(text: cellValue));
+      } else if (action == 'paste') {
+        Clipboard.getData(Clipboard.kTextPlain).then((data) {
+          if (data?.text != null) {
+            final eventData = jsonEncode({
+              'action': 'paste',
+              'row_index': rowIndex,
+              'column_name': columnName,
+              'value': data!.text,
+            });
+            widget.control.triggerEventWithoutSubscribers('context_action', eventData);
+          }
+        });
+      } else {
+        // clear or remove_override
+        final eventData = jsonEncode({
+          'action': action,
+          'row_index': rowIndex,
+          'column_name': columnName,
+        });
+        widget.control.triggerEventWithoutSubscribers('context_action', eventData);
+      }
+    });
   }
 
   GridColumn _buildRowNumberColumn(Color headerBgColor, Color headerTextColor, double fontSize, String? fontFamily) {

@@ -63,9 +63,16 @@ class SuperTab(ft.LayoutControl):
     # Error message to display as a banner above the grid
     error_message: str = field(default="", metadata={"data_field": "error_message"})
 
+    # JSON array of "row:col_name" strings identifying cells with overrides
+    override_cells: Optional[str] = field(default=None, metadata={"data_field": "override_cells"})
+
     # Event: called when a cell is edited
     # Event data (in e.data as JSON): {"row_index": int, "column_name": str, "old_value": str, "new_value": str}
     on_cell_edit: Optional[ft.ControlEventHandler["SuperTab"]] = None
+
+    # Event: called on context menu actions (paste, clear, remove_override)
+    # Event data (in e.data as JSON): {"action": str, "row_index": int, "column_name": str, "value": str?}
+    on_context_action: Optional[ft.ControlEventHandler["SuperTab"]] = None
 
     # Internal storage for the actual list data
     _columns_data: list[dict[str, Any]] = field(default_factory=list, repr=False, metadata={"skip": True})

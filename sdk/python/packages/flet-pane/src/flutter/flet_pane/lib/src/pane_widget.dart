@@ -410,7 +410,7 @@ class _PaneWidgetState extends State<PaneWidget>
             itemBuilder: (context, index) {
               final child = childControls[index];
               final meta = _getGutterMeta(index);
-              final gutterIcon = meta?['gutter_icon'] as String?;
+              final gutterIcon = (meta?['gutter_thumbnail'] ?? meta?['gutter_icon']) as String?;
               final indicatorColor = _resolveIndicatorColor(meta);
 
               return GutterRow(
@@ -580,7 +580,7 @@ class _PaneWidgetState extends State<PaneWidget>
 
   Widget _buildHorizontalGutterItem(int index) {
     final meta = _getGutterMeta(index);
-    final gutterIcon = meta?['gutter_icon'] as String?;
+    final gutterIcon = (meta?['gutter_thumbnail'] ?? meta?['gutter_icon']) as String?;
     final indicatorColor = _resolveIndicatorColor(meta);
     final isActive = index == _activeIndex;
     final cellWidth = _gutterWidth.value.clamp(18.0, 48.0);
