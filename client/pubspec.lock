@@ -467,6 +467,13 @@ packages:
       relative: true
     source: path
     version: "0.1.0"
+  flet_markdown:
+    dependency: "direct main"
+    description:
+      path: "../sdk/python/packages/flet-markdown/src/flutter/flet_markdown"
+      relative: true
+    source: path
+    version: "0.1.0"
   flet_micropython:
     dependency: "direct main"
     description:
@@ -790,6 +797,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "7.0.0"
+  gpt_markdown:
+    dependency: transitive
+    description:
+      name: gpt_markdown
+      sha256: "9b88dfaffea644070b648c204ca4a55745a49f4ad0b58ed0ab70913ad593c7a1"
+      url: "https://pub.dev"
+    source: hosted
+    version: "1.1.5"
   gsettings:
     dependency: transitive
     description:

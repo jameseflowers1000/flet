@@ -113,6 +113,9 @@ dependencies:
   flet_thumbnail:
     path: ../sdk/python/packages/flet-thumbnail/src/flutter/flet_thumbnail
 
+  flet_markdown:
+    path: ../sdk/python/packages/flet-markdown/src/flutter/flet_markdown
+
   cupertino_icons: ^1.0.6
   syncfusion_flutter_core: any
   wakelock_plus: ^1.4.0

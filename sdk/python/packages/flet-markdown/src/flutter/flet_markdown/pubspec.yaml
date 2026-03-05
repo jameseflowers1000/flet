@@ -1,0 +1,24 @@
+name: flet_markdown
+description: Native markdown renderer with LaTeX, code highlighting, and colored text
+version: 0.1.0
+publish_to: none
+
+environment:
+  sdk: '>=3.3.0 <4.0.0'
+  flutter: ">=1.17.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  flet:
+    path: ../../../../../../../packages/flet
+
+  gpt_markdown: ^1.1.5
+  flutter_highlight: ^0.7.0
+  highlight: ^0.7.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0

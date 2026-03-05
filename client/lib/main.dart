@@ -39,6 +39,7 @@ import 'package:flet_micropython/flet_micropython.dart' as flet_micropython;
 import 'package:flet_resizable_panel/flet_resizable_panel.dart' as flet_resizable_panel;
 import 'package:flet_pane/flet_pane.dart' as flet_pane;
 import 'package:flet_thumbnail/flet_thumbnail.dart' as flet_thumbnail;
+import 'package:flet_markdown/flet_markdown.dart' as flet_markdown;
 import 'package:syncfusion_flutter_core/core.dart';
 
 const bool isProduction = bool.fromEnvironment('dart.vm.product');
@@ -78,6 +79,7 @@ void main([List<String>? args]) async {
     flet_resizable_panel.Extension(),
     flet_pane.Extension(),
     flet_thumbnail.Extension(),
+    flet_markdown.Extension(),
     flet_secure_storage.Extension(),
     flet_webview.Extension(),
 
