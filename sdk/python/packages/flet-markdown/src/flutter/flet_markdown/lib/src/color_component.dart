@@ -25,10 +25,13 @@ class ColorInlineComponent extends InlineMd {
     final content = match.group(2)!;
     final color = _parseColor(colorValue);
 
-    final style = (config.style ?? const TextStyle()).copyWith(color: color);
+    final conf = config.copyWith(
+      style: (config.style ?? const TextStyle()).copyWith(color: color),
+    );
 
-    // Recursively process the inner content for nested markdown
-    return TextSpan(text: content, style: style);
+    return TextSpan(
+      children: MarkdownComponent.generate(context, content, conf, false),
+    );
   }
 
   static Color _parseColor(String value) {
@@ -93,5 +96,37 @@ class ColorInlineComponent extends InlineMd {
       default:
         return const Color(0xFFFFFFFF); // fallback to white
     }
+  }
+}
+
+/// Custom inline component that parses <size=VALUE>text</size> syntax.
+///
+/// VALUE is a font size in logical pixels (e.g. 18, 24.5).
+class SizeInlineComponent extends InlineMd {
+  @override
+  RegExp get exp =>
+      RegExp(r'<size=([0-9]+(?:\.[0-9]+)?)>(.*?)</size>', dotAll: true);
+
+  @override
+  InlineSpan span(
+    BuildContext context,
+    String text,
+    final GptMarkdownConfig config,
+  ) {
+    final match = exp.firstMatch(text);
+    if (match == null) {
+      return TextSpan(text: text, style: config.style);
+    }
+
+    final fontSize = double.tryParse(match.group(1)!) ?? 14.0;
+    final content = match.group(2)!;
+
+    final conf = config.copyWith(
+      style: (config.style ?? const TextStyle()).copyWith(fontSize: fontSize),
+    );
+
+    return TextSpan(
+      children: MarkdownComponent.generate(context, content, conf, false),
+    );
   }
 }

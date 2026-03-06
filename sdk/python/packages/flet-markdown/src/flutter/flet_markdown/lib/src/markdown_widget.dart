@@ -31,40 +31,44 @@ class MarkdownWidget extends StatelessWidget {
 
     return LayoutControl(
       control: control,
-      child: SelectionArea(
-        child: GptMarkdown(
-          value,
-          style: baseStyle,
-          useDollarSignsForLatex: true,
-          inlineComponents: [
-            ColorInlineComponent(),
-          ],
-          codeBuilder: (context, name, code, closed) {
-            return _buildCodeBlock(context, name, code, codeTheme, darkMode);
-          },
-          highlightBuilder: (context, text, style) {
-            return Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-              decoration: BoxDecoration(
-                color: darkMode
-                    ? const Color(0xFF343942)
-                    : const Color(0xFFEFF1F3),
-                borderRadius: BorderRadius.circular(4),
-              ),
-              child: Text(
-                text,
-                style: style.copyWith(
-                  fontFamily: 'monospace',
-                  fontSize:
-                      style.fontSize != null ? style.fontSize! * 0.9 : 13,
+      child: SingleChildScrollView(
+        child: SelectionArea(
+          child: GptMarkdown(
+            value,
+            style: baseStyle,
+            useDollarSignsForLatex: true,
+            inlineComponents: [
+              ...MarkdownComponent.inlineComponents,
+              ColorInlineComponent(),
+              SizeInlineComponent(),
+            ],
+            codeBuilder: (context, name, code, closed) {
+              return _buildCodeBlock(context, name, code, codeTheme, darkMode);
+            },
+            highlightBuilder: (context, text, style) {
+              return Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                decoration: BoxDecoration(
+                  color: darkMode
+                      ? const Color(0xFF343942)
+                      : const Color(0xFFEFF1F3),
+                  borderRadius: BorderRadius.circular(4),
                 ),
-              ),
-            );
-          },
-          onLinkTap: (url, title) {
-            control.triggerEvent("tap_link", url);
-          },
+                child: Text(
+                  text,
+                  style: style.copyWith(
+                    fontFamily: 'monospace',
+                    fontSize:
+                        style.fontSize != null ? style.fontSize! * 0.9 : 13,
+                  ),
+                ),
+              );
+            },
+            onLinkTap: (url, title) {
+              control.triggerEvent("tap_link", url);
+            },
+          ),
         ),
       ),
     );
