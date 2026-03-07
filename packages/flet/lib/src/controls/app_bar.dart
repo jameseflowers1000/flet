@@ -30,6 +30,7 @@ class AppBarControl extends StatelessWidget implements PreferredSizeWidget {
       toolbarHeight: preferredSize.height,
       foregroundColor: control.getColor("color", context),
       backgroundColor: control.getColor("bgcolor", context),
+      surfaceTintColor: Colors.transparent,
       elevation: control.getDouble("elevation"),
       actions: control.buildWidgets("actions"),
       systemOverlayStyle: Theme.of(context)

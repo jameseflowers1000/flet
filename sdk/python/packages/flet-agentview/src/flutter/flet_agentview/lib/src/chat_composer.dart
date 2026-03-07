@@ -134,11 +134,19 @@ class _ChatComposerState extends State<ChatComposer> {
         }
         return KeyEventResult.handled;
       }
-      // If slash menu is showing, auto-select the best match
+      // If slash menu is showing, Enter always submits the command
+      // (Tab/space are the triggers for entering arg phase)
       if (_showSlashMenu) {
         final match = _bestSlashMatch();
         if (match != null) {
-          _onSlashCommandSelected(match);
+          _textController.text = match.command;
+          setState(() {
+            _showSlashMenu = false;
+            _slashFilter = '';
+            _selectedCommand = null;
+            _argFilter = '';
+          });
+          _submit();
           return KeyEventResult.handled;
         }
       }
