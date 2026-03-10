@@ -31,6 +31,8 @@ import 'package:flet_webview/flet_webview.dart' as flet_webview;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_web_plugins/url_strategy.dart';
+import 'dart:convert';
+import 'dart:io';
 import 'package:flet_supertab/flet_supertab.dart' as flet_supertab;
 import 'package:flet_superplot/flet_superplot.dart' as flet_superplot;
 import 'package:flet_agentview/flet_agentview.dart' as flet_agentview;
@@ -46,18 +48,9 @@ const bool isProduction = bool.fromEnvironment('dart.vm.product');
 
 Tester? tester;
 
-void main([List<String>? args]) async {
-  if (isProduction) {
-    // ignore: avoid_returning_null_for_void
-    debugPrint = (String? message, {int? wrapWidth}) => null;
-  }
-
-  await setupDesktop();
-
-  WidgetsFlutterBinding.ensureInitialized();
-  // Ignore for now,  Syncfusion docs say no key is needed here
-  // SyncfusionLicense.registerLicense("<YOUR LICENSE KEY>");
-  List<FletExtension> extensions = [
+// -- Epyx extension list (shared between native and connected modes) --
+List<FletExtension> _buildExtensions() {
+  final extensions = <FletExtension>[
     flet_ads.Extension(),
     flet_audio_recorder.Extension(),
     flet_camera.Extension(),
@@ -82,7 +75,6 @@ void main([List<String>? args]) async {
     flet_markdown.Extension(),
     flet_secure_storage.Extension(),
     flet_webview.Extension(),
-
     // --FAT_CLIENT_START--
     // --RIVE_EXTENSION_START--
     // flet_rive.Extension(),
@@ -91,18 +83,49 @@ void main([List<String>? args]) async {
     flet_video.Extension(),
     // --FAT_CLIENT_END--
   ];
-
-  // initialize extensions
   for (var extension in extensions) {
     extension.ensureInitialized();
   }
+  return extensions;
+}
 
-  var pageUrl = Uri.base.toString();
+// -- Resolve the Flet page URL from args/platform --
+String _resolvePageUrl(List<String>? args) {
+  if (kDebugMode) return "http://localhost:8550";
+  if (kIsWeb) {
+    // ?welcome=1 means static serve with no Flet server — show welcome screen
+    if (Uri.base.queryParameters.containsKey('welcome')) return "";
+    return Uri.base.toString();
+  }
+  if (args != null && args.isNotEmpty) return args[0];
+  return "";
+}
+
+void main([List<String>? args]) async {
+  if (isProduction) {
+    // ignore: avoid_returning_null_for_void
+    debugPrint = (String? message, {int? wrapWidth}) => null;
+  }
+
+  await setupDesktop();
+  WidgetsFlutterBinding.ensureInitialized();
+
+  final extensions = _buildExtensions();
+  final pageUrl = _resolvePageUrl(args);
+
+  // Handle PID file and assets dir from args (desktop mode)
   var assetsDir = "";
-  //debugPrint("Uri.base: ${Uri.base}");
-
-  if (kDebugMode) {
-    pageUrl = "http://localhost:8550";
+  if (!kIsWeb && args != null) {
+    if (args.length > 1) {
+      var pidFilePath = args[1];
+      debugPrint("Args contain a path to PID file: $pidFilePath}");
+      var pidFile = await File(pidFilePath).create();
+      await pidFile.writeAsString("$pid");
+    }
+    if (args.length > 2) {
+      assetsDir = args[2];
+      debugPrint("Args contain a path assets directory: $assetsDir}");
+    }
   }
 
   if (kIsWeb) {
@@ -112,58 +135,505 @@ void main([List<String>? args]) async {
     if (routeUrlStrategy == "path") {
       usePathUrlStrategy();
     }
-  } else {
-    if (args!.isNotEmpty) {
-      pageUrl = args[0];
-      if (args.length > 1) {
-        var pidFilePath = args[1];
-        debugPrint("Args contain a path to PID file: $pidFilePath}");
-        var pidFile = await File(pidFilePath).create();
-        await pidFile.writeAsString("$pid");
-      }
-      if (args.length > 2) {
-        assetsDir = args[2];
-        debugPrint("Args contain a path assets directory: $assetsDir}");
-      }
-    } else if (!kDebugMode &&
-        (Platform.isWindows || Platform.isMacOS || Platform.isLinux)) {
-      throw Exception(
-          'In desktop mode Flet app URL must be provided as a first argument.');
-    }
   }
 
-  debugPrint("Page URL: $pageUrl");
-
   FletAppErrorsHandler errorsHandler = FletAppErrorsHandler();
-
   if (!kDebugMode) {
     FlutterError.onError = (details) {
       errorsHandler.onError(details.exceptionAsString());
     };
-
     PlatformDispatcher.instance.onError = (error, stack) {
       errorsHandler.onError(error.toString());
       return true;
     };
   }
 
-  var app = FletApp(
-    title: 'Flet',
+  debugPrint("Page URL: $pageUrl");
+
+  // -- SPIKE: Native app shell with lazy Flet embedding --
+  // The app starts as a native MaterialApp. When the user opens a doclet,
+  // FletApp is embedded as a child widget within the native shell.
+  runApp(EpyxApp(
     pageUrl: pageUrl,
     assetsDir: assetsDir,
-    errorsHandler: errorsHandler,
-    showAppStartupScreen: true,
-    appStartupScreenMessage: "Working...",
-    appErrorMessage: "The application encountered an error: {message}",
     extensions: extensions,
-    multiView: isMultiView(),
-    tester: tester,
+    errorsHandler: errorsHandler,
+  ));
+}
+
+/// The top-level native Flutter app.
+/// Shows a welcome screen, then lazily embeds FletApp when connecting.
+class EpyxApp extends StatefulWidget {
+  final String pageUrl;
+  final String assetsDir;
+  final List<FletExtension> extensions;
+  final FletAppErrorsHandler errorsHandler;
+
+  const EpyxApp({
+    super.key,
+    required this.pageUrl,
+    required this.assetsDir,
+    required this.extensions,
+    required this.errorsHandler,
+  });
+
+  @override
+  State<EpyxApp> createState() => _EpyxAppState();
+}
+
+class _EpyxAppState extends State<EpyxApp> {
+  bool get _hasServer => widget.pageUrl.isNotEmpty;
+
+  @override
+  Widget build(BuildContext context) {
+    if (_hasServer) {
+      return FletApp(
+        pageUrl: widget.pageUrl,
+        assetsDir: widget.assetsDir,
+        errorsHandler: widget.errorsHandler,
+        showAppStartupScreen: true,
+        appStartupScreenMessage: "Working...",
+        appErrorMessage: "The application encountered an error: {message}",
+        extensions: widget.extensions,
+        multiView: isMultiView(),
+        tester: tester,
+      );
+    }
+
+    return MaterialApp(
+      title: 'Epyx EDD',
+      debugShowCheckedModeBanner: false,
+      theme: ThemeData(
+        colorScheme: ColorScheme.dark(
+          primary: const Color(0xFF4410AA),
+          secondary: const Color(0xFF6C3EBF),
+          surface: const Color(0xFF1A1A2E),
+        ),
+        scaffoldBackgroundColor: const Color(0xFF0D0D1A),
+        useMaterial3: true,
+      ),
+      home: const CatalogScreen(),
+    );
+  }
+}
+
+// -- Data model for a doclet entry --
+class DocletInfo {
+  final String dirName;
+  final String path;
+  final String name;
+  final String vin;
+  final String template;
+  final String? description;
+  final DateTime? createdAt;
+  final DateTime? modifiedAt;
+  final String? thumbnailPath;
+
+  DocletInfo({
+    required this.dirName,
+    required this.path,
+    required this.name,
+    required this.vin,
+    required this.template,
+    this.description,
+    this.createdAt,
+    this.modifiedAt,
+    this.thumbnailPath,
+  });
+
+  static DocletInfo? fromDirectory(Directory dir) {
+    final manifest = File('${dir.path}/manifest.json');
+    if (!manifest.existsSync()) return null;
+    try {
+      final data = jsonDecode(manifest.readAsStringSync()) as Map<String, dynamic>;
+      final thumbFile = File('${dir.path}/.meta/thumbnail.png');
+      return DocletInfo(
+        dirName: dir.path.split('/').last,
+        path: dir.path,
+        name: data['name'] as String? ?? dir.path.split('/').last,
+        vin: data['vin'] as String? ?? '',
+        template: data['template'] as String? ?? 'Unknown',
+        description: data['description'] as String?,
+        createdAt: data['created_at'] != null
+            ? DateTime.tryParse(data['created_at'] as String)
+            : null,
+        modifiedAt: data['modified_at'] != null
+            ? DateTime.tryParse(data['modified_at'] as String)
+            : null,
+        thumbnailPath: thumbFile.existsSync() ? thumbFile.path : null,
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+}
+
+// -- Native catalog browser screen --
+class CatalogScreen extends StatefulWidget {
+  const CatalogScreen({super.key});
+
+  @override
+  State<CatalogScreen> createState() => _CatalogScreenState();
+}
+
+class _CatalogScreenState extends State<CatalogScreen> {
+  List<DocletInfo> _doclets = [];
+  bool _loading = true;
+  String _searchQuery = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _scanDoclets();
+  }
+
+  String get _docletsPath {
+    if (Platform.isMacOS) {
+      return '${Platform.environment['HOME']}/Library/Application Support/Epyx/Doclets';
+    } else if (Platform.isLinux) {
+      return '${Platform.environment['HOME']}/.local/share/epyx/doclets';
+    } else if (Platform.isWindows) {
+      return '${Platform.environment['APPDATA']}\\Epyx\\Doclets';
+    }
+    return '';
+  }
+
+  void _scanDoclets() {
+    final dir = Directory(_docletsPath);
+    if (!dir.existsSync()) {
+      setState(() => _loading = false);
+      return;
+    }
+    final doclets = <DocletInfo>[];
+    for (final entity in dir.listSync()) {
+      if (entity is Directory) {
+        final info = DocletInfo.fromDirectory(entity);
+        if (info != null) doclets.add(info);
+      }
+    }
+    // Sort by modified date descending (most recent first)
+    doclets.sort((a, b) {
+      final am = a.modifiedAt ?? a.createdAt ?? DateTime(2000);
+      final bm = b.modifiedAt ?? b.createdAt ?? DateTime(2000);
+      return bm.compareTo(am);
+    });
+    setState(() {
+      _doclets = doclets;
+      _loading = false;
+    });
+  }
+
+  List<DocletInfo> get _filtered {
+    if (_searchQuery.isEmpty) return _doclets;
+    final q = _searchQuery.toLowerCase();
+    return _doclets.where((d) =>
+        d.name.toLowerCase().contains(q) ||
+        d.template.toLowerCase().contains(q) ||
+        (d.description?.toLowerCase().contains(q) ?? false)).toList();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: Column(
+        children: [
+          _buildHeader(),
+          if (!_loading) _buildSearchBar(),
+          Expanded(
+            child: _loading
+                ? const Center(child: CircularProgressIndicator())
+                : _filtered.isEmpty
+                    ? _buildEmptyState()
+                    : _buildGrid(),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildHeader() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(32, 32, 32, 8),
+      child: Row(
+        children: [
+          Text(
+            'epyx',
+            style: TextStyle(
+              fontSize: 32,
+              fontWeight: FontWeight.bold,
+              color: const Color(0xFF4410AA),
+              letterSpacing: 2,
+            ),
+          ),
+          const SizedBox(width: 12),
+          Text(
+            'Documents',
+            style: TextStyle(
+              fontSize: 24,
+              color: Colors.grey[300],
+              fontWeight: FontWeight.w300,
+            ),
+          ),
+          const Spacer(),
+          IconButton(
+            icon: const Icon(Icons.folder_open),
+            tooltip: 'Open doclet from folder...',
+            onPressed: _pickAndOpenDoclet,
+          ),
+          const SizedBox(width: 4),
+          IconButton(
+            icon: const Icon(Icons.refresh),
+            tooltip: 'Refresh',
+            onPressed: () {
+              setState(() => _loading = true);
+              _scanDoclets();
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSearchBar() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(32, 0, 32, 16),
+      child: TextField(
+        decoration: InputDecoration(
+          hintText: 'Search doclets...',
+          prefixIcon: const Icon(Icons.search, size: 20),
+          filled: true,
+          fillColor: const Color(0xFF1A1A2E),
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(8),
+            borderSide: BorderSide.none,
+          ),
+          contentPadding: const EdgeInsets.symmetric(vertical: 12),
+        ),
+        onChanged: (v) => setState(() => _searchQuery = v),
+      ),
+    );
+  }
+
+  Widget _buildEmptyState() {
+    if (_doclets.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.folder_open, size: 64, color: Colors.grey[700]),
+            const SizedBox(height: 16),
+            Text('No doclets found', style: TextStyle(color: Colors.grey[500], fontSize: 18)),
+            const SizedBox(height: 8),
+            Text('Use  edd create  to create a new document',
+                style: TextStyle(color: Colors.grey[600], fontSize: 14)),
+          ],
+        ),
+      );
+    }
+    return Center(
+      child: Text('No matches for "$_searchQuery"',
+          style: TextStyle(color: Colors.grey[500])),
+    );
+  }
+
+  Widget _buildGrid() {
+    return LayoutBuilder(builder: (context, constraints) {
+      final crossAxisCount = (constraints.maxWidth / 260).floor().clamp(1, 6);
+      return GridView.builder(
+        padding: const EdgeInsets.fromLTRB(32, 0, 32, 32),
+        gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+          crossAxisCount: crossAxisCount,
+          childAspectRatio: 0.85,
+          crossAxisSpacing: 16,
+          mainAxisSpacing: 16,
+        ),
+        itemCount: _filtered.length,
+        itemBuilder: (context, index) => _buildCard(_filtered[index]),
+      );
+    });
+  }
+
+  Widget _buildCard(DocletInfo doclet) {
+    return Card(
+      color: const Color(0xFF1E1E30),
+      clipBehavior: Clip.antiAlias,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+      child: InkWell(
+        onTap: () => _openDoclet(doclet),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Expanded(
+              child: doclet.thumbnailPath != null
+                  ? Image.file(File(doclet.thumbnailPath!), fit: BoxFit.cover)
+                  : Container(
+                      color: const Color(0xFF14142A),
+                      child: Center(
+                        child: Icon(Icons.description,
+                            size: 48, color: Colors.grey[700]),
+                      ),
+                    ),
+            ),
+            Padding(
+              padding: const EdgeInsets.all(10),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    doclet.name,
+                    style: const TextStyle(
+                        fontWeight: FontWeight.w600, fontSize: 14),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  const SizedBox(height: 4),
+                  Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF4410AA).withValues(alpha: 0.3),
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: Text(
+                          doclet.template,
+                          style: TextStyle(
+                              fontSize: 11, color: Colors.grey[300]),
+                        ),
+                      ),
+                      const Spacer(),
+                      if (doclet.modifiedAt != null)
+                        Text(
+                          _formatDate(doclet.modifiedAt!),
+                          style: TextStyle(
+                              fontSize: 11, color: Colors.grey[600]),
+                        ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  String _formatDate(DateTime dt) {
+    final now = DateTime.now();
+    final diff = now.difference(dt);
+    if (diff.inDays == 0) return 'Today';
+    if (diff.inDays == 1) return 'Yesterday';
+    if (diff.inDays < 7) return '${diff.inDays}d ago';
+    return '${dt.month}/${dt.day}/${dt.year}';
+  }
+
+  Future<void> _pickAndOpenDoclet() async {
+    // Native folder picker via osascript (macOS) or zenity (Linux)
+    String? dirPath;
+    if (Platform.isMacOS) {
+      final result = await Process.run('osascript', [
+        '-e',
+        'set f to POSIX path of (choose folder with prompt "Select a doclet directory")',
+      ]);
+      if (result.exitCode == 0) {
+        dirPath = (result.stdout as String).trim();
+        // osascript adds trailing slash — remove it
+        if (dirPath.endsWith('/') && dirPath.length > 1) {
+          dirPath = dirPath.substring(0, dirPath.length - 1);
+        }
+      }
+    } else if (Platform.isLinux) {
+      final result = await Process.run('zenity', ['--file-selection', '--directory']);
+      if (result.exitCode == 0) dirPath = (result.stdout as String).trim();
+    }
+    if (dirPath == null || dirPath.isEmpty) return;
+
+    // Validate it's a doclet (must have manifest.json)
+    if (!File('$dirPath/manifest.json').existsSync()) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Not a doclet: $dirPath (no manifest.json found)'),
+            duration: const Duration(seconds: 8),
+          ),
+        );
+      }
+      return;
+    }
+
+    // Pass the absolute path to edd open — resolve_doclet handles paths
+    final eddPath = _findEdd();
+    if (eddPath == null) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Error: edd not found on PATH or in ~/bin')),
+        );
+      }
+      return;
+    }
+    _launchEdd(['open', dirPath]);
+  }
+
+  String? _findEdd() {
+    // Resolve the edd script path. Try: PATH, ~/bin, known symlink.
+    final result = Process.runSync('which', ['edd']);
+    if (result.exitCode == 0) return (result.stdout as String).trim();
+    final home = Platform.environment['HOME'] ?? '';
+    final homeBin = '$home/bin/edd';
+    if (File(homeBin).existsSync()) return homeBin;
+    return null;
+  }
+
+  Future<void> _openDoclet(DocletInfo doclet) async {
+    _launchEdd(['open', doclet.dirName]);
+  }
+
+  static final _errorPattern = RegExp(
+    r'(^error\b|^fatal\b|cannot connect|connection refused|no such file|server error|traceback|exception)',
+    caseSensitive: false,
   );
 
-  if (app.multiView) {
-    debugPrint("Flet Web Multi-View mode");
-    runWidget(app);
-  } else {
-    runApp(app);
+  /// Launch edd with args. Watches stderr in real-time and shows
+  /// genuine errors in a SnackBar (filters out routine log chatter).
+  Future<void> _launchEdd(List<String> args) async {
+    final eddPath = _findEdd();
+    if (eddPath == null) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Error: edd not found on PATH or in ~/bin')),
+        );
+      }
+      return;
+    }
+    final process = await Process.start(eddPath, args);
+    bool errorShown = false;
+    process.stderr.transform(const SystemEncoding().decoder).listen((data) {
+      if (errorShown || !mounted) return;
+      // Check each line for real errors (skip ttyd/libwebsockets chatter)
+      for (final line in data.split('\n')) {
+        final trimmed = line.trim();
+        if (trimmed.isNotEmpty && _errorPattern.hasMatch(trimmed)) {
+          errorShown = true;
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(trimmed),
+              duration: const Duration(seconds: 10),
+            ),
+          );
+          break;
+        }
+      }
+    });
+    process.exitCode.then((code) {
+      if (code != 0 && !errorShown && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('edd exited with code $code'),
+            duration: const Duration(seconds: 10),
+          ),
+        );
+      }
+    });
   }
 }
