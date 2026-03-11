@@ -153,10 +153,17 @@ flutter:
   # the material Icons class.
   uses-material-design: true
 
-  # To add assets to your application, add an assets section, like this:
-  # assets:
-  #   - images/a_dot_burr.jpeg
-  #   - images/a_dot_ham.jpeg
+  assets:
+    - assets/epyx-logo.png
+    - assets/epyx-logo-neon.png
+    - assets/epyx-anim-base.png
+    - assets/epyx-glow-e.png
+    - assets/epyx-glow-p.png
+    - assets/epyx-glow-y.png
+    - assets/epyx-glow-x.png
+    - assets/epyx-glow-dot.png
+    - assets/epyx-glow-a.png
+    - assets/epyx-glow-i.png
 
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/assets-and-images/#resolution-aware.

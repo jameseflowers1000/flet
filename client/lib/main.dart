@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flet/flet.dart';
 import 'package:flet_ads/flet_ads.dart' as flet_ads;
 // --FAT_CLIENT_START--
@@ -217,6 +218,119 @@ class _EpyxAppState extends State<EpyxApp> {
   }
 }
 
+// -- Animated Epyx logo (per-letter neon glow, matching Python NeonLogo) --
+class EpyxLogo extends StatefulWidget {
+  final double height;
+  const EpyxLogo({super.key, this.height = 60});
+
+  @override
+  State<EpyxLogo> createState() => EpyxLogoState();
+}
+
+class EpyxLogoState extends State<EpyxLogo> with TickerProviderStateMixin {
+  bool _hovering = false;
+  bool _busy = false;
+  int _currentGlow = 0;
+  Timer? _animTimer;
+
+  // Letter order matches Python LETTER_ORDER in neon.py
+  static const _letters = ['e', 'p', 'y', 'x', 'dot', 'a', 'i'];
+  // Neon logo is ~1.46× taller than flat (same ratio as Python NeonLogo)
+  static const _neonRatio = 1.46;
+  // Aspect ratio from generated assets (width/height = 462/180)
+  static const _aspect = 2.5667;
+  // Animation timing (matches Python _FADE_MS=200, interval=0.6)
+  static const _fadeDuration = Duration(milliseconds: 200);
+  static const _glowInterval = Duration(milliseconds: 600);
+
+  void startBusy() {
+    if (_busy) return;
+    setState(() {
+      _busy = true;
+      _currentGlow = 0;
+    });
+    _animTimer = Timer.periodic(_glowInterval, (_) {
+      if (!mounted) return;
+      setState(() => _currentGlow = (_currentGlow + 1) % _letters.length);
+    });
+  }
+
+  void stopBusy() {
+    if (!_busy) return;
+    _animTimer?.cancel();
+    _animTimer = null;
+    setState(() => _busy = false);
+  }
+
+  @override
+  void dispose() {
+    _animTimer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final neonHeight = widget.height;
+    final flatHeight = widget.height / _neonRatio;
+
+    return MouseRegion(
+      onEnter: (_) { if (!_busy) setState(() => _hovering = true); },
+      onExit: (_) { if (!_busy) setState(() => _hovering = false); },
+      child: SizedBox(
+        height: neonHeight,
+        width: neonHeight * _aspect,
+        child: _busy ? _buildBusyStack(neonHeight) : _buildIdleStack(neonHeight, flatHeight),
+      ),
+    );
+  }
+
+  /// Normal state: flat logo centered, neon on hover
+  Widget _buildIdleStack(double neonHeight, double flatHeight) {
+    return Stack(
+      children: [
+        // Flat logo (normal)
+        AnimatedOpacity(
+          opacity: _hovering ? 0.0 : 1.0,
+          duration: _fadeDuration,
+          child: Center(
+            child: Image.asset('assets/epyx-logo.png',
+              height: flatHeight, fit: BoxFit.fitHeight),
+          ),
+        ),
+        // Full neon logo (hover)
+        AnimatedOpacity(
+          opacity: _hovering ? 1.0 : 0.0,
+          duration: _fadeDuration,
+          child: Image.asset('assets/epyx-logo-neon.png',
+            height: neonHeight, fit: BoxFit.fitHeight),
+        ),
+      ],
+    );
+  }
+
+  /// Busy state: flat base (constant) + per-letter glow overlays (cycling)
+  /// Architecture matches Python NeonLogo: 3 layers in Stack —
+  ///   1. Flat base (all letters, always visible)
+  ///   2. Per-letter glow overlays (one at a time, crossfade via AnimatedOpacity)
+  Widget _buildBusyStack(double neonHeight) {
+    return Stack(
+      children: [
+        // Layer 1: flat base — all letters, constant, no flicker
+        Image.asset('assets/epyx-anim-base.png',
+          height: neonHeight, fit: BoxFit.fitHeight),
+        // Layer 2: per-letter glow overlays
+        for (int i = 0; i < _letters.length; i++)
+          AnimatedOpacity(
+            opacity: i == _currentGlow ? 1.0 : 0.0,
+            duration: _fadeDuration,
+            child: Image.asset('assets/epyx-glow-${_letters[i]}.png',
+              height: neonHeight, fit: BoxFit.fitHeight),
+          ),
+      ],
+    );
+  }
+}
+
 // -- Data model for a doclet entry --
 class DocletInfo {
   final String dirName;
@@ -280,6 +394,7 @@ class _CatalogScreenState extends State<CatalogScreen> {
   List<DocletInfo> _doclets = [];
   bool _loading = true;
   String _searchQuery = '';
+  final _logoKey = GlobalKey<EpyxLogoState>();
 
   @override
   void initState() {
@@ -353,19 +468,11 @@ class _CatalogScreenState extends State<CatalogScreen> {
 
   Widget _buildHeader() {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(32, 32, 32, 8),
+      padding: const EdgeInsets.fromLTRB(32, 24, 32, 8),
       child: Row(
         children: [
-          Text(
-            'epyx',
-            style: TextStyle(
-              fontSize: 32,
-              fontWeight: FontWeight.bold,
-              color: const Color(0xFF4410AA),
-              letterSpacing: 2,
-            ),
-          ),
-          const SizedBox(width: 12),
+          EpyxLogo(key: _logoKey, height: 60),
+          const SizedBox(width: 16),
           Text(
             'Documents',
             style: TextStyle(
@@ -606,15 +713,33 @@ class _CatalogScreenState extends State<CatalogScreen> {
       }
       return;
     }
+    // Start busy animation while container launches
+    _logoKey.currentState?.startBusy();
     final process = await Process.start(eddPath, args);
     bool errorShown = false;
+    bool busyStopped = false;
+    void stopBusy() {
+      if (busyStopped) return;
+      busyStopped = true;
+      _logoKey.currentState?.stopBusy();
+    }
+    // Safety timeout in case handshake never arrives
+    final busyTimer = Timer(const Duration(seconds: 30), stopBusy);
+    // Watch stdout for EPYX_CLIENT_READY handshake from startup agent
+    process.stdout.transform(const SystemEncoding().decoder).listen((data) {
+      if (data.contains('EPYX_CLIENT_READY')) {
+        busyTimer.cancel();
+        stopBusy();
+      }
+    });
     process.stderr.transform(const SystemEncoding().decoder).listen((data) {
       if (errorShown || !mounted) return;
-      // Check each line for real errors (skip ttyd/libwebsockets chatter)
       for (final line in data.split('\n')) {
         final trimmed = line.trim();
         if (trimmed.isNotEmpty && _errorPattern.hasMatch(trimmed)) {
           errorShown = true;
+          busyTimer.cancel();
+          stopBusy();
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
               content: Text(trimmed),
@@ -626,6 +751,8 @@ class _CatalogScreenState extends State<CatalogScreen> {
       }
     });
     process.exitCode.then((code) {
+      busyTimer.cancel();
+      stopBusy();
       if (code != 0 && !errorShown && mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
