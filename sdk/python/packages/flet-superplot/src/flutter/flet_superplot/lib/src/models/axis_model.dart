@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 /// Axis configuration model parsed from JSON.
 class AxisModel {
+  final String id; // "x0", "y0", "y1", etc.
   final String type; // "numeric" or "logarithmic"
   final String? axisTitle;
   final double? visibleRangeMin;
@@ -28,6 +29,7 @@ class AxisModel {
   final double? logarithmicBase;
 
   AxisModel({
+    this.id = 'y0',
     required this.type,
     this.axisTitle,
     this.visibleRangeMin,
@@ -56,6 +58,7 @@ class AxisModel {
 
   factory AxisModel.fromJson(Map<String, dynamic> json) {
     return AxisModel(
+      id: json['id'] as String? ?? 'y0',
       type: json['type'] ?? 'numeric',
       axisTitle: json['axis_title'],
       visibleRangeMin: json['visible_range_min']?.toDouble(),
@@ -97,6 +100,7 @@ class AxisModel {
 
   bool get isHorizontal => axisAlignment == 'top' || axisAlignment == 'bottom';
   bool get isLogarithmic => type == 'logarithmic';
+  bool get isDateTime => type == 'datetime';
 
   /// Create a copy with selected fields overridden.
   AxisModel copyWith({
@@ -107,6 +111,7 @@ class AxisModel {
     double? growByMax,
   }) {
     return AxisModel(
+      id: id,
       type: type,
       axisTitle: axisTitle,
       visibleRangeMin: visibleRangeMin ?? this.visibleRangeMin,

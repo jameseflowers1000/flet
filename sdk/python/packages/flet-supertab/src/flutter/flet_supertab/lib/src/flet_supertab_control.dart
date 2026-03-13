@@ -22,6 +22,7 @@ class SuperTabControl extends StatefulWidget {
 
 class _SuperTabControlState extends State<SuperTabControl> {
   late FletDataGridSource _source;
+  late DataGridController _gridController;
   List<dynamic> _cols = [];
   List<List<Object?>> _dataRows = [];
   List<List<Object?>> _rawRows = [];
@@ -38,8 +39,15 @@ class _SuperTabControlState extends State<SuperTabControl> {
   @override
   void initState() {
     super.initState();
+    _gridController = DataGridController();
     _parseData();
     // _sourceNeedsRebuild starts true; first build() will create source with context
+  }
+
+  @override
+  void dispose() {
+    _gridController.dispose();
+    super.dispose();
   }
 
   @override
@@ -117,6 +125,17 @@ class _SuperTabControlState extends State<SuperTabControl> {
     widget.control.triggerEventWithoutSubscribers("cell_edit", eventData);
   }
 
+  void _handleSelectionChanged(
+      List<DataGridRow> addedRows, List<DataGridRow> removedRows) {
+    final selectedIndices = <int>[];
+    for (var row in _gridController.selectedRows) {
+      final idx = _source.rows.indexOf(row);
+      if (idx >= 0) selectedIndices.add(idx);
+    }
+    final eventData = jsonEncode({"selected_rows": selectedIndices});
+    widget.control.triggerEventWithoutSubscribers("checkbox_selection", eventData);
+  }
+
   /// Parse a color property using Flet's built-in color resolver.
   /// Handles hex (#FF8C00), Flet names (deeporange, blue, amber700), and
   /// opacity (red,0.5). Falls back to [fallback] on null/empty/parse failure.
@@ -171,33 +190,39 @@ class _SuperTabControlState extends State<SuperTabControl> {
     final gridLineWidth = widget.control.getDouble("grid_line_width", 1.0)!;
     final currentCellBorderWidth = widget.control.getDouble("current_cell_border_width", 2.0)!;
 
-    // Selection mode
-    final selectionModeStr =
-        widget.control.getString("selection_mode") ?? "cell";
-    SelectionMode selectionMode;
-    GridNavigationMode navMode;
-    switch (selectionModeStr) {
-      case "row":
-        selectionMode = SelectionMode.single;
-        navMode = GridNavigationMode.row;
-        break;
-      case "none":
-        selectionMode = SelectionMode.none;
-        navMode = GridNavigationMode.row;
-        break;
-      case "cell":
-      default:
-        selectionMode = SelectionMode.single;
-        navMode = GridNavigationMode.cell;
-        break;
-    }
-
     final allowSorting = widget.control.getBool("allow_sorting", false)!;
     final allowColumnResize = widget.control.getBool("allow_column_resize", false)!;
 
     // Config properties from ETab
     final showRowNumbers = widget.control.getBool("show_row_numbers", false)!;
     final showCheckboxColumn = widget.control.getBool("show_checkbox_column", false)!;
+
+    // Selection mode
+    final selectionModeStr =
+        widget.control.getString("selection_mode") ?? "cell";
+    SelectionMode selectionMode;
+    GridNavigationMode navMode;
+    if (showCheckboxColumn) {
+      // Checkbox column requires multiple selection mode
+      selectionMode = SelectionMode.multiple;
+      navMode = GridNavigationMode.row;
+    } else {
+      switch (selectionModeStr) {
+        case "row":
+          selectionMode = SelectionMode.single;
+          navMode = GridNavigationMode.row;
+          break;
+        case "none":
+          selectionMode = SelectionMode.none;
+          navMode = GridNavigationMode.row;
+          break;
+        case "cell":
+        default:
+          selectionMode = SelectionMode.single;
+          navMode = GridNavigationMode.cell;
+          break;
+      }
+    }
     final frozenColumnsCount = widget.control.getInt("frozen_columns_count", 0)!;
     final rowHeight = widget.control.getDouble("row_height", 36.0)!;
     final headerRowHeight = widget.control.getDouble("header_row_height", 40.0)!;
@@ -227,6 +252,7 @@ class _SuperTabControlState extends State<SuperTabControl> {
 
     final grid = SfDataGrid(
       source: _source,
+      controller: _gridController,
       allowEditing: editable,
       allowSorting: allowSorting,
       allowColumnsResizing: allowColumnResize,
@@ -240,6 +266,7 @@ class _SuperTabControlState extends State<SuperTabControl> {
             }
           : null,
       onCellSecondaryTap: _handleCellSecondaryTap,
+      onSelectionChanged: showCheckboxColumn ? _handleSelectionChanged : null,
       selectionMode: selectionMode,
       navigationMode: navMode,
       editingGestureType: EditingGestureType.tap,

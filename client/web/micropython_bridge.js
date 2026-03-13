@@ -157,6 +157,8 @@
         '    try:\n' +
         '        ctx = json.loads(ctx_json) if ctx_json else {}\n' +
         '        _g = {\n' +
+        '            "json": json,\n' +
+        '            "__import__": __import__,\n' +
         '            "cfmt": _cfmt,\n' +
         '            "len": len,\n' +
         '            "sum": sum,\n' +
@@ -276,7 +278,12 @@
           JSON.stringify(String(contextJson || '{}')) + ')';
         mp.runPython(callCode);
         var result = capturedOutput.trim();
-        lastError = '';
+        if (result && result.indexOf('__error__') >= 0) {
+          console.error('[MicroPython execEval] error:', result);
+          lastError = result;
+        } else {
+          lastError = '';
+        }
         return result || '{"__error__": "no output from execEval"}';
       } catch (e) {
         lastError = String(e);

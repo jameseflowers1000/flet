@@ -74,6 +74,10 @@ class SuperTab(ft.LayoutControl):
     # Event data (in e.data as JSON): {"action": str, "row_index": int, "column_name": str, "value": str?}
     on_context_action: Optional[ft.ControlEventHandler["SuperTab"]] = None
 
+    # Event: called when checkbox selection changes (only when show_checkbox_column=True)
+    # Event data (in e.data as JSON): {"selected_rows": [int, ...]}
+    on_checkbox_selection: Optional[ft.ControlEventHandler["SuperTab"]] = None
+
     # Internal storage for the actual list data
     _columns_data: list[dict[str, Any]] = field(default_factory=list, repr=False, metadata={"skip": True})
     _rows_data: list[list[Any]] = field(default_factory=list, repr=False, metadata={"skip": True})

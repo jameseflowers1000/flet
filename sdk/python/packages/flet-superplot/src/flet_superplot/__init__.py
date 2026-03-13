@@ -15,6 +15,7 @@ from .series import (
 )
 from .data import XyDataSeries, OhlcDataSeries
 from .annotations import HorizontalLine, VerticalLine, TextAnnotation, BoxAnnotation
+from .bridge import evaluate_plot_code, BRIDGE_SOURCE
 
 __all__ = [
     # Main control
@@ -41,4 +42,7 @@ __all__ = [
     "VerticalLine",
     "TextAnnotation",
     "BoxAnnotation",
+    # Bridge API
+    "evaluate_plot_code",
+    "BRIDGE_SOURCE",
 ]

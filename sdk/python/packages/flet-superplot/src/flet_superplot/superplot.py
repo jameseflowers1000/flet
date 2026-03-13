@@ -15,7 +15,7 @@ from .series import FastLineSeries, XyScatterSeries
 from .data import XyDataSeries
 
 # Source version - must match Flutter SuperPlotControl.version
-SOURCE_VERSION = '0.1.02'
+SOURCE_VERSION = '0.1.03'
 
 # Track whether we've printed version info
 _version_printed = False
@@ -84,6 +84,20 @@ class SuperPlot(ft.LayoutControl):
     major_grid_line_color: str = "#333333"
     minor_grid_line_color: str = "#222222"
     
+    # Named data buffers (JSON): {"col": {"data": base64, "count": N}, ...}
+    # Pushed by series_code via push_data()
+    data_buffers: Optional[str] = None
+
+    # Chart configuration (JSON) from bridge API evaluation
+    # Produced by plot_code via ChartBridge._to_json()
+    chart_config: Optional[str] = None
+
+    # Raw plot_code source — sent to client for MicroPython evaluation
+    plot_code_src: Optional[str] = None
+
+    # Context dict (JSON) — container-computed values passed to plot_code evaluation
+    plot_context: Optional[str] = None
+
     # Runtime version - set by Flutter after render
     runtime_version: Optional[str] = None
     
@@ -121,10 +135,9 @@ class SuperPlot(ft.LayoutControl):
             self.y_axis = json.dumps(value.to_dict())
     
     def set_series(self, value: List[FastLineSeries]):
-        """Set the series list."""
+        """Set the series list (empty list clears all design series)."""
         self._series_list = value
-        if value:
-            self.series = json.dumps([s.to_dict() for s in value])
+        self.series = json.dumps([s.to_dict() for s in value])
     
     def add_series(self, new_series: FastLineSeries):
         """Add a renderable series to the chart."""

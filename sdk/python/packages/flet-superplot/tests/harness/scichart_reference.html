@@ -33,115 +33,56 @@
     </div>
 
     <script>
-        // Toggle between linear and logarithmic test modes.
-        // Must match the useLogScale setting in main.dart.
-        const USE_LOG_SCALE = true;
+        // ── URL parameter: ?chart=<type> ────────────────────────────────
+        // Supported: mixed (default), line, scatter, mountain, column, candlestick, band
+        const params = new URLSearchParams(window.location.search);
+        const CHART_TYPE = params.get('chart') || 'mixed';
 
-        // Test data configuration — linear mode (sine waves)
-        const LINEAR_CONFIG = {
-            series1: {
-                points: 1000,
-                color: "#4083ff",
-                frequency: 2,
-                amplitude: 50,
-                offset: 50,
-            },
-            series2: {
-                points: 1000,
-                color: "#ff6347",
-                frequency: 5,
-                amplitude: 30,
-                offset: 50,
-            },
-            scatter: {
-                points: 20,
-                color: "#ff6600",
-                size: 10,
-            },
-            mountain: {
-                points: 1000,
-                color: "#50C878",
-                gradientStart: "#AA50C878",
-                gradientEnd: "#0050C878",
-                frequency: 1.5,
-                amplitude: 25,
-                offset: 30,
-            },
-            xRange: { min: 0, max: 10 },
-            yRange: { min: 0, max: 100 },
+        // ── Shared theme ────────────────────────────────────────────────
+        const DARK_THEME = {
+            sciChartBackground: "#1c1c1e",
+            gridBackgroundBrush: "Transparent",
+            gridBorderBrush: "#555555",
+            majorGridLineBrush: "#333333",
+            minorGridLineBrush: "#222222",
         };
 
-        // Test data configuration — logarithmic mode (exponential curves)
-        const LOG_CONFIG = {
-            series1: {
-                points: 1000,
-                color: "#4083ff",
-                base: 10,
-                rate: 0.3,
-                scale: 1,
-            },
-            series2: {
-                points: 1000,
-                color: "#ff6347",
-                base: 10,
-                rate: 0.2,
-                scale: 5,
-            },
-            scatter: {
-                points: 20,
-                color: "#ff6600",
-                size: 10,
-            },
-            mountain: {
-                points: 1000,
-                color: "#50C878",
-                base: 10,
-                rate: 0.15,
-                scale: 1,
-            },
-            xRange: { min: 0, max: 10 },
-            yRange: { min: 1, max: 10000 },
+        const AXIS_STYLE = {
+            axisTitleStyle: { color: "#ffffff", fontSize: 14 },
+            labelStyle: { color: "#aaaaaa", fontSize: 12 },
+            majorGridLineStyle: { color: "#333333", strokeThickness: 1 },
+            minorGridLineStyle: { color: "#222222", strokeThickness: 0.5 },
         };
 
-        const TEST_CONFIG = USE_LOG_SCALE ? LOG_CONFIG : LINEAR_CONFIG;
+        // ── Deterministic data generators ───────────────────────────────
 
-        // Generate sine wave data (linear mode)
-        function generateSineWave(config, xMin, xMax) {
-            const xValues = [];
-            const yValues = [];
-            const step = (xMax - xMin) / (config.points - 1);
-
-            for (let i = 0; i < config.points; i++) {
+        function generateSineWave(points, frequency, amplitude, offset, xMin, xMax) {
+            const xValues = [], yValues = [];
+            const step = (xMax - xMin) / (points - 1);
+            for (let i = 0; i < points; i++) {
                 const x = xMin + i * step;
-                const y = config.offset + config.amplitude * Math.sin(2 * Math.PI * config.frequency * x / (xMax - xMin));
+                const y = offset + amplitude * Math.sin(2 * Math.PI * frequency * x / (xMax - xMin));
                 xValues.push(x);
                 yValues.push(y);
             }
-
             return { xValues, yValues };
         }
 
-        // Generate exponential data (log mode): y = scale * base^(rate * x)
-        function generateExponential(config, xMin, xMax) {
-            const xValues = [];
-            const yValues = [];
-            const step = (xMax - xMin) / (config.points - 1);
-
-            for (let i = 0; i < config.points; i++) {
+        function generateExponential(points, base, rate, scale, xMin, xMax) {
+            const xValues = [], yValues = [];
+            const step = (xMax - xMin) / (points - 1);
+            for (let i = 0; i < points; i++) {
                 const x = xMin + i * step;
-                const y = config.scale * Math.pow(config.base, config.rate * x);
+                const y = scale * Math.pow(base, rate * x);
                 xValues.push(x);
                 yValues.push(y);
             }
-
             return { xValues, yValues };
         }
 
-        // Sample N evenly-spaced points from a data set
         function samplePoints(data, count) {
             const step = Math.floor(data.xValues.length / count);
-            const xValues = [];
-            const yValues = [];
+            const xValues = [], yValues = [];
             for (let i = 0; i < count; i++) {
                 const idx = i * step;
                 xValues.push(data.xValues[idx]);
@@ -150,140 +91,855 @@
             return { xValues, yValues };
         }
 
-        async function initSciChart() {
-            const { SciChartSurface, NumericAxis, LogarithmicAxis, FastLineRenderableSeries, FastMountainRenderableSeries, XyScatterRenderableSeries, XyDataSeries, EllipsePointMarker, SciChartJsNavyTheme, EWatermarkPosition } = SciChart;
+        // Deterministic pseudo-random (mulberry32) seeded by integer
+        function mulberry32(seed) {
+            return function() {
+                seed |= 0; seed = seed + 0x6D2B79F5 | 0;
+                let t = Math.imul(seed ^ seed >>> 15, 1 | seed);
+                t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+                return ((t ^ t >>> 14) >>> 0) / 4294967296;
+            };
+        }
 
-            // Load WASM from CDN
+        // Generate OHLC candlestick data — deterministic walk
+        function generateOHLC(count, seed) {
+            const rand = mulberry32(seed);
+            const xValues = [], openValues = [], highValues = [], lowValues = [], closeValues = [];
+            let price = 100;
+            for (let i = 0; i < count; i++) {
+                const open = price;
+                const change1 = (rand() - 0.48) * 4;
+                const change2 = (rand() - 0.48) * 4;
+                const mid = open + change1;
+                const close = mid + change2;
+                const high = Math.max(open, close) + rand() * 3;
+                const low = Math.min(open, close) - rand() * 3;
+                xValues.push(i);
+                openValues.push(open);
+                highValues.push(high);
+                lowValues.push(low);
+                closeValues.push(close);
+                price = close;
+            }
+            return { xValues, openValues, highValues, lowValues, closeValues };
+        }
+
+        // ── Chart builders (one per type) ───────────────────────────────
+
+        async function buildMixedChart(surface, wc) {
+            // Original test: line + scatter + mountain on log Y
+            const { NumericAxis, LogarithmicAxis, FastLineRenderableSeries,
+                    FastMountainRenderableSeries, XyScatterRenderableSeries,
+                    XyDataSeries, EllipsePointMarker } = SciChart;
+
+            surface.xAxes.add(new NumericAxis(wc, {
+                axisTitle: "Time (s)",
+                visibleRange: { min: 0, max: 10 },
+                ...AXIS_STYLE,
+                axisBorder: { color: "#555555", borderTop: 1 },
+                growBy: { min: 0.1, max: 0.1 },
+            }));
+
+            surface.yAxes.add(new LogarithmicAxis(wc, {
+                axisTitle: "Value",
+                visibleRange: { min: 1, max: 10000 },
+                ...AXIS_STYLE,
+                axisBorder: { color: "#555555", borderRight: 1 },
+                growBy: { min: 0.1, max: 0.1 },
+                logBase: 10,
+            }));
+
+            const data1 = generateExponential(1000, 10, 0.3, 1, 0, 10);
+            const data2 = generateExponential(1000, 10, 0.2, 5, 0, 10);
+            const mountainData = generateExponential(1000, 10, 0.15, 1, 0, 10);
+            const scatterData = samplePoints(data1, 20);
+
+            surface.renderableSeries.add(new FastMountainRenderableSeries(wc, {
+                dataSeries: new XyDataSeries(wc, { xValues: mountainData.xValues, yValues: mountainData.yValues }),
+                stroke: "#50C878", strokeThickness: 2, zeroLineY: 0.5,
+                fill: "rgba(80, 200, 120, 0.33)",
+            }));
+
+            surface.renderableSeries.add(new FastLineRenderableSeries(wc, {
+                dataSeries: new XyDataSeries(wc, { xValues: data1.xValues, yValues: data1.yValues }),
+                stroke: "#4083ff", strokeThickness: 2,
+            }));
+
+            surface.renderableSeries.add(new FastLineRenderableSeries(wc, {
+                dataSeries: new XyDataSeries(wc, { xValues: data2.xValues, yValues: data2.yValues }),
+                stroke: "#ff6347", strokeThickness: 2,
+                pointMarker: new EllipsePointMarker(wc, { width: 6, height: 6, fill: "#ff6347", stroke: "#ff6347", strokeThickness: 1 }),
+            }));
+
+            surface.renderableSeries.add(new XyScatterRenderableSeries(wc, {
+                dataSeries: new XyDataSeries(wc, { xValues: scatterData.xValues, yValues: scatterData.yValues }),
+                pointMarker: new EllipsePointMarker(wc, { width: 10, height: 10, fill: "#ff6600", stroke: "#ff6600", strokeThickness: 1 }),
+            }));
+
+            return "Mixed (Log Y) - 1000 pts/series";
+        }
+
+        async function buildLineChart(surface, wc) {
+            const { NumericAxis, FastLineRenderableSeries, XyDataSeries, EllipsePointMarker } = SciChart;
+
+            surface.xAxes.add(new NumericAxis(wc, {
+                axisTitle: "X",
+                visibleRange: { min: 0, max: 10 },
+                ...AXIS_STYLE,
+                axisBorder: { color: "#555555", borderTop: 1 },
+                growBy: { min: 0.05, max: 0.05 },
+            }));
+
+            surface.yAxes.add(new NumericAxis(wc, {
+                axisTitle: "Y",
+                visibleRange: { min: -10, max: 110 },
+                ...AXIS_STYLE,
+                axisBorder: { color: "#555555", borderRight: 1 },
+                growBy: { min: 0.05, max: 0.05 },
+            }));
+
+            // Two sine waves — clean line chart comparison
+            const d1 = generateSineWave(500, 2, 40, 50, 0, 10);
+            const d2 = generateSineWave(500, 3.5, 25, 55, 0, 10);
+
+            surface.renderableSeries.add(new FastLineRenderableSeries(wc, {
+                dataSeries: new XyDataSeries(wc, { xValues: d1.xValues, yValues: d1.yValues, }),
+                stroke: "#4083ff", strokeThickness: 2,
+            }));
+
+            surface.renderableSeries.add(new FastLineRenderableSeries(wc, {
+                dataSeries: new XyDataSeries(wc, { xValues: d2.xValues, yValues: d2.yValues, }),
+                stroke: "#ff6347", strokeThickness: 2,
+                pointMarker: new EllipsePointMarker(wc, { width: 5, height: 5, fill: "#ff6347", stroke: "#ff6347", strokeThickness: 1 }),
+            }));
+
+            return "Line - 500 pts, 2 series";
+        }
+
+        async function buildScatterChart(surface, wc) {
+            const { NumericAxis, XyScatterRenderableSeries, XyDataSeries,
+                    EllipsePointMarker, SquarePointMarker, TrianglePointMarker } = SciChart;
+
+            surface.xAxes.add(new NumericAxis(wc, {
+                axisTitle: "X",
+                visibleRange: { min: -1.5, max: 1.5 },
+                ...AXIS_STYLE,
+                axisBorder: { color: "#555555", borderTop: 1 },
+                growBy: { min: 0.05, max: 0.05 },
+            }));
+
+            surface.yAxes.add(new NumericAxis(wc, {
+                axisTitle: "Y",
+                visibleRange: { min: -1.5, max: 1.5 },
+                ...AXIS_STYLE,
+                axisBorder: { color: "#555555", borderRight: 1 },
+                growBy: { min: 0.05, max: 0.05 },
+            }));
+
+            // Lissajous curves — deterministic, visually interesting
+            const n = 200;
+            const x1 = [], y1 = [], x2 = [], y2 = [];
+            for (let i = 0; i < n; i++) {
+                const t = (i / n) * 2 * Math.PI;
+                x1.push(Math.sin(3 * t));
+                y1.push(Math.cos(2 * t));
+                x2.push(Math.sin(2 * t + 0.5));
+                y2.push(Math.cos(3 * t + 0.5));
+            }
+
+            surface.renderableSeries.add(new XyScatterRenderableSeries(wc, {
+                dataSeries: new XyDataSeries(wc, { xValues: x1, yValues: y1, }),
+                pointMarker: new EllipsePointMarker(wc, { width: 8, height: 8, fill: "#4083ff", stroke: "#4083ff", strokeThickness: 1 }),
+            }));
+
+            surface.renderableSeries.add(new XyScatterRenderableSeries(wc, {
+                dataSeries: new XyDataSeries(wc, { xValues: x2, yValues: y2, }),
+                pointMarker: new TrianglePointMarker(wc, { width: 8, height: 8, fill: "#ff6347", stroke: "#ff6347", strokeThickness: 1 }),
+            }));
+
+            return "Scatter - 200 pts, Lissajous";
+        }
+
+        async function buildMountainChart(surface, wc) {
+            const { NumericAxis, FastMountainRenderableSeries, XyDataSeries } = SciChart;
+
+            surface.xAxes.add(new NumericAxis(wc, {
+                axisTitle: "X",
+                visibleRange: { min: 0, max: 10 },
+                ...AXIS_STYLE,
+                axisBorder: { color: "#555555", borderTop: 1 },
+                growBy: { min: 0.05, max: 0.05 },
+            }));
+
+            surface.yAxes.add(new NumericAxis(wc, {
+                axisTitle: "Y",
+                visibleRange: { min: 0, max: 100 },
+                ...AXIS_STYLE,
+                axisBorder: { color: "#555555", borderRight: 1 },
+                growBy: { min: 0.05, max: 0.05 },
+            }));
+
+            const d1 = generateSineWave(500, 1.5, 30, 50, 0, 10);
+            const d2 = generateSineWave(500, 2.5, 20, 35, 0, 10);
+
+            surface.renderableSeries.add(new FastMountainRenderableSeries(wc, {
+                dataSeries: new XyDataSeries(wc, { xValues: d1.xValues, yValues: d1.yValues, }),
+                stroke: "#4083ff", strokeThickness: 2, zeroLineY: 0,
+                fill: "rgba(64, 131, 255, 0.33)",
+            }));
+
+            surface.renderableSeries.add(new FastMountainRenderableSeries(wc, {
+                dataSeries: new XyDataSeries(wc, { xValues: d2.xValues, yValues: d2.yValues, }),
+                stroke: "#50C878", strokeThickness: 2, zeroLineY: 0,
+                fill: "rgba(80, 200, 120, 0.33)",
+            }));
+
+            return "Mountain - 500 pts, 2 series";
+        }
+
+        async function buildColumnChart(surface, wc) {
+            const { NumericAxis, FastColumnRenderableSeries, XyDataSeries } = SciChart;
+
+            surface.xAxes.add(new NumericAxis(wc, {
+                axisTitle: "Category",
+                visibleRange: { min: -0.5, max: 9.5 },
+                ...AXIS_STYLE,
+                axisBorder: { color: "#555555", borderTop: 1 },
+                growBy: { min: 0.05, max: 0.05 },
+            }));
+
+            surface.yAxes.add(new NumericAxis(wc, {
+                axisTitle: "Value",
+                visibleRange: { min: -50, max: 80 },
+                ...AXIS_STYLE,
+                axisBorder: { color: "#555555", borderRight: 1 },
+                growBy: { min: 0.05, max: 0.05 },
+            }));
+
+            // 10 bars, deterministic values from sin
+            const xValues = [], yValues = [];
+            for (let i = 0; i < 10; i++) {
+                xValues.push(i);
+                yValues.push(50 * Math.sin(i * 0.8) + 10 * Math.cos(i * 1.3));
+            }
+
+            surface.renderableSeries.add(new FastColumnRenderableSeries(wc, {
+                dataSeries: new XyDataSeries(wc, { xValues, yValues }),
+                fill: "#4083ff",
+                stroke: "#2060cc",
+                strokeThickness: 1,
+                dataPointWidth: 0.7,
+            }));
+
+            return "Column - 10 bars";
+        }
+
+        async function buildCandlestickChart(surface, wc) {
+            const { NumericAxis, FastCandlestickRenderableSeries, OhlcDataSeries } = SciChart;
+
+            const ohlc = generateOHLC(50, 42);
+
+            surface.xAxes.add(new NumericAxis(wc, {
+                axisTitle: "Day",
+                visibleRange: { min: -1, max: 51 },
+                ...AXIS_STYLE,
+                axisBorder: { color: "#555555", borderTop: 1 },
+                growBy: { min: 0.02, max: 0.02 },
+            }));
+
+            // Compute Y range from data
+            const allY = [...ohlc.highValues, ...ohlc.lowValues];
+            const yMin = Math.min(...allY) - 5;
+            const yMax = Math.max(...allY) + 5;
+
+            surface.yAxes.add(new NumericAxis(wc, {
+                axisTitle: "Price",
+                visibleRange: { min: yMin, max: yMax },
+                ...AXIS_STYLE,
+                axisBorder: { color: "#555555", borderRight: 1 },
+                growBy: { min: 0.05, max: 0.05 },
+            }));
+
+            surface.renderableSeries.add(new FastCandlestickRenderableSeries(wc, {
+                dataSeries: new OhlcDataSeries(wc, {
+                    xValues: ohlc.xValues,
+                    openValues: ohlc.openValues,
+                    highValues: ohlc.highValues,
+                    lowValues: ohlc.lowValues,
+                    closeValues: ohlc.closeValues,
+                }),
+                brushUp: "#26A69A",
+                brushDown: "#EF5350",
+                strokeUp: "#26A69A",
+                strokeDown: "#EF5350",
+                strokeThickness: 1,
+                dataPointWidth: 0.6,
+            }));
+
+            return `Candlestick - 50 candles (Y: ${yMin.toFixed(0)}-${yMax.toFixed(0)})`;
+        }
+
+        async function buildBandChart(surface, wc) {
+            const { NumericAxis, FastBandRenderableSeries, XyyDataSeries } = SciChart;
+
+            surface.xAxes.add(new NumericAxis(wc, {
+                axisTitle: "X",
+                visibleRange: { min: 0, max: 10 },
+                ...AXIS_STYLE,
+                axisBorder: { color: "#555555", borderTop: 1 },
+                growBy: { min: 0.05, max: 0.05 },
+            }));
+
+            surface.yAxes.add(new NumericAxis(wc, {
+                axisTitle: "Y",
+                visibleRange: { min: -20, max: 120 },
+                ...AXIS_STYLE,
+                axisBorder: { color: "#555555", borderRight: 1 },
+                growBy: { min: 0.05, max: 0.05 },
+            }));
+
+            // Band: center sine ± envelope
+            const n = 500;
+            const xValues = [], y1Values = [], y2Values = [];
+            for (let i = 0; i < n; i++) {
+                const x = (i / (n - 1)) * 10;
+                const center = 50 + 30 * Math.sin(2 * Math.PI * 1.5 * x / 10);
+                const envelope = 10 + 8 * Math.sin(2 * Math.PI * 0.5 * x / 10);
+                xValues.push(x);
+                y1Values.push(center + envelope);  // high
+                y2Values.push(center - envelope);  // low
+            }
+
+            surface.renderableSeries.add(new FastBandRenderableSeries(wc, {
+                dataSeries: new XyyDataSeries(wc, { xValues, yValues: y1Values, y1Values: y2Values }),
+                fill: "rgba(33, 150, 243, 0.2)",
+                fillY1: "rgba(33, 150, 243, 0.2)",
+                stroke: "#2196F3",
+                strokeY1: "#2196F3",
+                strokeThickness: 1,
+            }));
+
+            return "Band - 500 pts, confidence interval";
+        }
+
+        async function buildDualAxisChart(surface, wc) {
+            const { NumericAxis, FastLineRenderableSeries, FastColumnRenderableSeries,
+                    XyDataSeries } = SciChart;
+
+            surface.xAxes.add(new NumericAxis(wc, {
+                axisTitle: "X",
+                visibleRange: { min: 0, max: 10 },
+                ...AXIS_STYLE,
+                axisBorder: { color: "#555555", borderTop: 1 },
+                growBy: { min: 0.05, max: 0.05 },
+            }));
+
+            // Primary Y axis (right) — temperature
+            surface.yAxes.add(new NumericAxis(wc, {
+                id: "y0",
+                axisTitle: "Temperature",
+                visibleRange: { min: -10, max: 110 },
+                ...AXIS_STYLE,
+                axisBorder: { color: "#555555", borderRight: 1 },
+                growBy: { min: 0.05, max: 0.05 },
+            }));
+
+            // Secondary Y axis (left) — volume
+            surface.yAxes.add(new NumericAxis(wc, {
+                id: "y1",
+                axisTitle: "Volume",
+                axisAlignment: SciChart.EAxisAlignment.Left,
+                visibleRange: { min: 0, max: 100 },
+                ...AXIS_STYLE,
+                axisBorder: { color: "#555555", borderLeft: 1 },
+                growBy: { min: 0.05, max: 0.05 },
+            }));
+
+            // Line series on primary Y (temperature)
+            const d1 = generateSineWave(500, 2, 40, 50, 0, 10);
+            surface.renderableSeries.add(new FastLineRenderableSeries(wc, {
+                dataSeries: new XyDataSeries(wc, { xValues: d1.xValues, yValues: d1.yValues }),
+                stroke: "#4083ff", strokeThickness: 2,
+                yAxisId: "y0",
+            }));
+
+            // Column series on secondary Y (volume)
+            const xCols = [], yCols = [];
+            for (let i = 0; i < 10; i++) {
+                xCols.push(i + 0.5);
+                yCols.push(30 + 20 * Math.sin(i * 0.9));
+            }
+            surface.renderableSeries.add(new FastColumnRenderableSeries(wc, {
+                dataSeries: new XyDataSeries(wc, { xValues: xCols, yValues: yCols }),
+                fill: "rgba(38, 166, 154, 0.5)",
+                stroke: "#26A69A",
+                strokeThickness: 1,
+                dataPointWidth: 0.7,
+                yAxisId: "y1",
+            }));
+
+            return "Dual Axis - line (right Y) + column (left Y)";
+        }
+
+        async function buildDateTimeChart(surface, wc) {
+            const { NumericAxis, FastLineRenderableSeries, XyDataSeries,
+                    NumericLabelProvider } = SciChart;
+
+            // Generate 365 days of data starting from 2024-01-01
+            // X values are epoch-milliseconds (matching SuperPlot's datetime axis)
+            const startMs = Date.UTC(2024, 0, 1);
+            const xValues = [], yValues = [];
+            for (let i = 0; i < 365; i++) {
+                xValues.push(startMs + i * 86400000);
+                yValues.push(50 + 30 * Math.sin(2 * Math.PI * i / 90) + 10 * Math.cos(2 * Math.PI * i / 30));
+            }
+
+            // Custom label provider: format epoch-ms as "Mon YYYY"
+            class DateLabelProvider extends NumericLabelProvider {
+                formatLabel(dataValue) {
+                    const d = new Date(dataValue);
+                    const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+                    return months[d.getUTCMonth()] + ' ' + d.getUTCFullYear();
+                }
+                formatCursorLabel(dataValue) {
+                    return this.formatLabel(dataValue);
+                }
+            }
+
+            surface.xAxes.add(new NumericAxis(wc, {
+                axisTitle: "Date",
+                ...AXIS_STYLE,
+                axisBorder: { color: "#555555", borderTop: 1 },
+                growBy: { min: 0.02, max: 0.02 },
+                labelProvider: new DateLabelProvider(),
+            }));
+
+            surface.yAxes.add(new NumericAxis(wc, {
+                axisTitle: "Value",
+                ...AXIS_STYLE,
+                axisBorder: { color: "#555555", borderRight: 1 },
+                growBy: { min: 0.05, max: 0.05 },
+            }));
+
+            surface.renderableSeries.add(new FastLineRenderableSeries(wc, {
+                dataSeries: new XyDataSeries(wc, { xValues, yValues }),
+                stroke: "#4083ff", strokeThickness: 2,
+            }));
+
+            return "DateTime - 365 days of data";
+        }
+
+        async function buildImpulseChart(surface, wc) {
+            const { NumericAxis, FastLineRenderableSeries, XyScatterRenderableSeries,
+                    XyDataSeries, EllipsePointMarker } = SciChart;
+
+            const n = 30;
+            const xValues = [], yValues = [];
+            for (let i = 0; i < n; i++) {
+                xValues.push(i);
+                yValues.push(50 * Math.sin(i * 0.5) + 10 * Math.cos(i * 1.2));
+            }
+
+            surface.xAxes.add(new NumericAxis(wc, {
+                axisTitle: "Index",
+                ...AXIS_STYLE,
+                axisBorder: { color: "#555555", borderTop: 1 },
+                growBy: { min: 0.05, max: 0.05 },
+                visibleRange: { min: -1, max: 30 },
+            }));
+
+            surface.yAxes.add(new NumericAxis(wc, {
+                axisTitle: "Value",
+                ...AXIS_STYLE,
+                axisBorder: { color: "#555555", borderRight: 1 },
+                growBy: { min: 0.05, max: 0.05 },
+                visibleRange: { min: -60, max: 70 },
+            }));
+
+            // Impulse: vertical lines from 0 to value (using separate line per stem)
+            // SciChart doesn't have a native impulse series, so use column with very thin width
+            const { FastColumnRenderableSeries } = SciChart;
+            surface.renderableSeries.add(new FastColumnRenderableSeries(wc, {
+                dataSeries: new XyDataSeries(wc, { xValues, yValues }),
+                fill: "#4083ff",
+                stroke: "#4083ff",
+                strokeThickness: 0,
+                dataPointWidth: 0.05,
+            }));
+
+            // Dots at the tips
+            surface.renderableSeries.add(new XyScatterRenderableSeries(wc, {
+                dataSeries: new XyDataSeries(wc, { xValues, yValues }),
+                pointMarker: new EllipsePointMarker(wc, {
+                    width: 6, height: 6, fill: "#4083ff", stroke: "#4083ff",
+                }),
+            }));
+
+            return "Impulse/Stem - 30 data points";
+        }
+
+        async function buildBubbleChart(surface, wc) {
+            const { NumericAxis, XyScatterRenderableSeries, XyDataSeries,
+                    EllipsePointMarker } = SciChart;
+
+            const n = 30;
+            const xValues = [], yValues = [], sizes = [];
+            for (let i = 0; i < n; i++) {
+                xValues.push(Math.sin(i * 0.5) * 50 + 50);
+                yValues.push(Math.cos(i * 0.3) * 40 + 50);
+                sizes.push(5 + 25 * ((Math.sin(i * 0.7) + 1) / 2));
+            }
+
+            surface.xAxes.add(new NumericAxis(wc, {
+                axisTitle: "X", ...AXIS_STYLE,
+                axisBorder: { color: "#555555", borderTop: 1 },
+                growBy: { min: 0.05, max: 0.05 },
+                visibleRange: { min: -10, max: 110 },
+            }));
+            surface.yAxes.add(new NumericAxis(wc, {
+                axisTitle: "Y", ...AXIS_STYLE,
+                axisBorder: { color: "#555555", borderRight: 1 },
+                growBy: { min: 0.05, max: 0.05 },
+                visibleRange: { min: -10, max: 110 },
+            }));
+
+            // Bubble: scatter with variable-size markers (SciChart approach: multiple point sizes)
+            for (let i = 0; i < n; i++) {
+                const radius = 4 + (sizes[i] - 5) / 25 * 36;
+                surface.renderableSeries.add(new XyScatterRenderableSeries(wc, {
+                    dataSeries: new XyDataSeries(wc, { xValues: [xValues[i]], yValues: [yValues[i]] }),
+                    pointMarker: new EllipsePointMarker(wc, {
+                        width: radius * 2, height: radius * 2,
+                        fill: "#4083ff70", stroke: "#4083ff",
+                    }),
+                }));
+            }
+
+            return "Bubble - 30 variable-size points";
+        }
+
+        async function buildErrorBarChart(surface, wc) {
+            const { NumericAxis, FastLineRenderableSeries, XyDataSeries,
+                    FastErrorBarsRenderableSeries, HlcDataSeries } = SciChart;
+
+            const n = 15;
+            const xValues = [], yValues = [], errHigh = [], errLow = [];
+            for (let i = 0; i < n; i++) {
+                xValues.push(i);
+                yValues.push(50 + 30 * Math.sin(i * 0.5));
+                errHigh.push(3 + 5 * ((Math.sin(i * 0.8) + 1) / 2));
+                errLow.push(3 + 5 * ((Math.cos(i * 0.8) + 1) / 2));
+            }
+
+            surface.xAxes.add(new NumericAxis(wc, {
+                axisTitle: "Index", ...AXIS_STYLE,
+                axisBorder: { color: "#555555", borderTop: 1 },
+                growBy: { min: 0.05, max: 0.05 },
+                visibleRange: { min: -1, max: 15 },
+            }));
+            surface.yAxes.add(new NumericAxis(wc, {
+                axisTitle: "Value", ...AXIS_STYLE,
+                axisBorder: { color: "#555555", borderRight: 1 },
+                growBy: { min: 0.05, max: 0.05 },
+                visibleRange: { min: 0, max: 100 },
+            }));
+
+            // Error bars using vertical line segments + scatter
+            // SciChart's FastErrorBarsRenderableSeries may not be in v4 CDN,
+            // so use manual approach matching SuperPlot's rendering
+            const highY = yValues.map((y, i) => y + errHigh[i]);
+            const lowY = yValues.map((y, i) => y - errLow[i]);
+
+            // Draw whiskers as thin column series (one per point)
+            for (let i = 0; i < n; i++) {
+                const { FastColumnRenderableSeries } = SciChart;
+                // Whisker line
+                surface.renderableSeries.add(new FastLineRenderableSeries(wc, {
+                    dataSeries: new XyDataSeries(wc, {
+                        xValues: [xValues[i], xValues[i]],
+                        yValues: [lowY[i], highY[i]],
+                    }),
+                    stroke: "#4083ff", strokeThickness: 1.5,
+                }));
+            }
+
+            // Center dots
+            const { XyScatterRenderableSeries, EllipsePointMarker } = SciChart;
+            surface.renderableSeries.add(new XyScatterRenderableSeries(wc, {
+                dataSeries: new XyDataSeries(wc, { xValues, yValues }),
+                pointMarker: new EllipsePointMarker(wc, {
+                    width: 6, height: 6, fill: "#4083ff", stroke: "#4083ff",
+                }),
+            }));
+
+            return "Error Bars - 15 data points";
+        }
+
+        async function buildBoxPlotChart(surface, wc) {
+            const { NumericAxis, FastColumnRenderableSeries, FastLineRenderableSeries,
+                    XyDataSeries, XyScatterRenderableSeries, EllipsePointMarker } = SciChart;
+
+            const n = 8;
+            const xValues = [], minV = [], q1V = [], medV = [], q3V = [], maxV = [];
+            for (let i = 0; i < n; i++) {
+                xValues.push(i);
+                const base = 30 + 15 * Math.sin(i * 0.8);
+                minV.push(base - 10 - 5 * ((Math.sin(i * 1.3) + 1) / 2));
+                q1V.push(base - 3);
+                medV.push(base + 2 * Math.cos(i * 0.5));
+                q3V.push(base + 8);
+                maxV.push(base + 15 + 5 * ((Math.cos(i * 0.9) + 1) / 2));
+            }
+
+            surface.xAxes.add(new NumericAxis(wc, {
+                axisTitle: "Group", ...AXIS_STYLE,
+                axisBorder: { color: "#555555", borderTop: 1 },
+                growBy: { min: 0.05, max: 0.05 },
+                visibleRange: { min: -1, max: 8 },
+            }));
+            surface.yAxes.add(new NumericAxis(wc, {
+                axisTitle: "Value", ...AXIS_STYLE,
+                axisBorder: { color: "#555555", borderRight: 1 },
+                growBy: { min: 0.05, max: 0.05 },
+                visibleRange: { min: 0, max: 70 },
+            }));
+
+            // Box plot using columns (Q1-Q3 boxes) + lines (whiskers) + scatter (median)
+            for (let i = 0; i < n; i++) {
+                // Whisker lines
+                surface.renderableSeries.add(new FastLineRenderableSeries(wc, {
+                    dataSeries: new XyDataSeries(wc, {
+                        xValues: [xValues[i], xValues[i]], yValues: [minV[i], maxV[i]],
+                    }),
+                    stroke: "#4083ff", strokeThickness: 1.5,
+                }));
+                // Box (Q1 to Q3) as thin column
+                surface.renderableSeries.add(new FastColumnRenderableSeries(wc, {
+                    dataSeries: new XyDataSeries(wc, {
+                        xValues: [xValues[i]], yValues: [q3V[i] - q1V[i]],
+                    }),
+                    fill: "#4083ff40", stroke: "#4083ff", strokeThickness: 1,
+                    dataPointWidth: 0.5,
+                }));
+            }
+
+            return "Box Plot - 8 groups";
+        }
+
+        async function buildWaterfallChart(surface, wc) {
+            const { NumericAxis, FastColumnRenderableSeries, XyDataSeries } = SciChart;
+
+            const values = [20, 15, -8, 12, -5, 25, -10, 8, -3, 18];
+            const xValues = [], yPosValues = [], yNegValues = [];
+            let cum = 0;
+            for (let i = 0; i < values.length; i++) {
+                xValues.push(i);
+                if (values[i] >= 0) {
+                    yPosValues.push(values[i]);
+                    yNegValues.push(0);
+                } else {
+                    yPosValues.push(0);
+                    yNegValues.push(values[i]);
+                }
+                cum += values[i];
+            }
+
+            let maxCum = 0, minCum = 0;
+            cum = 0;
+            for (const v of values) {
+                cum += v;
+                if (cum > maxCum) maxCum = cum;
+                if (cum < minCum) minCum = cum;
+            }
+
+            surface.xAxes.add(new NumericAxis(wc, {
+                axisTitle: "Category", ...AXIS_STYLE,
+                axisBorder: { color: "#555555", borderTop: 1 },
+                growBy: { min: 0.05, max: 0.05 },
+                visibleRange: { min: -0.5, max: 9.5 },
+            }));
+            surface.yAxes.add(new NumericAxis(wc, {
+                axisTitle: "Value", ...AXIS_STYLE,
+                axisBorder: { color: "#555555", borderRight: 1 },
+                growBy: { min: 0.05, max: 0.05 },
+                visibleRange: { min: minCum - 10, max: maxCum + 10 },
+            }));
+
+            // Waterfall: stacked positive and negative columns
+            // Build cumulative columns
+            const cumXValues = [], cumYValues = [];
+            cum = 0;
+            for (let i = 0; i < values.length; i++) {
+                const prevCum = cum;
+                cum += values[i];
+                cumXValues.push(i);
+                cumYValues.push(cum);
+            }
+
+            // Use green for positive, red for negative
+            for (let i = 0; i < values.length; i++) {
+                const prevCum = i > 0 ? cumYValues[i - 1] : 0;
+                const curCum = cumYValues[i];
+                const color = values[i] >= 0 ? "#26A69A" : "#EF5350";
+                surface.renderableSeries.add(new FastColumnRenderableSeries(wc, {
+                    dataSeries: new XyDataSeries(wc, {
+                        xValues: [i], yValues: [curCum - prevCum],
+                    }),
+                    fill: color, stroke: "#888888", strokeThickness: 1,
+                    dataPointWidth: 0.7,
+                }));
+            }
+
+            return "Waterfall - 10 categories";
+        }
+
+        async function buildStackedColumnChart(surface, wc) {
+            const { NumericAxis, StackedColumnRenderableSeries, StackedColumnCollection,
+                    XyDataSeries } = SciChart;
+
+            const n = 8;
+            const xValues = [], y1 = [], y2 = [], y3 = [];
+            for (let i = 0; i < n; i++) {
+                xValues.push(i);
+                y1.push(10 + 15 * ((Math.sin(i * 0.7) + 1) / 2));
+                y2.push(8 + 12 * ((Math.cos(i * 0.5) + 1) / 2));
+                y3.push(5 + 10 * ((Math.sin(i * 1.1) + 1) / 2));
+            }
+
+            surface.xAxes.add(new NumericAxis(wc, {
+                axisTitle: "Category", ...AXIS_STYLE,
+                axisBorder: { color: "#555555", borderTop: 1 },
+                growBy: { min: 0.05, max: 0.05 },
+                visibleRange: { min: -0.5, max: 7.5 },
+            }));
+            surface.yAxes.add(new NumericAxis(wc, {
+                axisTitle: "Value", ...AXIS_STYLE,
+                axisBorder: { color: "#555555", borderRight: 1 },
+                growBy: { min: 0.05, max: 0.05 },
+                visibleRange: { min: 0, max: 60 },
+            }));
+
+            const stackedCollection = new StackedColumnCollection(wc);
+            stackedCollection.add(new StackedColumnRenderableSeries(wc, {
+                dataSeries: new XyDataSeries(wc, { xValues, yValues: y1 }),
+                fill: "#4083ff", stroke: "#2060cc", strokeThickness: 1,
+                stackedGroupId: "g1",
+            }));
+            stackedCollection.add(new StackedColumnRenderableSeries(wc, {
+                dataSeries: new XyDataSeries(wc, { xValues, yValues: y2 }),
+                fill: "#26A69A", stroke: "#1B7A70", strokeThickness: 1,
+                stackedGroupId: "g1",
+            }));
+            stackedCollection.add(new StackedColumnRenderableSeries(wc, {
+                dataSeries: new XyDataSeries(wc, { xValues, yValues: y3 }),
+                fill: "#FF6347", stroke: "#CC4F38", strokeThickness: 1,
+                stackedGroupId: "g1",
+            }));
+            surface.renderableSeries.add(stackedCollection);
+
+            return "Stacked Column - 3 series × 8 categories";
+        }
+
+        async function buildStackedMountainChart(surface, wc) {
+            const { NumericAxis, StackedMountainRenderableSeries, StackedMountainCollection,
+                    XyDataSeries } = SciChart;
+
+            const n = 200;
+            const genSine = (freq, amp, off) => {
+                const x = [], y = [];
+                for (let i = 0; i < n; i++) {
+                    const xv = i / (n - 1) * 10;
+                    x.push(xv);
+                    y.push(off + amp * Math.sin(2 * Math.PI * freq * xv / 10));
+                }
+                return { x, y };
+            };
+
+            const d1 = genSine(1.5, 15, 20), d2 = genSine(2.0, 10, 15), d3 = genSine(2.5, 8, 12);
+
+            surface.xAxes.add(new NumericAxis(wc, {
+                axisTitle: "X", ...AXIS_STYLE,
+                axisBorder: { color: "#555555", borderTop: 1 },
+                growBy: { min: 0.05, max: 0.05 },
+                visibleRange: { min: 0, max: 10 },
+            }));
+            surface.yAxes.add(new NumericAxis(wc, {
+                axisTitle: "Y", ...AXIS_STYLE,
+                axisBorder: { color: "#555555", borderRight: 1 },
+                growBy: { min: 0.05, max: 0.05 },
+                visibleRange: { min: 0, max: 80 },
+            }));
+
+            const stackedCollection = new StackedMountainCollection(wc);
+            stackedCollection.add(new StackedMountainRenderableSeries(wc, {
+                dataSeries: new XyDataSeries(wc, { xValues: d1.x, yValues: d1.y }),
+                fill: "#4083ff88", stroke: "#4083ff", strokeThickness: 1.5,
+                stackedGroupId: "g1",
+            }));
+            stackedCollection.add(new StackedMountainRenderableSeries(wc, {
+                dataSeries: new XyDataSeries(wc, { xValues: d2.x, yValues: d2.y }),
+                fill: "#26A69A88", stroke: "#26A69A", strokeThickness: 1.5,
+                stackedGroupId: "g1",
+            }));
+            stackedCollection.add(new StackedMountainRenderableSeries(wc, {
+                dataSeries: new XyDataSeries(wc, { xValues: d3.x, yValues: d3.y }),
+                fill: "#FF634788", stroke: "#FF6347", strokeThickness: 1.5,
+                stackedGroupId: "g1",
+            }));
+            surface.renderableSeries.add(stackedCollection);
+
+            return "Stacked Mountain - 3 cumulative series";
+        }
+
+        // ── Chart type dispatch ─────────────────────────────────────────
+
+        const CHART_BUILDERS = {
+            mixed: buildMixedChart,
+            line: buildLineChart,
+            scatter: buildScatterChart,
+            mountain: buildMountainChart,
+            column: buildColumnChart,
+            candlestick: buildCandlestickChart,
+            band: buildBandChart,
+            dual_axis: buildDualAxisChart,
+            datetime: buildDateTimeChart,
+            impulse: buildImpulseChart,
+            bubble: buildBubbleChart,
+            error_bar: buildErrorBarChart,
+            box_plot: buildBoxPlotChart,
+            waterfall: buildWaterfallChart,
+            stacked_column: buildStackedColumnChart,
+            stacked_mountain: buildStackedMountainChart,
+        };
+
+        // ── Main init ───────────────────────────────────────────────────
+
+        async function initSciChart() {
+            const { SciChartSurface, SciChartJsNavyTheme, EWatermarkPosition } = SciChart;
+
             SciChartSurface.useWasmFromCDN();
 
             try {
                 const { sciChartSurface, wasmContext } = await SciChartSurface.create("chart-container", {
                     theme: {
                         ...new SciChartJsNavyTheme(),
-                        sciChartBackground: "#1c1c1e",
-                        gridBackgroundBrush: "Transparent",
-                        gridBorderBrush: "#555555",
-                        majorGridLineBrush: "#333333",
-                        minorGridLineBrush: "#222222",
+                        ...DARK_THEME,
                     }
                 });
 
-                // Move watermark to top-right corner (away from axis origin)
-                sciChartSurface.watermarkPosition = EWatermarkPosition.TopRight;
+                sciChartSurface.watermarkPosition = EWatermarkPosition.BottomRight;
 
-                // X Axis (always numeric)
-                sciChartSurface.xAxes.add(new NumericAxis(wasmContext, {
-                    axisTitle: "Time (s)",
-                    visibleRange: { min: TEST_CONFIG.xRange.min, max: TEST_CONFIG.xRange.max },
-                    axisTitleStyle: { color: "#ffffff", fontSize: 14 },
-                    labelStyle: { color: "#aaaaaa", fontSize: 12 },
-                    majorGridLineStyle: { color: "#333333", strokeThickness: 1 },
-                    minorGridLineStyle: { color: "#222222", strokeThickness: 0.5 },
-                    axisBorder: { color: "#555555", borderTop: 1 },
-                    growBy: { min: 0.1, max: 0.1 },
-                }));
-
-                // Y Axis — logarithmic or numeric depending on mode
-                if (USE_LOG_SCALE) {
-                    sciChartSurface.yAxes.add(new LogarithmicAxis(wasmContext, {
-                        axisTitle: "Value",
-                        visibleRange: { min: TEST_CONFIG.yRange.min, max: TEST_CONFIG.yRange.max },
-                        axisTitleStyle: { color: "#ffffff", fontSize: 14 },
-                        labelStyle: { color: "#aaaaaa", fontSize: 12 },
-                        majorGridLineStyle: { color: "#333333", strokeThickness: 1 },
-                        minorGridLineStyle: { color: "#222222", strokeThickness: 0.5 },
-                        axisBorder: { color: "#555555", borderRight: 1 },
-                        growBy: { min: 0.1, max: 0.1 },
-                        logBase: 10,
-                    }));
-                } else {
-                    sciChartSurface.yAxes.add(new NumericAxis(wasmContext, {
-                        axisTitle: "Amplitude",
-                        visibleRange: { min: TEST_CONFIG.yRange.min, max: TEST_CONFIG.yRange.max },
-                        axisTitleStyle: { color: "#ffffff", fontSize: 14 },
-                        labelStyle: { color: "#aaaaaa", fontSize: 12 },
-                        majorGridLineStyle: { color: "#333333", strokeThickness: 1 },
-                        minorGridLineStyle: { color: "#222222", strokeThickness: 0.5 },
-                        axisBorder: { color: "#555555", borderRight: 1 },
-                        growBy: { min: 0.1, max: 0.1 },
-                    }));
+                const builder = CHART_BUILDERS[CHART_TYPE];
+                if (!builder) {
+                    document.getElementById('status').textContent = `Unknown chart type: ${CHART_TYPE}. Valid: ${Object.keys(CHART_BUILDERS).join(', ')}`;
+                    return;
                 }
 
-                const xMin = TEST_CONFIG.xRange.min;
-                const xMax = TEST_CONFIG.xRange.max;
+                const description = await builder(sciChartSurface, wasmContext);
+                document.getElementById('status').textContent = `SciChart Ready — ${CHART_TYPE}: ${description}`;
 
-                // Generate data based on mode
-                let data1, data2, mountainData;
-                if (USE_LOG_SCALE) {
-                    data1 = generateExponential(TEST_CONFIG.series1, xMin, xMax);
-                    data2 = generateExponential(TEST_CONFIG.series2, xMin, xMax);
-                    mountainData = generateExponential(TEST_CONFIG.mountain, xMin, xMax);
-                } else {
-                    data1 = generateSineWave(TEST_CONFIG.series1, xMin, xMax);
-                    data2 = generateSineWave(TEST_CONFIG.series2, xMin, xMax);
-                    mountainData = generateSineWave(TEST_CONFIG.mountain, xMin, xMax);
-                }
-                const scatterData = samplePoints(data1, TEST_CONFIG.scatter.points);
-
-                // Mountain series (drawn first = behind lines)
-                sciChartSurface.renderableSeries.add(new FastMountainRenderableSeries(wasmContext, {
-                    dataSeries: new XyDataSeries(wasmContext, {
-                        xValues: mountainData.xValues,
-                        yValues: mountainData.yValues,
-                    }),
-                    stroke: TEST_CONFIG.mountain.color,
-                    strokeThickness: 2,
-                    zeroLineY: USE_LOG_SCALE ? 0.5 : 0,
-                    fill: "rgba(80, 200, 120, 0.33)",
-                }));
-
-                // Series 1 - Blue line
-                sciChartSurface.renderableSeries.add(new FastLineRenderableSeries(wasmContext, {
-                    dataSeries: new XyDataSeries(wasmContext, {
-                        xValues: data1.xValues,
-                        yValues: data1.yValues,
-                    }),
-                    stroke: TEST_CONFIG.series1.color,
-                    strokeThickness: 2,
-                }));
-
-                // Series 2 - Red line with circle markers
-                sciChartSurface.renderableSeries.add(new FastLineRenderableSeries(wasmContext, {
-                    dataSeries: new XyDataSeries(wasmContext, {
-                        xValues: data2.xValues,
-                        yValues: data2.yValues,
-                    }),
-                    stroke: TEST_CONFIG.series2.color,
-                    strokeThickness: 2,
-                    pointMarker: new EllipsePointMarker(wasmContext, {
-                        width: 6,
-                        height: 6,
-                        fill: TEST_CONFIG.series2.color,
-                        stroke: TEST_CONFIG.series2.color,
-                        strokeThickness: 1,
-                    }),
-                }));
-
-                // Scatter series - sampled from series1
-                sciChartSurface.renderableSeries.add(new XyScatterRenderableSeries(wasmContext, {
-                    dataSeries: new XyDataSeries(wasmContext, {
-                        xValues: scatterData.xValues,
-                        yValues: scatterData.yValues,
-                    }),
-                    pointMarker: new EllipsePointMarker(wasmContext, {
-                        width: TEST_CONFIG.scatter.size,
-                        height: TEST_CONFIG.scatter.size,
-                        fill: TEST_CONFIG.scatter.color,
-                        stroke: TEST_CONFIG.scatter.color,
-                        strokeThickness: 1,
-                    }),
-                }));
-
-                const mode = USE_LOG_SCALE ? "Log Y" : "Linear";
-                document.getElementById('status').textContent = `SciChart Ready (${mode}) - ${TEST_CONFIG.series1.points} points per series`;
-
-                // Expose config for Playwright
-                window.TEST_CONFIG = TEST_CONFIG;
+                // Expose for Playwright
+                window.CHART_TYPE = CHART_TYPE;
                 window.chartReady = true;
 
             } catch (error) {

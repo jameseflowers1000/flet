@@ -36,7 +36,9 @@ class _EagerScaleGestureRecognizer extends ScaleGestureRecognizer {
 class InteractiveChart extends StatefulWidget {
   final AxisModel? xAxis;
   final AxisModel? yAxis;
+  final AxisModel? yAxis2; // Secondary Y axis (left side, for dual-axis charts)
   final List<SeriesModel> series;
+  final DataBufferStore dataBuffers;
   final Color backgroundColor;
   final bool showMajorGridLines;
   final bool showMinorGridLines;
@@ -46,6 +48,12 @@ class InteractiveChart extends StatefulWidget {
   /// Chart annotations (horizontal/vertical lines, text, boxes).
   final List<Map<String, dynamic>> annotations;
 
+  /// Mutable render state for draggable annotations + PaletteProvider.
+  final Map<String, dynamic> renderState;
+
+  /// Callback fired when renderState is mutated during drag.
+  final VoidCallback? onRenderStateChanged;
+
   /// Callback fired when visible range changes (on gesture end).
   final void Function(double xMin, double xMax, double yMin, double yMax)?
       onVisibleRangeChanged;
@@ -54,13 +62,17 @@ class InteractiveChart extends StatefulWidget {
     super.key,
     this.xAxis,
     this.yAxis,
+    this.yAxis2,
     required this.series,
+    required this.dataBuffers,
     required this.backgroundColor,
     required this.showMajorGridLines,
     required this.showMinorGridLines,
     required this.majorGridLineColor,
     required this.minorGridLineColor,
     this.annotations = const [],
+    this.renderState = const {},
+    this.onRenderStateChanged,
     this.onVisibleRangeChanged,
   });
 
@@ -122,6 +134,10 @@ class _InteractiveChartState extends State<InteractiveChart>
 
   // Right-click detection
   bool _isSecondaryButton = false;
+
+  // Draggable annotation drag state
+  String? _draggingAnnotationId;
+  String? _draggingAnnotationType; // 'draggable_hline' or 'draggable_vline'
 
   // Rubber band zoom state (Shift+drag)
   bool _isRubberBand = false;
@@ -229,16 +245,30 @@ class _InteractiveChartState extends State<InteractiveChart>
 
     if (xAutoRange || yAutoRange) {
       for (final s in widget.series) {
-        if (s.data == null || s.data!.isEmpty) continue;
-        if (xAutoRange) {
-          final (dataXMin, dataXMax) = s.data!.xRange;
-          if (dataXMin < xMin) xMin = dataXMin;
-          if (dataXMax > xMax) xMax = dataXMax;
-        }
-        if (yAutoRange) {
-          final (dataYMin, dataYMax) = s.data!.yRange;
-          if (dataYMin < yMin) yMin = dataYMin;
-          if (dataYMax > yMax) yMax = dataYMax;
+        if (s.usesNamedBuffers) {
+          // Named buffer path: resolve ranges from data store
+          if (xAutoRange && s.xCol != null) {
+            final (dataXMin, dataXMax) = widget.dataBuffers.range(s.xCol!);
+            if (dataXMin < xMin) xMin = dataXMin;
+            if (dataXMax > xMax) xMax = dataXMax;
+          }
+          if (yAutoRange) {
+            final (dataYMin, dataYMax) = s.yRangeFromBuffers(widget.dataBuffers);
+            if (dataYMin < yMin) yMin = dataYMin;
+            if (dataYMax > yMax) yMax = dataYMax;
+          }
+        } else if (s.data != null && s.data!.isNotEmpty) {
+          // Embedded data path
+          if (xAutoRange) {
+            final (dataXMin, dataXMax) = s.data!.xRange;
+            if (dataXMin < xMin) xMin = dataXMin;
+            if (dataXMax > xMax) xMax = dataXMax;
+          }
+          if (yAutoRange) {
+            final (dataYMin, dataYMax) = s.data!.yRange;
+            if (dataYMin < yMin) yMin = dataYMin;
+            if (dataYMax > yMax) yMax = dataYMax;
+          }
         }
       }
     }
@@ -303,7 +333,7 @@ class _InteractiveChartState extends State<InteractiveChart>
   /// Uses the same simple inset-based mapping as ChartPainter.
   Rect _getPlotArea() {
     if (_xVisibleMin == null || _lastSize == Size.zero) return Rect.zero;
-    return ChartPainter.computePlotArea(size: _lastSize);
+    return ChartPainter.computePlotArea(size: _lastSize, hasLeftAxis: widget.yAxis2 != null);
   }
 
   /// Determine which region a local position falls in.
@@ -402,12 +432,69 @@ class _InteractiveChartState extends State<InteractiveChart>
   void _onPointerDown(PointerDownEvent event) {
     _isTrackpadGesture = false;
     _isSecondaryButton = event.buttons & kSecondaryMouseButton != 0;
-    // Detect Shift for rubber band zoom (not on right-click)
-    _isRubberBand = !_isSecondaryButton && HardwareKeyboard.instance.isShiftPressed;
+    _draggingAnnotationId = null;
+    _draggingAnnotationType = null;
+
+    // Hit-test draggable annotations (±8px threshold)
+    if (!_isSecondaryButton) {
+      final plotArea = _getPlotArea();
+      if (plotArea != Rect.zero) {
+        _hitTestDraggableAnnotations(event.localPosition, plotArea);
+      }
+    }
+
+    // Detect Shift for rubber band zoom (not on right-click, not on annotation drag)
+    _isRubberBand = !_isSecondaryButton &&
+        _draggingAnnotationId == null &&
+        HardwareKeyboard.instance.isShiftPressed;
     if (_isRubberBand) {
       _rubberBandStart = event.localPosition;
       _rubberBandEnd = event.localPosition;
     }
+  }
+
+  void _hitTestDraggableAnnotations(Offset pos, Rect plotArea) {
+    for (final ann in widget.annotations) {
+      final type = ann['type'] as String? ?? '';
+      final id = ann['id'] as String?;
+      if (id == null) continue;
+
+      if (type == 'draggable_hline') {
+        final y = (widget.renderState[id] as num?)?.toDouble()
+            ?? (ann['y'] as num?)?.toDouble();
+        if (y == null) continue;
+        final screenY = _dataToScreenY(y, plotArea);
+        if ((pos.dy - screenY).abs() <= 8.0) {
+          _draggingAnnotationId = id;
+          _draggingAnnotationType = type;
+          return;
+        }
+      } else if (type == 'draggable_vline') {
+        final x = (widget.renderState[id] as num?)?.toDouble()
+            ?? (ann['x'] as num?)?.toDouble();
+        if (x == null) continue;
+        final screenX = _dataToScreenX(x, plotArea);
+        if ((pos.dx - screenX).abs() <= 8.0) {
+          _draggingAnnotationId = id;
+          _draggingAnnotationType = type;
+          return;
+        }
+      }
+    }
+  }
+
+  double _dataToScreenY(double dataY, Rect plotArea) {
+    final yMin = _yVisibleMin ?? widget.yAxis?.visibleRangeMin ?? 0.0;
+    final yMax = _yVisibleMax ?? widget.yAxis?.visibleRangeMax ?? 100.0;
+    final ratio = (dataY - yMin) / (yMax - yMin);
+    return plotArea.bottom - ratio * plotArea.height;
+  }
+
+  double _dataToScreenX(double dataX, Rect plotArea) {
+    final xMin = _xVisibleMin ?? widget.xAxis?.visibleRangeMin ?? 0.0;
+    final xMax = _xVisibleMax ?? widget.xAxis?.visibleRangeMax ?? 100.0;
+    final ratio = (dataX - xMin) / (xMax - xMin);
+    return plotArea.left + ratio * plotArea.width;
   }
 
   void _onPointerPanZoomStart(PointerPanZoomStartEvent event) {
@@ -524,6 +611,7 @@ class _InteractiveChartState extends State<InteractiveChart>
   void _onScaleStart(ScaleStartDetails details) {
     _stopMomentum(); // cancel any in-flight momentum from previous gesture
     if (_isSecondaryButton) return; // right-click handled separately
+    if (_draggingAnnotationId != null) return; // annotation drag handled separately
 
     final region = _hitTest(details.localFocalPoint);
     if (region == _HitRegion.none) return;
@@ -547,6 +635,31 @@ class _InteractiveChartState extends State<InteractiveChart>
   }
 
   void _onScaleUpdate(ScaleUpdateDetails details) {
+    // Draggable annotation drag — update renderState directly
+    if (_draggingAnnotationId != null) {
+      final plotArea = _getPlotArea();
+      if (plotArea == Rect.zero) return;
+
+      if (_draggingAnnotationType == 'draggable_hline') {
+        final yMin = _yVisibleMin ?? widget.yAxis?.visibleRangeMin ?? 0.0;
+        final yMax = _yVisibleMax ?? widget.yAxis?.visibleRangeMax ?? 100.0;
+        final ratio = (plotArea.bottom - details.localFocalPoint.dy) / plotArea.height;
+        final newY = yMin + ratio * (yMax - yMin);
+        widget.renderState[_draggingAnnotationId!] = newY;
+      } else if (_draggingAnnotationType == 'draggable_vline') {
+        final xMin = _xVisibleMin ?? widget.xAxis?.visibleRangeMin ?? 0.0;
+        final xMax = _xVisibleMax ?? widget.xAxis?.visibleRangeMax ?? 100.0;
+        final ratio = (details.localFocalPoint.dx - plotArea.left) / plotArea.width;
+        final newX = xMin + ratio * (xMax - xMin);
+        widget.renderState[_draggingAnnotationId!] = newX;
+      }
+
+      // Trigger repaint via setState + callback
+      setState(() {});
+      widget.onRenderStateChanged?.call();
+      return;
+    }
+
     if (_scaleStartFocalPoint == null) return;
 
     // Rubber band mode: just track the drag rectangle
@@ -650,6 +763,13 @@ class _InteractiveChartState extends State<InteractiveChart>
   }
 
   void _onScaleEnd(ScaleEndDetails details) {
+    // Draggable annotation drag end — keep final value
+    if (_draggingAnnotationId != null) {
+      _draggingAnnotationId = null;
+      _draggingAnnotationType = null;
+      return;
+    }
+
     // Rubber band zoom: apply selection
     if (_isRubberBand && _rubberBandStart != null && _rubberBandEnd != null) {
       _applyRubberBandZoom();
@@ -825,6 +945,9 @@ class _InteractiveChartState extends State<InteractiveChart>
     );
   }
 
+  // Secondary Y axis: pass through from widget (zoom/pan not yet independent)
+  AxisModel? get _effectiveYAxis2 => widget.yAxis2;
+
   @override
   Widget build(BuildContext context) {
     return LayoutBuilder(
@@ -869,7 +992,9 @@ class _InteractiveChartState extends State<InteractiveChart>
                 painter: ChartPainter(
                   xAxis: _effectiveXAxis,
                   yAxis: _effectiveYAxis,
+                  yAxis2: _effectiveYAxis2,
                   series: widget.series,
+                  dataBuffers: widget.dataBuffers,
                   backgroundColor: widget.backgroundColor,
                   showMajorGridLines: widget.showMajorGridLines,
                   showMinorGridLines: widget.showMinorGridLines,
@@ -884,6 +1009,7 @@ class _InteractiveChartState extends State<InteractiveChart>
                   canUndo: _undoStack.isNotEmpty,
                   canRedo: _redoStack.isNotEmpty,
                   undoRedoHitRects: _undoRedoHitRects,
+                  renderState: widget.renderState,
                 ),
                 child: const SizedBox.expand(),
               ),
