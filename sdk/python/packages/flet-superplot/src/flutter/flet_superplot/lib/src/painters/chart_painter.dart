@@ -59,6 +59,19 @@ class ChartPainter extends CustomPainter {
   /// Keys are annotation IDs (e.g. "threshold"), values are current data values.
   final Map<String, dynamic> renderState;
 
+  // Cached auto-range result from the last non-gesture paint.
+  // InteractiveChart reads these on first zoom so its initial ranges
+  // match exactly what the painter rendered — no coordinate jump.
+  static double? lastAutoXMin, lastAutoXMax, lastAutoYMin, lastAutoYMax;
+
+  /// Reset cached auto-range (call on double-tap reset or new data).
+  static void resetAutoRange() {
+    lastAutoXMin = null;
+    lastAutoXMax = null;
+    lastAutoYMin = null;
+    lastAutoYMax = null;
+  }
+
   // Computed during paint
   late Rect _plotArea;
   late Rect _chartClip;
@@ -133,6 +146,15 @@ class ChartPainter extends CustomPainter {
       debugPrint('[SuperPlot] _computeRanges error: $e');
       _xMin = 0; _xMax = 1; _yMin = 0; _yMax = 1;
       _xDataMin = 0; _xDataMax = 1; _yDataMin = 0; _yDataMax = 1;
+    }
+
+    // Cache auto-range result when not gesturing so InteractiveChart
+    // can adopt the exact same ranges on first zoom interaction.
+    if (!gestureActive) {
+      lastAutoXMin = _xMin;
+      lastAutoXMax = _xMax;
+      lastAutoYMin = _yMin;
+      lastAutoYMax = _yMax;
     }
 
     try {
@@ -2391,10 +2413,11 @@ class ChartPainter extends CustomPainter {
       final y = boxTop + boxPadding + i * (itemHeight + itemPadding);
       final swatchY = y + (itemHeight - swatchSize) / 2;
 
-      // Color swatch
+      // Color swatch — prefer fillColor for filled series types
+      final baseColor = s.fillColor ?? s.strokeColor;
       final swatchColor = isHidden
-          ? s.strokeColor.withValues(alpha: 0.3)
-          : s.strokeColor;
+          ? baseColor.withValues(alpha: 0.3)
+          : baseColor;
       canvas.drawRect(
         Rect.fromLTWH(boxLeft + boxPadding, swatchY, swatchSize, swatchSize),
         Paint()..color = swatchColor,

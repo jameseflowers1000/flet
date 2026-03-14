@@ -219,6 +219,7 @@ class _InteractiveChartState extends State<InteractiveChart>
     super.didUpdateWidget(oldWidget);
     // If parent pushes new axis config while user hasn't zoomed, respect it
     if (!_userHasZoomed) {
+      ChartPainter.resetAutoRange();
       _xVisibleMin = null;
       _xVisibleMax = null;
       _yVisibleMin = null;
@@ -227,10 +228,27 @@ class _InteractiveChartState extends State<InteractiveChart>
   }
 
   /// Ensure we have explicit mutable ranges (called on first interaction).
+  ///
+  /// Adopts the ranges the painter last computed (including stacking, waterfall,
+  /// hidden-series filtering, etc.) so the first zoom frame is an identity
+  /// transform — no visual jump. Falls back to recomputing from data only if
+  /// the painter hasn't painted yet.
   void _ensureExplicitRanges() {
     if (_xVisibleMin != null) return;
 
-    // Compute what the painter would use as visible ranges
+    // Prefer the painter's cached auto-range — it includes stacking
+    // accumulation, waterfall cumulative, and hidden-series filtering
+    // that we cannot easily replicate here.
+    if (ChartPainter.lastAutoXMin != null) {
+      _xVisibleMin = ChartPainter.lastAutoXMin;
+      _xVisibleMax = ChartPainter.lastAutoXMax;
+      _yVisibleMin = ChartPainter.lastAutoYMin;
+      _yVisibleMax = ChartPainter.lastAutoYMax;
+      _userHasZoomed = true;
+      return;
+    }
+
+    // Fallback: compute from data (painter hasn't painted yet)
     final xAxis = widget.xAxis;
     final yAxis = widget.yAxis;
 
@@ -239,14 +257,12 @@ class _InteractiveChartState extends State<InteractiveChart>
     double yMin = yAxis?.visibleRangeMin ?? double.infinity;
     double yMax = yAxis?.visibleRangeMax ?? double.negativeInfinity;
 
-    // Auto-range from data if needed
     final xAutoRange = xAxis?.autoRange != 'never';
     final yAutoRange = yAxis?.autoRange != 'never';
 
     if (xAutoRange || yAutoRange) {
       for (final s in widget.series) {
         if (s.usesNamedBuffers) {
-          // Named buffer path: resolve ranges from data store
           if (xAutoRange && s.xCol != null) {
             final (dataXMin, dataXMax) = widget.dataBuffers.range(s.xCol!);
             if (dataXMin < xMin) xMin = dataXMin;
@@ -258,7 +274,6 @@ class _InteractiveChartState extends State<InteractiveChart>
             if (dataYMax > yMax) yMax = dataYMax;
           }
         } else if (s.data != null && s.data!.isNotEmpty) {
-          // Embedded data path
           if (xAutoRange) {
             final (dataXMin, dataXMax) = s.data!.xRange;
             if (dataXMin < xMin) xMin = dataXMin;
@@ -273,7 +288,6 @@ class _InteractiveChartState extends State<InteractiveChart>
       }
     }
 
-    // Apply grow-by (multiplicative for log axes, additive for linear)
     if (xMin.isFinite && xMax.isFinite) {
       if (_xIsLog && xMin > 0 && xMax > xMin) {
         xMin = xMin / math.pow(_xLogBase, xAxis?.growByMin ?? 0.1);
@@ -896,6 +910,7 @@ class _InteractiveChartState extends State<InteractiveChart>
   // ---------------------------------------------------------------------------
 
   void _onDoubleTap() {
+    ChartPainter.resetAutoRange();
     _pushViewportUndo(); // allow undo back to pre-reset view
     setState(() {
       _xVisibleMin = null;
