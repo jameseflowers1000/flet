@@ -4,13 +4,9 @@ import 'package:flutter/services.dart';
 
 /// A single floating window with title bar, resize handles, and window buttons.
 ///
-/// All drag/resize handled at 60fps via setState(). Final positions sent to
-/// Python only on gesture end via FletBackend.updateControl().
-///
-/// Architecture: renders SizedBox.expand → Stack → Positioned so that
-/// the Positioned is always a direct Stack child (required by Flutter).
-/// This also means hit-testing only triggers on the window chrome area,
-/// not the full overlay — clicks outside pass through to the doclet.
+/// Position changes during drag/resize use a ValueNotifier so only the
+/// lightweight Positioned wrapper rebuilds — the window chrome and child
+/// content are wrapped in RepaintBoundary and never rebuild during drag.
 class FloatingWindowWidget extends StatefulWidget {
   final Control control;
 
@@ -23,12 +19,14 @@ class FloatingWindowWidget extends StatefulWidget {
   State<FloatingWindowWidget> createState() => _FloatingWindowWidgetState();
 }
 
+class _Rect {
+  double left, top, width, height;
+  _Rect(this.left, this.top, this.width, this.height);
+}
+
 class _FloatingWindowWidgetState extends State<FloatingWindowWidget> {
-  // Current window geometry (Dart-local state for 60fps updates)
-  double _left = 100;
-  double _top = 100;
-  double _width = 800;
-  double _height = 400;
+  // Position notifier — triggers ONLY the Positioned wrapper, not the chrome
+  final _rect = ValueNotifier<_Rect>(_Rect(100, 100, 800, 400));
 
   // Saved rect for maximize/restore
   double _savedLeft = 0;
@@ -38,14 +36,24 @@ class _FloatingWindowWidgetState extends State<FloatingWindowWidget> {
 
   bool _maximized = false;
   bool _visible = true;
-
-  // Track whether we've initialized from control properties
   bool _initialized = false;
+
+  // Cached child widgets and chrome — only rebuilt on control change
+  List<Widget> _cachedChildren = const [];
+  Widget? _cachedChrome;
+  String _lastTitle = '';
+  String _lastTitleBarColor = '';
+  String _lastChromeColor = '';
+
+  // Current viewport bounds — updated on every LayoutBuilder pass
+  double _vpWidth = 0;
+  double _vpHeight = 0;
 
   static const double _titleBarHeight = 32.0;
   static const double _resizeHandleSize = 6.0;
   static const double _minWidth = 200.0;
   static const double _minHeight = 100.0;
+  static const _borderColor = Color(0xFF0891B3);
 
   @override
   void initState() {
@@ -54,31 +62,42 @@ class _FloatingWindowWidgetState extends State<FloatingWindowWidget> {
   }
 
   @override
+  void dispose() {
+    _rect.dispose();
+    super.dispose();
+  }
+
+  @override
   void didUpdateWidget(covariant FloatingWindowWidget oldWidget) {
     super.didUpdateWidget(oldWidget);
     _syncFromControl();
   }
 
-  /// Read values from Python control properties.
-  ///
-  /// Position and maximize state are only read on first build (initialization).
-  /// After that, Dart owns these values locally for 60fps drag/resize — Python
-  /// only gets updates on gesture end via updateControl(). The visibility
-  /// property is always synced since it's toggled from Python.
   void _syncFromControl() {
     final c = widget.control;
-
-    // Visibility: always sync from Python (Python owns show/hide)
     _visible = c.getBool("win_visible", true)!;
 
-    // Position, size, maximize: only read on first build
     if (!_initialized) {
-      _left = c.getDouble("win_left", 100)!;
-      _top = c.getDouble("win_top", 100)!;
-      _width = c.getDouble("win_width", 800)!;
-      _height = c.getDouble("win_height", 400)!;
+      final l = c.getDouble("win_left", 100)!;
+      final t = c.getDouble("win_top", 100)!;
+      final w = c.getDouble("win_width", 800)!;
+      final h = c.getDouble("win_height", 400)!;
+      _rect.value = _Rect(l, t, w, h);
       _maximized = c.getBool("maximized", false)!;
       _initialized = true;
+    }
+
+    _cachedChildren = widget.control.buildWidgets("controls");
+
+    // Invalidate chrome cache when properties change
+    final title = c.getString("title") ?? "";
+    final tbc = c.getString("title_bar_color") ?? "";
+    final cc = c.getString("chrome_color") ?? "";
+    if (title != _lastTitle || tbc != _lastTitleBarColor || cc != _lastChromeColor) {
+      _lastTitle = title;
+      _lastTitleBarColor = tbc;
+      _lastChromeColor = cc;
+      _cachedChrome = null; // force rebuild
     }
   }
 
@@ -95,67 +114,68 @@ class _FloatingWindowWidgetState extends State<FloatingWindowWidget> {
 
   @override
   Widget build(BuildContext context) {
-    final title = widget.control.getString("title") ?? "";
-    final titleBarColor =
-        _parseColor(widget.control.getString("title_bar_color"), const Color(0xFF1E1E2E));
-    final chromeColor =
-        _parseColor(widget.control.getString("chrome_color"), const Color(0xFF26252D));
-
-    // SizedBox.expand fills the overlay area, then our inner Stack + Positioned
-    // places the window at _left/_top. Hit-testing only fires on the Positioned
-    // child — clicks outside the window chrome pass through to the doclet.
     return LayoutControl(
       control: widget.control,
       child: LayoutBuilder(
         builder: (context, constraints) {
-          final vpWidth = constraints.maxWidth;
-          final vpHeight = constraints.maxHeight;
-
-          double effectiveLeft, effectiveTop, effectiveWidth, effectiveHeight;
-          if (_maximized) {
-            effectiveLeft = 0;
-            effectiveTop = 0;
-            effectiveWidth = vpWidth;
-            effectiveHeight = vpHeight;
-          } else {
-            effectiveLeft = _left;
-            effectiveTop = _top;
-            effectiveWidth = _width.clamp(_minWidth, vpWidth);
-            effectiveHeight = _height.clamp(_minHeight, vpHeight);
-          }
-
-          // Use opacity to hide — NOT removal from tree (preserves WebView iframes).
-          // IgnorePointer wraps the entire SizedBox.expand so the full overlay
-          // area passes through hits when the window is hidden.
+          // Store viewport bounds so drag handlers always have fresh values
+          _vpWidth = constraints.maxWidth;
+          _vpHeight = constraints.maxHeight;
           final effectiveOpacity = _visible ? 1.0 : 0.0;
+
+          // Build chrome once, cache it. RepaintBoundary isolates it from
+          // position changes so it never repaints during drag.
+          _cachedChrome ??= RepaintBoundary(
+            child: _buildWindowChrome(
+              _lastTitle,
+              _parseColor(_lastTitleBarColor, const Color(0xFF1E1E2E)),
+              _parseColor(_lastChromeColor, const Color(0xFF26252D)),
+            ),
+          );
 
           return IgnorePointer(
             ignoring: !_visible,
             child: SizedBox.expand(
-              child: Stack(
-                clipBehavior: Clip.none,
-                children: [
-                  Positioned(
-                    left: effectiveLeft,
-                    top: effectiveTop,
-                    child: Opacity(
-                      opacity: effectiveOpacity,
-                      child: SizedBox(
-                        width: effectiveWidth,
-                        height: effectiveHeight,
-                        child: _buildWindowChrome(
-                          title,
-                          titleBarColor,
-                          chromeColor,
-                          vpWidth,
-                          vpHeight,
-                          effectiveWidth,
-                          effectiveHeight,
+              // ValueListenableBuilder rebuilds ONLY the positioning wrapper
+              // on drag/resize — the chrome inside RepaintBoundary is untouched.
+              child: ValueListenableBuilder<_Rect>(
+                valueListenable: _rect,
+                builder: (context, rect, _) {
+                  double eL, eT, eW, eH;
+                  if (_maximized) {
+                    eL = 0; eT = 0; eW = _vpWidth; eH = _vpHeight;
+                  } else {
+                    eL = rect.left; eT = rect.top;
+                    eW = rect.width.clamp(_minWidth, _vpWidth);
+                    eH = rect.height.clamp(_minHeight, _vpHeight);
+                  }
+
+                  return Stack(
+                    clipBehavior: Clip.none,
+                    children: [
+                      Positioned(
+                        left: eL,
+                        top: eT,
+                        child: Opacity(
+                          opacity: effectiveOpacity,
+                          child: SizedBox(
+                            width: eW,
+                            height: eH,
+                            child: Stack(
+                              clipBehavior: Clip.none,
+                              children: [
+                                // Chrome (cached + RepaintBoundary)
+                                Positioned.fill(child: _cachedChrome!),
+                                // Resize handles
+                                if (!_maximized) ..._buildResizeHandles(eW, eH),
+                              ],
+                            ),
+                          ),
                         ),
                       ),
-                    ),
-                  ),
-                ],
+                    ],
+                  );
+                },
               ),
             ),
           );
@@ -168,79 +188,64 @@ class _FloatingWindowWidgetState extends State<FloatingWindowWidget> {
     String title,
     Color titleBarColor,
     Color chromeColor,
-    double vpWidth,
-    double vpHeight,
-    double windowWidth,
-    double windowHeight,
   ) {
-    final children = widget.control.buildWidgets("controls");
-
-    return Stack(
-      clipBehavior: Clip.none,
-      children: [
-        // Main window body with shadow
-        Container(
-          decoration: BoxDecoration(
-            color: chromeColor,
-            borderRadius: BorderRadius.circular(8),
-            boxShadow: const [
-              BoxShadow(
-                color: Color(0x66000000),
-                blurRadius: 16,
-                offset: Offset(0, 4),
-              ),
-            ],
+    return Container(
+      decoration: BoxDecoration(
+        color: chromeColor,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: _borderColor, width: 1),
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x66000000),
+            blurRadius: 16,
+            offset: Offset(0, 4),
           ),
-          child: Column(
-            children: [
-              // Title bar
-              _buildTitleBar(title, titleBarColor, vpWidth, vpHeight),
-              // Content area
-              Expanded(
-                child: ClipRRect(
-                  borderRadius: const BorderRadius.only(
-                    bottomLeft: Radius.circular(8),
-                    bottomRight: Radius.circular(8),
-                  ),
-                  child: children.isNotEmpty
-                      ? children.first
-                      : const SizedBox.shrink(),
-                ),
+        ],
+      ),
+      child: Column(
+        children: [
+          // Title bar
+          _buildTitleBar(title, titleBarColor),
+          // Content area
+          Expanded(
+            child: ClipRRect(
+              borderRadius: const BorderRadius.only(
+                bottomLeft: Radius.circular(7),
+                bottomRight: Radius.circular(7),
               ),
-            ],
+              child: _cachedChildren.isNotEmpty
+                  ? _cachedChildren.first
+                  : const SizedBox.shrink(),
+            ),
           ),
-        ),
-
-        // Resize handles (only when not maximized)
-        if (!_maximized) ..._buildResizeHandles(vpWidth, vpHeight, windowWidth, windowHeight),
-      ],
+        ],
+      ),
     );
   }
 
-  Widget _buildTitleBar(String title, Color titleBarColor, double vpWidth, double vpHeight) {
+  Widget _buildTitleBar(String title, Color titleBarColor) {
     return GestureDetector(
       onPanUpdate: _maximized
           ? null
           : (details) {
-              setState(() {
-                _left = (_left + details.delta.dx).clamp(
-                    -_width + 100, vpWidth - 100);
-                _top = (_top + details.delta.dy).clamp(0.0, vpHeight - _titleBarHeight);
-              });
+              final r = _rect.value;
+              // Allow dragging down until only the title bar is visible
+              _rect.value = _Rect(
+                (r.left + details.delta.dx).clamp(-r.width + 100, _vpWidth - 100),
+                (r.top + details.delta.dy).clamp(0.0, _vpHeight - _titleBarHeight),
+                r.width,
+                r.height,
+              );
             },
-      onPanEnd: _maximized
-          ? null
-          : (_) {
-              _sendPositionToBackend();
-            },
+      onPanEnd: _maximized ? null : (_) => _sendPositionToBackend(),
       onDoubleTap: _toggleMaximize,
       child: Container(
         height: _titleBarHeight,
         decoration: BoxDecoration(
           color: titleBarColor,
           borderRadius: const BorderRadius.only(
-            topLeft: Radius.circular(8),
-            topRight: Radius.circular(8),
+            topLeft: Radius.circular(7),
+            topRight: Radius.circular(7),
           ),
         ),
         child: Row(
@@ -258,7 +263,6 @@ class _FloatingWindowWidgetState extends State<FloatingWindowWidget> {
                 overflow: TextOverflow.ellipsis,
               ),
             ),
-            // Window buttons
             _windowButton(
               icon: _maximized ? Icons.filter_none : Icons.crop_square,
               tooltip: _maximized ? 'Restore' : 'Maximize',
@@ -292,221 +296,137 @@ class _FloatingWindowWidgetState extends State<FloatingWindowWidget> {
     );
   }
 
-  List<Widget> _buildResizeHandles(
-    double vpWidth, double vpHeight, double windowWidth, double windowHeight,
-  ) {
+  List<Widget> _buildResizeHandles(double windowWidth, double windowHeight) {
     return [
-      // Top edge
-      _resizeHandle(
-        cursor: SystemMouseCursors.resizeUp,
-        left: _resizeHandleSize,
-        top: 0,
-        width: windowWidth - _resizeHandleSize * 2,
-        height: _resizeHandleSize,
-        onDrag: (dx, dy) => _resizeTop(dy, vpHeight),
-      ),
-      // Bottom edge
-      _resizeHandle(
-        cursor: SystemMouseCursors.resizeDown,
-        left: _resizeHandleSize,
-        top: windowHeight - _resizeHandleSize,
-        width: windowWidth - _resizeHandleSize * 2,
-        height: _resizeHandleSize,
-        onDrag: (dx, dy) => _resizeBottom(dy, vpHeight),
-      ),
-      // Left edge
-      _resizeHandle(
-        cursor: SystemMouseCursors.resizeLeft,
-        left: 0,
-        top: _resizeHandleSize,
-        width: _resizeHandleSize,
-        height: windowHeight - _resizeHandleSize * 2,
-        onDrag: (dx, dy) => _resizeLeft(dx, vpWidth),
-      ),
-      // Right edge
-      _resizeHandle(
-        cursor: SystemMouseCursors.resizeRight,
-        left: windowWidth - _resizeHandleSize,
-        top: _resizeHandleSize,
-        width: _resizeHandleSize,
-        height: windowHeight - _resizeHandleSize * 2,
-        onDrag: (dx, dy) => _resizeRight(dx, vpWidth),
-      ),
-      // Top-left corner
-      _resizeHandle(
-        cursor: SystemMouseCursors.resizeUpLeft,
-        left: 0,
-        top: 0,
-        width: _resizeHandleSize,
-        height: _resizeHandleSize,
-        onDrag: (dx, dy) {
-          _resizeLeft(dx, vpWidth);
-          _resizeTop(dy, vpHeight);
-        },
-      ),
-      // Top-right corner
-      _resizeHandle(
-        cursor: SystemMouseCursors.resizeUpRight,
-        left: windowWidth - _resizeHandleSize,
-        top: 0,
-        width: _resizeHandleSize,
-        height: _resizeHandleSize,
-        onDrag: (dx, dy) {
-          _resizeRight(dx, vpWidth);
-          _resizeTop(dy, vpHeight);
-        },
-      ),
-      // Bottom-left corner
-      _resizeHandle(
-        cursor: SystemMouseCursors.resizeDownLeft,
-        left: 0,
-        top: windowHeight - _resizeHandleSize,
-        width: _resizeHandleSize,
-        height: _resizeHandleSize,
-        onDrag: (dx, dy) {
-          _resizeLeft(dx, vpWidth);
-          _resizeBottom(dy, vpHeight);
-        },
-      ),
-      // Bottom-right corner
-      _resizeHandle(
-        cursor: SystemMouseCursors.resizeDownRight,
-        left: windowWidth - _resizeHandleSize,
-        top: windowHeight - _resizeHandleSize,
-        width: _resizeHandleSize,
-        height: _resizeHandleSize,
-        onDrag: (dx, dy) {
-          _resizeRight(dx, vpWidth);
-          _resizeBottom(dy, vpHeight);
-        },
-      ),
+      _resizeHandle(cursor: SystemMouseCursors.resizeUp,
+        left: _resizeHandleSize, top: 0,
+        width: windowWidth - _resizeHandleSize * 2, height: _resizeHandleSize,
+        onDrag: (dx, dy) => _resizeTop(dy)),
+      _resizeHandle(cursor: SystemMouseCursors.resizeDown,
+        left: _resizeHandleSize, top: windowHeight - _resizeHandleSize,
+        width: windowWidth - _resizeHandleSize * 2, height: _resizeHandleSize,
+        onDrag: (dx, dy) => _resizeBottom(dy)),
+      _resizeHandle(cursor: SystemMouseCursors.resizeLeft,
+        left: 0, top: _resizeHandleSize,
+        width: _resizeHandleSize, height: windowHeight - _resizeHandleSize * 2,
+        onDrag: (dx, dy) => _resizeLeft(dx)),
+      _resizeHandle(cursor: SystemMouseCursors.resizeRight,
+        left: windowWidth - _resizeHandleSize, top: _resizeHandleSize,
+        width: _resizeHandleSize, height: windowHeight - _resizeHandleSize * 2,
+        onDrag: (dx, dy) => _resizeRight(dx)),
+      _resizeHandle(cursor: SystemMouseCursors.resizeUpLeft,
+        left: 0, top: 0,
+        width: _resizeHandleSize, height: _resizeHandleSize,
+        onDrag: (dx, dy) { _resizeLeft(dx); _resizeTop(dy); }),
+      _resizeHandle(cursor: SystemMouseCursors.resizeUpRight,
+        left: windowWidth - _resizeHandleSize, top: 0,
+        width: _resizeHandleSize, height: _resizeHandleSize,
+        onDrag: (dx, dy) { _resizeRight(dx); _resizeTop(dy); }),
+      _resizeHandle(cursor: SystemMouseCursors.resizeDownLeft,
+        left: 0, top: windowHeight - _resizeHandleSize,
+        width: _resizeHandleSize, height: _resizeHandleSize,
+        onDrag: (dx, dy) { _resizeLeft(dx); _resizeBottom(dy); }),
+      _resizeHandle(cursor: SystemMouseCursors.resizeDownRight,
+        left: windowWidth - _resizeHandleSize, top: windowHeight - _resizeHandleSize,
+        width: _resizeHandleSize, height: _resizeHandleSize,
+        onDrag: (dx, dy) { _resizeRight(dx); _resizeBottom(dy); }),
     ];
   }
 
   Widget _resizeHandle({
     required SystemMouseCursor cursor,
-    required double left,
-    required double top,
-    required double width,
-    required double height,
+    required double left, required double top,
+    required double width, required double height,
     required void Function(double dx, double dy) onDrag,
   }) {
     return Positioned(
-      left: left,
-      top: top,
+      left: left, top: top,
       child: MouseRegion(
         cursor: cursor,
         child: GestureDetector(
-          onPanUpdate: (details) {
-            setState(() {
-              onDrag(details.delta.dx, details.delta.dy);
-            });
-          },
-          onPanEnd: (_) {
-            _sendPositionToBackend();
-          },
-          child: Container(
-            width: width,
-            height: height,
-            color: Colors.transparent,
-          ),
+          onPanUpdate: (details) => onDrag(details.delta.dx, details.delta.dy),
+          onPanEnd: (_) => _sendPositionToBackend(),
+          child: Container(width: width, height: height, color: Colors.transparent),
         ),
       ),
     );
   }
 
-  // Resize helpers — mutate _left/_top/_width/_height in place
-
-  void _resizeLeft(double dx, double vpWidth) {
-    final newLeft = _left + dx;
-    final newWidth = _width - dx;
-    if (newWidth >= _minWidth && newLeft >= -50) {
-      _left = newLeft;
-      _width = newWidth;
+  void _resizeLeft(double dx) {
+    final r = _rect.value;
+    final nw = r.width - dx;
+    final nl = r.left + dx;
+    if (nw >= _minWidth && nl >= -50) {
+      _rect.value = _Rect(nl, r.top, nw, r.height);
     }
   }
 
-  void _resizeRight(double dx, double vpWidth) {
-    final newWidth = _width + dx;
-    if (newWidth >= _minWidth && _left + newWidth <= vpWidth + 50) {
-      _width = newWidth;
+  void _resizeRight(double dx) {
+    final r = _rect.value;
+    final nw = r.width + dx;
+    if (nw >= _minWidth && r.left + nw <= _vpWidth + 50) {
+      _rect.value = _Rect(r.left, r.top, nw, r.height);
     }
   }
 
-  void _resizeTop(double dy, double vpHeight) {
-    final newTop = _top + dy;
-    final newHeight = _height - dy;
-    if (newHeight >= _minHeight && newTop >= 0) {
-      _top = newTop;
-      _height = newHeight;
+  void _resizeTop(double dy) {
+    final r = _rect.value;
+    final nh = r.height - dy;
+    final nt = r.top + dy;
+    if (nh >= _minHeight && nt >= 0) {
+      _rect.value = _Rect(r.left, nt, r.width, nh);
     }
   }
 
-  void _resizeBottom(double dy, double vpHeight) {
-    final newHeight = _height + dy;
-    if (newHeight >= _minHeight && _top + newHeight <= vpHeight + 50) {
-      _height = newHeight;
+  void _resizeBottom(double dy) {
+    final r = _rect.value;
+    final nh = r.height + dy;
+    if (nh >= _minHeight && r.top + nh <= _vpHeight + 50) {
+      _rect.value = _Rect(r.left, r.top, r.width, nh);
     }
   }
 
   void _toggleMaximize() {
-    setState(() {
-      if (_maximized) {
-        // Restore
-        _left = _savedLeft;
-        _top = _savedTop;
-        _width = _savedWidth;
-        _height = _savedHeight;
-        _maximized = false;
-      } else {
-        // Save current rect
-        _savedLeft = _left;
-        _savedTop = _top;
-        _savedWidth = _width;
-        _savedHeight = _height;
-        _maximized = true;
-      }
+    if (_maximized) {
+      _rect.value = _Rect(_savedLeft, _savedTop, _savedWidth, _savedHeight);
+      _maximized = false;
+    } else {
+      final r = _rect.value;
+      _savedLeft = r.left; _savedTop = r.top;
+      _savedWidth = r.width; _savedHeight = r.height;
+      _maximized = true;
+    }
+    // Force chrome rebuild for button icon change
+    _cachedChrome = null;
+    setState(() {});
+    FletBackend.of(context).updateControl(widget.control.id, {
+      'maximized': _maximized.toString(),
+      'win_left': _rect.value.left.toString(),
+      'win_top': _rect.value.top.toString(),
+      'win_width': _rect.value.width.toString(),
+      'win_height': _rect.value.height.toString(),
     });
-    FletBackend.of(context).updateControl(
-      widget.control.id,
-      {
-        'maximized': _maximized.toString(),
-        'win_left': _left.toString(),
-        'win_top': _top.toString(),
-        'win_width': _width.toString(),
-        'win_height': _height.toString(),
-      },
-    );
     FletBackend.of(context).triggerControlEvent(
-      widget.control,
-      _maximized ? "maximize" : "restore",
-      "",
-    );
+      widget.control, _maximized ? "maximize" : "restore", "");
   }
 
   void _onClose() {
-    setState(() => _visible = false);
+    _visible = false;
+    setState(() {});
     FletBackend.of(context).updateControl(
-      widget.control.id,
-      {'win_visible': 'false'},
-    );
+      widget.control.id, {'win_visible': 'false'});
     FletBackend.of(context).triggerControlEvent(
-      widget.control,
-      "close",
-      "",
-    );
+      widget.control, "close", "");
   }
 
   void _sendPositionToBackend() {
-    FletBackend.of(context).updateControl(
-      widget.control.id,
-      {
-        'win_left': _left.toString(),
-        'win_top': _top.toString(),
-        'win_width': _width.toString(),
-        'win_height': _height.toString(),
-      },
-    );
+    final r = _rect.value;
+    FletBackend.of(context).updateControl(widget.control.id, {
+      'win_left': r.left.toString(),
+      'win_top': r.top.toString(),
+      'win_width': r.width.toString(),
+      'win_height': r.height.toString(),
+    });
   }
 }
 

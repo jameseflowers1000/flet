@@ -19,9 +19,10 @@ import 'slash_menu.dart';
 ///   Phase 2 (args): if the command has arg suggestions, show them
 ///     for the user to pick or type-filter
 ///
-/// The slash menu renders inline (above the input row in a Column).
-/// The Flexible wrapper (here and in the parent AgentView) prevents
-/// overflow — the menu shrinks to fit available space.
+/// The slash menu floats above the input via Positioned + FractionalTranslation
+/// inside a Stack. The inputRow alone defines the Stack's size, so the menu
+/// never causes layout shifts. clipBehavior: Clip.none lets it render outside
+/// the Stack bounds into the message list area above.
 class ChatComposer extends StatefulWidget {
   final String hintText;
   final List<SlashCommand> slashCommands;
@@ -416,41 +417,45 @@ class _ChatComposerState extends State<ChatComposer> {
           ),
         );
 
-    // CRITICAL: Always return the same Column structure so the TextField
-    // is never unmounted/remounted (which kills focus). The menu slot
-    // collapses to zero height when hidden.
-    final Widget menuSlot;
-    if (_showSlashMenu) {
-      menuSlot = Flexible(
-        child: Padding(
-          padding: const EdgeInsets.only(left: 8, right: 8, bottom: 4),
-          child: _selectedCommand != null
-              ? SlashMenu(
-                  commands: widget.slashCommands,
-                  filter: _slashFilter,
-                  onSelected: _onSlashCommandSelected,
-                  mode: SlashMenuMode.args,
-                  args: _selectedCommand!.args,
-                  onArgSelected: _onSlashArgSelected,
-                  selectedCommandLabel: _selectedCommand!.command,
-                  argFilter: _argFilter,
-                )
-              : SlashMenu(
-                  commands: widget.slashCommands,
-                  filter: _slashFilter,
-                  onSelected: _onSlashCommandSelected,
-                ),
-        ),
-      );
-    } else {
-      menuSlot = const SizedBox.shrink();
-    }
-
-    return Column(
-      mainAxisSize: MainAxisSize.min,
+    // CRITICAL: Always return a Stack so the TextField is never
+    // unmounted/remounted (which kills focus). The inputRow is the only
+    // non-Positioned child, so it alone defines the Stack's layout size.
+    // The slash menu floats above via Positioned + FractionalTranslation,
+    // causing zero layout shift regardless of menu size changes.
+    return Stack(
+      clipBehavior: Clip.none,
       children: [
-        menuSlot,
+        // Input row — defines the Stack's intrinsic size
         inputRow,
+        // Slash menu — floats above the input, outside Stack bounds
+        if (_showSlashMenu)
+          Positioned(
+            left: 8,
+            right: 8,
+            bottom: 0,
+            child: FractionalTranslation(
+              translation: const Offset(0, -1),
+              child: Padding(
+                padding: const EdgeInsets.only(bottom: 4),
+                child: _selectedCommand != null
+                    ? SlashMenu(
+                        commands: widget.slashCommands,
+                        filter: _slashFilter,
+                        onSelected: _onSlashCommandSelected,
+                        mode: SlashMenuMode.args,
+                        args: _selectedCommand!.args,
+                        onArgSelected: _onSlashArgSelected,
+                        selectedCommandLabel: _selectedCommand!.command,
+                        argFilter: _argFilter,
+                      )
+                    : SlashMenu(
+                        commands: widget.slashCommands,
+                        filter: _slashFilter,
+                        onSelected: _onSlashCommandSelected,
+                      ),
+              ),
+            ),
+          ),
       ],
     );
   }
