@@ -1,11 +1,11 @@
 {
-  "name": "Flet",
-  "short_name": "Flet",
+  "name": "Epyx",
+  "short_name": "Epyx",
   "start_url": ".",
   "display": "standalone",
-  "background_color": "#FFFFFF",
-  "theme_color": "#0175C2",
-  "description": "Flet - the fastest way to build Flutter apps in Python",
+  "background_color": "#0A0514",
+  "theme_color": "#4410AA",
+  "description": "Epyx — interactive documents",
   "orientation": "natural",
   "prefer_related_applications": false,
   "icons": [

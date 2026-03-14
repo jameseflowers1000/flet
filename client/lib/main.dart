@@ -202,7 +202,7 @@ class _EpyxAppState extends State<EpyxApp> {
     }
 
     return MaterialApp(
-      title: 'Epyx EDD',
+      title: 'epyx',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         colorScheme: ColorScheme.dark(
