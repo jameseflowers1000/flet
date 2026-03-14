@@ -551,6 +551,13 @@ packages:
       relative: true
     source: path
     version: "0.1.0"
+  flet_window_manager:
+    dependency: "direct main"
+    description:
+      path: "../sdk/python/packages/flet-window-manager/src/flutter/flet_window_manager"
+      relative: true
+    source: path
+    version: "0.1.0"
   flutter:
     dependency: "direct main"
     description: flutter

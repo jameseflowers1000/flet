@@ -43,6 +43,7 @@ import 'package:flet_resizable_panel/flet_resizable_panel.dart' as flet_resizabl
 import 'package:flet_pane/flet_pane.dart' as flet_pane;
 import 'package:flet_thumbnail/flet_thumbnail.dart' as flet_thumbnail;
 import 'package:flet_markdown/flet_markdown.dart' as flet_markdown;
+import 'package:flet_window_manager/flet_window_manager.dart' as flet_window_manager;
 import 'package:syncfusion_flutter_core/core.dart';
 
 const bool isProduction = bool.fromEnvironment('dart.vm.product');
@@ -74,6 +75,7 @@ List<FletExtension> _buildExtensions() {
     flet_pane.Extension(),
     flet_thumbnail.Extension(),
     flet_markdown.Extension(),
+    flet_window_manager.Extension(),
     flet_secure_storage.Extension(),
     flet_webview.Extension(),
     // --FAT_CLIENT_START--

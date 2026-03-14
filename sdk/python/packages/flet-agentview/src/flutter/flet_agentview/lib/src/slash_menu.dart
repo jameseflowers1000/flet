@@ -99,16 +99,20 @@ class SlashMenu extends StatelessWidget {
       }
     }
 
-    return Material(
-      elevation: 8,
-      borderRadius: BorderRadius.circular(8),
-      color: AgentTheme.inputBgColor,
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxHeight: 300, maxWidth: 320),
-        child: ListView(
-          shrinkWrap: true,
-          padding: const EdgeInsets.symmetric(vertical: 4),
-          children: widgets,
+    // ExcludeFocus prevents the menu from stealing keyboard focus
+    // from the composer TextField when it appears.
+    return ExcludeFocus(
+      child: Material(
+        elevation: 8,
+        borderRadius: BorderRadius.circular(8),
+        color: AgentTheme.inputBgColor,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxHeight: 300, maxWidth: 320),
+          child: ListView(
+            shrinkWrap: true,
+            padding: const EdgeInsets.symmetric(vertical: 4),
+            children: widgets,
+          ),
         ),
       ),
     );
@@ -148,16 +152,18 @@ class SlashMenu extends StatelessWidget {
       widgets.add(_buildArgTile(arg));
     }
 
-    return Material(
-      elevation: 8,
-      borderRadius: BorderRadius.circular(8),
-      color: AgentTheme.inputBgColor,
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxHeight: 300, maxWidth: 320),
-        child: ListView(
-          shrinkWrap: true,
-          padding: const EdgeInsets.symmetric(vertical: 4),
-          children: widgets,
+    return ExcludeFocus(
+      child: Material(
+        elevation: 8,
+        borderRadius: BorderRadius.circular(8),
+        color: AgentTheme.inputBgColor,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxHeight: 300, maxWidth: 320),
+          child: ListView(
+            shrinkWrap: true,
+            padding: const EdgeInsets.symmetric(vertical: 4),
+            children: widgets,
+          ),
         ),
       ),
     );

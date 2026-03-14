@@ -19,8 +19,9 @@ import 'slash_menu.dart';
 ///   Phase 2 (args): if the command has arg suggestions, show them
 ///     for the user to pick or type-filter
 ///
-/// The slash menu renders inline (above the input row in a Column),
-/// avoiding Overlay positioning issues in the Flet framework.
+/// The slash menu renders inline (above the input row in a Column).
+/// The Flexible wrapper (here and in the parent AgentView) prevents
+/// overflow — the menu shrinks to fit available space.
 class ChatComposer extends StatefulWidget {
   final String hintText;
   final List<SlashCommand> slashCommands;
@@ -323,32 +324,9 @@ class _ChatComposerState extends State<ChatComposer> {
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        // Slash menu sits directly above the input row
-        if (_showSlashMenu)
-          Padding(
-            padding: const EdgeInsets.only(left: 8, right: 8, bottom: 4),
-            child: _selectedCommand != null
-                ? SlashMenu(
-                    commands: widget.slashCommands,
-                    filter: _slashFilter,
-                    onSelected: _onSlashCommandSelected,
-                    mode: SlashMenuMode.args,
-                    args: _selectedCommand!.args,
-                    onArgSelected: _onSlashArgSelected,
-                    selectedCommandLabel: _selectedCommand!.command,
-                    argFilter: _argFilter,
-                  )
-                : SlashMenu(
-                    commands: widget.slashCommands,
-                    filter: _slashFilter,
-                    onSelected: _onSlashCommandSelected,
-                  ),
-          ),
-        // Input row
-        Container(
+    // The slash menu floats above the input row via a Stack so it doesn't
+    // push the input/buttons out of the window bounds.
+    final inputRow = Container(
           padding: const EdgeInsets.all(8),
           decoration: const BoxDecoration(
             border: Border(
@@ -436,7 +414,43 @@ class _ChatComposerState extends State<ChatComposer> {
               ),
             ],
           ),
+        );
+
+    // CRITICAL: Always return the same Column structure so the TextField
+    // is never unmounted/remounted (which kills focus). The menu slot
+    // collapses to zero height when hidden.
+    final Widget menuSlot;
+    if (_showSlashMenu) {
+      menuSlot = Flexible(
+        child: Padding(
+          padding: const EdgeInsets.only(left: 8, right: 8, bottom: 4),
+          child: _selectedCommand != null
+              ? SlashMenu(
+                  commands: widget.slashCommands,
+                  filter: _slashFilter,
+                  onSelected: _onSlashCommandSelected,
+                  mode: SlashMenuMode.args,
+                  args: _selectedCommand!.args,
+                  onArgSelected: _onSlashArgSelected,
+                  selectedCommandLabel: _selectedCommand!.command,
+                  argFilter: _argFilter,
+                )
+              : SlashMenu(
+                  commands: widget.slashCommands,
+                  filter: _slashFilter,
+                  onSelected: _onSlashCommandSelected,
+                ),
         ),
+      );
+    } else {
+      menuSlot = const SizedBox.shrink();
+    }
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        menuSlot,
+        inputRow,
       ],
     );
   }

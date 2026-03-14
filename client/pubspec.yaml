@@ -116,6 +116,9 @@ dependencies:
   flet_markdown:
     path: ../sdk/python/packages/flet-markdown/src/flutter/flet_markdown
 
+  flet_window_manager:
+    path: ../sdk/python/packages/flet-window-manager/src/flutter/flet_window_manager
+
   cupertino_icons: ^1.0.6
   syncfusion_flutter_core: any
   wakelock_plus: ^1.4.0
