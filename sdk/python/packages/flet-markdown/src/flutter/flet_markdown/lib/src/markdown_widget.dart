@@ -37,10 +37,18 @@ class MarkdownWidget extends StatelessWidget {
             value,
             style: baseStyle,
             useDollarSignsForLatex: true,
+            latexWorkaround: _fixLatexSpacing,
             inlineComponents: [
               ...MarkdownComponent.inlineComponents,
               ColorInlineComponent(),
               SizeInlineComponent(),
+              BgInlineComponent(),
+              GlowInlineComponent(),
+              ShadowInlineComponent(),
+              OpacityInlineComponent(),
+              FontInlineComponent(),
+              SpacingInlineComponent(),
+              UnderlineInlineComponent(),
             ],
             codeBuilder: (context, name, code, closed) {
               return _buildCodeBlock(context, name, code, codeTheme, darkMode);
@@ -140,6 +148,25 @@ class MarkdownWidget extends StatelessWidget {
       }
     }
     return spans;
+  }
+
+  /// Add vertical padding to multi-row LaTeX environments (cases, matrix, etc.)
+  /// so rows don't crash into each other.
+  static String _fixLatexSpacing(String tex) {
+    // In cases / pmatrix / bmatrix / vmatrix / array environments,
+    // replace bare \\ line breaks with \\[8pt] for vertical breathing room.
+    // Only touch \\ that are NOT already followed by [.
+    final envPattern = RegExp(
+      r'\\begin\{(cases|pmatrix|bmatrix|vmatrix|Vmatrix|matrix|array|aligned|align)\}(.*?)\\end\{\1\}',
+      dotAll: true,
+    );
+    return tex.replaceAllMapped(envPattern, (m) {
+      final env = m.group(1)!;
+      final body = m.group(2)!;
+      // Replace \\ not followed by [ with \\[8pt]
+      final spaced = body.replaceAll(RegExp(r'\\\\(?!\[)'), r'\\[8pt]');
+      return '\\begin{$env}$spaced\\end{$env}';
+    });
   }
 
   static Map<String, TextStyle> _getCodeTheme(String name, bool darkMode) {
