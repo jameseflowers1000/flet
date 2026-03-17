@@ -135,7 +135,7 @@ class _PaneWidgetState extends State<PaneWidget>
     final oldMode = _sizingMode;
     _parseConfig();
     if (_sizingMode != oldMode) {
-      print('[PaneWidget] MODE CHANGED: $oldMode → $_sizingMode');
+      // Mode changed: $oldMode → $_sizingMode
     }
     _gutterAnim.duration = Duration(milliseconds: _animationMs);
     _setupAnimations();
@@ -828,7 +828,7 @@ class _PaneWidgetState extends State<PaneWidget>
         }
       }
     } catch (e) {
-      print('[PaneWidget] size formula error: $e (formula=$formula)');
+      // Size formula error suppressed: $e (formula=$formula)
     }
     return null;
   }
@@ -1181,13 +1181,8 @@ class _PaneWidgetState extends State<PaneWidget>
 
           // Height: preferred_size (user drag) > formula > intrinsic
           final meta = _getGutterMeta(ctrlIndex);
-          final rawFormula = meta?['height_formula'] as String?;
           final formulaH = _evalSizeFormula(meta, 'height_formula', contentWidth);
           final h = item.preferredSize ?? formulaH;
-          print('[PaneSize] i=$ctrlIndex formula=$rawFormula result=$formulaH '
-              'preferred=${item.preferredSize} final=$h '
-              'micropyReady=${MicroPythonService.isReady} '
-              'crossSize=$contentWidth orientation=vertical');
           if (h != null) {
             child = SizedBox(height: h, width: double.infinity, child: child);
           }
@@ -1408,15 +1403,8 @@ class _PaneWidgetState extends State<PaneWidget>
 
         // Width: preferred_size (user drag) > formula-computed > fallback.
         final meta = _getGutterMeta(i);
-        final rawFormula = meta?['width_formula'] as String?;
         final formulaW = _evalSizeFormula(meta, 'width_formula', contentHeight);
         final w = item.preferredSize ?? formulaW ?? contentHeight * item.flex;
-        print('[PaneSize] i=$i formula=$rawFormula result=$formulaW '
-            'preferred=${item.preferredSize} final=$w '
-            'micropyReady=${MicroPythonService.isReady} '
-            'crossSize=$contentHeight '
-            'display_value=${meta?["display_value"]} '
-            'font_size=${meta?["font_size"]}');
         child = SizedBox(
           key: ValueKey(childControls[i].id),
           width: w,
@@ -1709,7 +1697,6 @@ class _PaneWidgetState extends State<PaneWidget>
       // Right-click: raw pointer event bypasses gesture arena
       onPointerDown: (event) {
         if (event.buttons == 2) {
-          print('[PaneWidget] right-click on thumb ${pos.index}');
           widget.control.triggerEvent(
               "gutter_context", '{"index":${pos.index}}');
         }
@@ -1721,7 +1708,6 @@ class _PaneWidgetState extends State<PaneWidget>
         },
         // Long-press as fallback context menu trigger
         onLongPress: () {
-          print('[PaneWidget] long-press on thumb ${pos.index}');
           widget.control.triggerEvent(
               "gutter_context", '{"index":${pos.index}}');
         },
