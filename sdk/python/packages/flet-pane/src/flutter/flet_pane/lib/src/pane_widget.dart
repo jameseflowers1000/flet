@@ -658,7 +658,7 @@ class _PaneWidgetState extends State<PaneWidget>
     final item = _parseSizingMeta(widget.control.children("controls").length);
     final curItem = index < item.length ? item[index] : null;
 
-    final contentHeight = _layoutHeight - (_isHorizontal ? _gutterWidth.value : 0);
+    final contentHeight = _layoutHeight - (_isHorizontal ? _idleWidth : 0);
     final contentWidth = _layoutWidth - (_isHorizontal ? 0 : _contentOffset.value + _paddingRight);
 
     // Current size: preferred_size > formula-computed > flex fallback
@@ -1330,7 +1330,7 @@ class _PaneWidgetState extends State<PaneWidget>
       // Cram: all items side by side, proportional widths.
       // Items with absolute_size get fixed width; others get Flexible.
       final items = _parseSizingMeta(childControls.length);
-      final contentHeight = _layoutHeight - _gutterWidth.value;
+      final contentHeight = _layoutHeight - _idleWidth;
       final children = <Widget>[];
 
       for (int i = 0; i < childControls.length; i++) {
@@ -1388,7 +1388,10 @@ class _PaneWidgetState extends State<PaneWidget>
       // Natural: each item at its preferred size. Aspect ratio > absolute > natural.
       // Scrollable if total exceeds viewport.
       final items = _parseSizingMeta(childControls.length);
-      final contentHeight = _layoutHeight - _gutterWidth.value;
+      // Use idle gutter width (not animated value) for stable cross_size.
+      // Animated _gutterWidth.value oscillates during hover, causing formula
+      // results to change each frame → infinite layout loop.
+      final contentHeight = _layoutHeight - _idleWidth;
       final natChildren = <Widget>[];
 
       for (int i = 0; i < childControls.length; i++) {
