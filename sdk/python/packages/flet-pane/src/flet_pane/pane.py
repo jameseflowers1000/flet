@@ -35,6 +35,7 @@ class PaneControl(ft.LayoutControl):
     bgcolor: Optional[str] = None
     border_radius: Optional[float] = None
     orientation: str = 'vertical'     # 'vertical' = gutter left, 'horizontal' = gutter bottom
+    sizing_mode: str = 'natural'     # 'natural' | 'gallery' | 'fit'
     gutter_width_idle: float = 18
     gutter_width_hover: float = 66
     gutter_color: str = '#0F1215'
@@ -67,6 +68,11 @@ class PaneControl(ft.LayoutControl):
 
     # Events
     on_gutter_tap: Optional[ft.ControlEventHandler] = None
+    on_gutter_context: Optional[ft.ControlEventHandler] = None
+    on_mode_change: Optional[ft.ControlEventHandler] = None
+    on_resize_drag: Optional[ft.ControlEventHandler] = None
+    on_resize_reset: Optional[ft.ControlEventHandler] = None
+    on_resize_context: Optional[ft.ControlEventHandler] = None
     on_scroll: Optional[ft.ControlEventHandler] = None
 
     def set_gutter_metadata_from_list(self, metadata: list):

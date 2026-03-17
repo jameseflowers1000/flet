@@ -303,6 +303,11 @@
         }
       }, true);
 
+      // Suppress browser right-click menu so Flutter onSecondaryTapUp fires
+      document.addEventListener('contextmenu', function(e) {
+        e.preventDefault();
+      });
+
       // MutationObserver: new iframes check iframeStates for matching controlId
       function observeRoot(root) {
         new MutationObserver(function(mutations) {
