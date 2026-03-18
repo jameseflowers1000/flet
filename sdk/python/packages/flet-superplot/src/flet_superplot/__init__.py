@@ -5,7 +5,7 @@ API compatible with SciChart for easy migration and side-by-side comparison.
 """
 
 from .superplot import SuperPlot, create_surface, SOURCE_VERSION, print_version_once
-from .axis import NumericAxis, LogarithmicAxis, AxisAlignment, AutoRange
+from .axis import NumericAxis, LogarithmicAxis, DateTimeAxis, AxisAlignment, AutoRange
 from .series import (
     FastLineSeries,
     XyScatterSeries,
@@ -26,6 +26,7 @@ __all__ = [
     # Axes
     "NumericAxis",
     "LogarithmicAxis",
+    "DateTimeAxis",
     "AxisAlignment",
     "AutoRange",
     # Series

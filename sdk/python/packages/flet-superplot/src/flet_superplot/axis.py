@@ -164,3 +164,62 @@ class LogarithmicAxis:
             "draw_minor_grid_lines": self.draw_minor_grid_lines,
             "draw_axis_labels": self.draw_axis_labels,
         }
+
+
+@dataclass
+class DateTimeAxis:
+    """
+    DateTime axis for time-series data.
+
+    X values should be epoch milliseconds (float). Tick labels auto-format
+    based on visible range (seconds → minutes → hours → days → months → years).
+    """
+
+    axis_title: Optional[str] = None
+    visible_range_min: Optional[float] = None  # epoch ms
+    visible_range_max: Optional[float] = None  # epoch ms
+    auto_range: AutoRange = AutoRange.ALWAYS
+    grow_by_min: float = 0.02
+    grow_by_max: float = 0.02
+    axis_alignment: AxisAlignment = AxisAlignment.BOTTOM
+    major_tick_count: Optional[int] = None
+
+    # Styling
+    axis_title_color: str = "#ffffff"
+    axis_label_color: str = "#aaaaaa"
+    axis_line_color: str = "#555555"
+    major_tick_color: str = "#555555"
+    minor_tick_color: str = "#333333"
+    axis_title_font_size: float = 14.0
+    axis_label_font_size: float = 12.0
+    draw_major_ticks: bool = True
+    draw_minor_ticks: bool = True
+    draw_major_grid_lines: bool = True
+    draw_minor_grid_lines: bool = False
+    draw_axis_labels: bool = True
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Serialize to dictionary for JSON encoding."""
+        return {
+            "type": "datetime",
+            "axis_title": self.axis_title,
+            "visible_range_min": self.visible_range_min,
+            "visible_range_max": self.visible_range_max,
+            "auto_range": self.auto_range.value,
+            "grow_by_min": self.grow_by_min,
+            "grow_by_max": self.grow_by_max,
+            "major_tick_count": self.major_tick_count,
+            "axis_alignment": self.axis_alignment.value,
+            "axis_title_color": self.axis_title_color,
+            "axis_label_color": self.axis_label_color,
+            "axis_line_color": self.axis_line_color,
+            "major_tick_color": self.major_tick_color,
+            "minor_tick_color": self.minor_tick_color,
+            "axis_title_font_size": self.axis_title_font_size,
+            "axis_label_font_size": self.axis_label_font_size,
+            "draw_major_ticks": self.draw_major_ticks,
+            "draw_minor_ticks": self.draw_minor_ticks,
+            "draw_major_grid_lines": self.draw_major_grid_lines,
+            "draw_minor_grid_lines": self.draw_minor_grid_lines,
+            "draw_axis_labels": self.draw_axis_labels,
+        }
