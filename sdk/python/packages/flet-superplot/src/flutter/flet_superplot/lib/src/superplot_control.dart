@@ -122,9 +122,12 @@ class _SuperPlotControlState extends State<SuperPlotControl> {
 
     // Parse named data buffers (series_code path)
     final dataBuffersJson = widget.control.getString("data_buffers");
+    bool dataBuffersChanged = false;
     if (dataBuffersJson != null && dataBuffersJson.isNotEmpty) {
       try {
+        final oldCount = _dataBuffers.length;
         _dataBuffers.parseJson(dataBuffersJson);
+        dataBuffersChanged = _dataBuffers.length != oldCount || oldCount == 0;
       } catch (e) {
         debugPrint('[SuperPlot] ERROR parsing data_buffers: $e');
       }
@@ -162,7 +165,7 @@ class _SuperPlotControlState extends State<SuperPlotControl> {
     // Evaluate plot_code_src via client MicroPython (takes priority over chart_config)
     final plotCodeSrc = widget.control.getString("plot_code_src");
     if (plotCodeSrc != null && plotCodeSrc.isNotEmpty) {
-      if (plotCodeSrc != _lastPlotCodeSrc || contextChanged) {
+      if (plotCodeSrc != _lastPlotCodeSrc || contextChanged || dataBuffersChanged) {
         print('[SuperPlot] plot_code_src received (${plotCodeSrc.length} chars), evaluating...');
         _lastPlotCodeSrc = plotCodeSrc;
         _evaluatePlotCode(plotCodeSrc);
