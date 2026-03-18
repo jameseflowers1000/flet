@@ -1797,6 +1797,32 @@ class _PaneWidgetState extends State<PaneWidget>
     _previewOverlay = null;
   }
 
+  Widget _buildPreviewBody(String? thumbData, String? displayVal) {
+    if (thumbData != null) {
+      return Container(
+        height: 100,
+        color: Colors.black87,
+        child: Opacity(
+          opacity: 0.85,
+          child: GutterRow.buildIconFromBase64(thumbData, 152),
+        ),
+      );
+    }
+    if (displayVal != null && displayVal.isNotEmpty) {
+      return Container(
+        color: Colors.black87,
+        padding: const EdgeInsets.all(8),
+        child: Text(
+          displayVal,
+          style: const TextStyle(color: Colors.white70, fontSize: 12),
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+        ),
+      );
+    }
+    return const SizedBox.shrink();
+  }
+
   void _showPreview(int index, Offset globalPos) {
     final meta = _getGutterMeta(index);
     final thumbData =
@@ -1817,71 +1843,29 @@ class _PaneWidgetState extends State<PaneWidget>
       top = globalPos.dy - 70;
     }
 
+    final previewColor = indicatorColor ?? const Color(0xFF555555);
     _previewOverlay = OverlayEntry(
       builder: (context) => Positioned(
         left: left,
         top: top,
         child: IgnorePointer(
-          child: Container(
-            width: 160,
-            constraints: const BoxConstraints(minHeight: 40),
-            decoration: BoxDecoration(
-              color: Colors.black87,
-              borderRadius: BorderRadius.circular(8),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.5),
-                  blurRadius: 12,
-                  offset: const Offset(0, 4),
-                ),
-              ],
-            ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                // Name label with color accent
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: (indicatorColor ?? Colors.white24).withValues(alpha: 0.3),
-                    borderRadius: const BorderRadius.vertical(top: Radius.circular(8)),
-                  ),
-                  child: Text(
-                    controlName,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 11,
-                      fontWeight: FontWeight.w600,
-                    ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-                // Thumbnail image (if available)
-                if (thumbData != null)
-                  ClipRRect(
-                    borderRadius: const BorderRadius.vertical(bottom: Radius.circular(8)),
-                    child: SizedBox(
-                      height: 100,
-                      child: Opacity(
-                        opacity: 0.8,
-                        child: GutterRow.buildIconFromBase64(thumbData, 152),
-                      ),
-                    ),
-                  )
-                else if (displayVal != null && displayVal.isNotEmpty)
-                  // Show display value if no thumbnail
-                  Padding(
-                    padding: const EdgeInsets.all(8),
-                    child: Text(
-                      displayVal,
-                      style: const TextStyle(color: Colors.white70, fontSize: 12),
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-              ],
+          child: Material(
+            color: Colors.transparent,
+            elevation: 8,
+            borderRadius: BorderRadius.circular(8),
+            child: Container(
+              width: 160,
+              padding: const EdgeInsets.only(top: 24),
+              decoration: BoxDecoration(
+                color: Colors.black87,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  _buildPreviewBody(thumbData, displayVal),
+                ],
+              ),
             ),
           ),
         ),
