@@ -1801,15 +1801,20 @@ class _PaneWidgetState extends State<PaneWidget>
     final meta = _getGutterMeta(index);
     final thumbData =
         (meta?['gutter_thumbnail'] ?? meta?['gutter_icon']) as String?;
-    if (thumbData == null || !mounted) return;
+    if (!mounted) return;
+
+    // Control name from metadata or fallback
+    final controlName = meta?['control_name'] as String? ?? 'Control $index';
+    final displayVal = meta?['display_value'] as String?;
+    final indicatorColor = _resolveIndicatorColor(meta);
 
     double left, top;
     if (_isHorizontal) {
       left = globalPos.dx - 80;
-      top = globalPos.dy - 140;
+      top = globalPos.dy - 160;
     } else {
       left = globalPos.dx + 20;
-      top = globalPos.dy - 60;
+      top = globalPos.dy - 70;
     }
 
     _previewOverlay = OverlayEntry(
@@ -1819,7 +1824,7 @@ class _PaneWidgetState extends State<PaneWidget>
         child: IgnorePointer(
           child: Container(
             width: 160,
-            height: 120,
+            constraints: const BoxConstraints(minHeight: 40),
             decoration: BoxDecoration(
               color: Colors.black87,
               borderRadius: BorderRadius.circular(8),
@@ -1831,12 +1836,52 @@ class _PaneWidgetState extends State<PaneWidget>
                 ),
               ],
             ),
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(8),
-              child: Opacity(
-                opacity: 0.8,
-                child: GutterRow.buildIconFromBase64(thumbData, 152),
-              ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                // Name label with color accent
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: (indicatorColor ?? Colors.white24).withValues(alpha: 0.3),
+                    borderRadius: const BorderRadius.vertical(top: Radius.circular(8)),
+                  ),
+                  child: Text(
+                    controlName,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                // Thumbnail image (if available)
+                if (thumbData != null)
+                  ClipRRect(
+                    borderRadius: const BorderRadius.vertical(bottom: Radius.circular(8)),
+                    child: SizedBox(
+                      height: 100,
+                      child: Opacity(
+                        opacity: 0.8,
+                        child: GutterRow.buildIconFromBase64(thumbData, 152),
+                      ),
+                    ),
+                  )
+                else if (displayVal != null && displayVal.isNotEmpty)
+                  // Show display value if no thumbnail
+                  Padding(
+                    padding: const EdgeInsets.all(8),
+                    child: Text(
+                      displayVal,
+                      style: const TextStyle(color: Colors.white70, fontSize: 12),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+              ],
             ),
           ),
         ),
