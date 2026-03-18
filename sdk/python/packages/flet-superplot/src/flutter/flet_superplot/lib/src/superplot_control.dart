@@ -75,9 +75,10 @@ class _SuperPlotControlState extends State<SuperPlotControl> {
   }
 
   void _parseConfig() {
-    // Parse X axis
+    // Parse X axis — skip if plot_code bridge already set a config axis
+    // (bridge config takes priority to preserve datetime/log types)
     final xAxisJson = widget.control.getString("x_axis");
-    if (xAxisJson != null && xAxisJson.isNotEmpty) {
+    if (xAxisJson != null && xAxisJson.isNotEmpty && _configSeries.isEmpty) {
       try {
         _xAxis = AxisModel.fromJson(jsonDecode(xAxisJson));
       } catch (e) {
@@ -85,9 +86,9 @@ class _SuperPlotControlState extends State<SuperPlotControl> {
       }
     }
 
-    // Parse Y axis
+    // Parse Y axis — same guard
     final yAxisJson = widget.control.getString("y_axis");
-    if (yAxisJson != null && yAxisJson.isNotEmpty) {
+    if (yAxisJson != null && yAxisJson.isNotEmpty && _configSeries.isEmpty) {
       try {
         _yAxis = AxisModel.fromJson(jsonDecode(yAxisJson));
       } catch (e) {
