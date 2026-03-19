@@ -664,7 +664,7 @@ class _PaneWidgetState extends State<PaneWidget>
     // Current size: preferred_size > formula-computed > flex fallback
     final dragMeta = _getGutterMeta(index);
     final crossSize = _isHorizontal ? contentHeight : contentWidth;
-    final formulaKey = _isHorizontal ? 'width_formula' : 'height_formula';
+    final formulaKey = _isHorizontal ? 'width_code' : 'height_code';
     final formulaSize = _evalSizeFormula(dragMeta, formulaKey, crossSize);
 
     double currentSize;
@@ -765,7 +765,7 @@ class _PaneWidgetState extends State<PaneWidget>
 
   /// Evaluate a size formula from gutter metadata.
   /// Returns pixel size, or null if no formula or evaluation fails.
-  /// [formulaKey] is 'width_formula' or 'height_formula'.
+  /// [formulaKey] is 'width_code' or 'height_code'.
   /// [meta] is the item's gutter metadata.
   /// [crossSize] is the cross-axis dimension of the pane.
   double? _evalSizeFormula(
@@ -1114,7 +1114,7 @@ class _PaneWidgetState extends State<PaneWidget>
 
         // In Fit mode, derive flex from desired height via formula.
         final meta = _getGutterMeta(i);
-        final formulaH = _evalSizeFormula(meta, 'height_formula', contentWidth);
+        final formulaH = _evalSizeFormula(meta, 'height_code', contentWidth);
         final desiredH = item.preferredSize
             ?? formulaH
             ?? item.flex * 200;
@@ -1181,7 +1181,7 @@ class _PaneWidgetState extends State<PaneWidget>
 
           // Height: preferred_size (user drag) > formula > intrinsic
           final meta = _getGutterMeta(ctrlIndex);
-          final formulaH = _evalSizeFormula(meta, 'height_formula', contentWidth);
+          final formulaH = _evalSizeFormula(meta, 'height_code', contentWidth);
           final h = item.preferredSize ?? formulaH;
           if (h != null) {
             child = SizedBox(height: h, width: double.infinity, child: child);
@@ -1363,7 +1363,7 @@ class _PaneWidgetState extends State<PaneWidget>
 
         // In Fit mode, ALL items are Flexible. Derive flex from desired width.
         final meta = _getGutterMeta(i);
-        final formulaW = _evalSizeFormula(meta, 'width_formula', contentHeight);
+        final formulaW = _evalSizeFormula(meta, 'width_code', contentHeight);
         final desiredW = item.preferredSize
             ?? formulaW
             ?? contentHeight * item.flex;
@@ -1411,7 +1411,7 @@ class _PaneWidgetState extends State<PaneWidget>
 
         // Width: preferred_size (user drag) > formula-computed > fallback.
         final meta = _getGutterMeta(i);
-        final formulaW = _evalSizeFormula(meta, 'width_formula', contentHeight);
+        final formulaW = _evalSizeFormula(meta, 'width_code', contentHeight);
         final w = item.preferredSize ?? formulaW ?? contentHeight * item.flex;
         child = SizedBox(
           key: ValueKey(childControls[i].id),
