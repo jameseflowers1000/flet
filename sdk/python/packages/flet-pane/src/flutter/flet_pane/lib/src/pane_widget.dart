@@ -64,9 +64,8 @@ class PaneWidget extends StatefulWidget {
 
 class _PaneWidgetState extends State<PaneWidget>
     with SingleTickerProviderStateMixin {
-  // Static: survives widget State recreation by Flet reconciliation
-  static String _globalSizingMode = 'natural';
-  static int _globalModeGen = 0;
+  // Per-instance mode generation — prevents stale metadata from overwriting
+  int _modeGen = 0;
 
   // ── Animation ─────────────────────────────────────────────────────
   late AnimationController _gutterAnim;
@@ -78,7 +77,7 @@ class _PaneWidgetState extends State<PaneWidget>
   // ── Scroll & state ────────────────────────────────────────────────
   late ScrollController _scrollController;
   bool _atTop = true;
-  bool _atBottom = true;
+  bool _atBottom = false;  // assume scrollable until proven otherwise
   bool _isExpanded = false;
   int _activeIndex = 0;
 
@@ -92,7 +91,6 @@ class _PaneWidgetState extends State<PaneWidget>
   // ── Orientation & layout ──────────────────────────────────────────
   bool _isHorizontal = false;
   String _sizingMode = 'natural'; // 'natural' | 'gallery' | 'fit'
-  int _modeGen = 0; // generation counter — prevents stale metadata overwrite
   double _layoutHeight = 0;
   double _layoutWidth = 0;
 
@@ -197,11 +195,10 @@ class _PaneWidgetState extends State<PaneWidget>
           // New format: {"mode": "gallery", "items": [...]}
           final modeFromMeta = decoded['mode'] as String?;
           final genFromMeta = (decoded['gen'] as num?)?.toInt() ?? 0;
-          if (modeFromMeta != null && genFromMeta >= _globalModeGen) {
-            _globalSizingMode = modeFromMeta;
-            _globalModeGen = genFromMeta;
+          if (modeFromMeta != null && genFromMeta >= _modeGen) {
+            _sizingMode = modeFromMeta;
+            _modeGen = genFromMeta;
           }
-          _sizingMode = _globalSizingMode;
           // print('[PaneWidget] metadata mode=$modeFromMeta gen=$genFromMeta');
           final items = decoded['items'] as List?;
           _gutterMetaList = items?.cast<Map<String, dynamic>>();
@@ -262,8 +259,10 @@ class _PaneWidgetState extends State<PaneWidget>
     if (_isHorizontal) {
       if (event.localPosition.dy > (_layoutHeight - triggerZone)) {
         _expandAlley();
-      } else if (!_isExpanded ||
-          event.localPosition.dy < (_layoutHeight - _hoverWidth)) {
+      } else if (_isExpanded &&
+          event.localPosition.dy < (_layoutHeight - _hoverWidth * 2)) {
+        // Collapse only when cursor is well above the gutter zone.
+        // Large margin (2x hoverWidth) prevents animation-induced collapse.
         _collapseAlley();
       }
     } else {
@@ -285,6 +284,8 @@ class _PaneWidgetState extends State<PaneWidget>
     if (!_isExpanded) {
       setState(() => _isExpanded = true);
       _gutterAnim.forward();
+      // Update arrow dimming from current scroll position
+      _onScrollUpdate();
     }
   }
 
@@ -537,13 +538,12 @@ class _PaneWidgetState extends State<PaneWidget>
   };
 
   void _cycleMode() {
-    final idx = _modeOrder.indexOf(_globalSizingMode);
+    final idx = _modeOrder.indexOf(_sizingMode);
     final next = _modeOrder[(idx + 1) % _modeOrder.length];
-    _globalSizingMode = next;
-    _globalModeGen++;
+    _modeGen++;
     _sizingMode = next;
     // Notify Python via event so it can persist
-    widget.control.triggerEvent("mode_change", '{"mode":"$next","gen":$_globalModeGen}');
+    widget.control.triggerEvent("mode_change", '{"mode":"$next","gen":$_modeGen}');
     setState(() {});
   }
 
@@ -1210,24 +1210,29 @@ class _PaneWidgetState extends State<PaneWidget>
         },
       );
     } else {
-      // Gallery mode: ListView with natural heights — scrollable gallery.
-      contentArea = ListView.builder(
+      // Gallery mode: full viewport height per item, one at a time.
+      final galleryHeight = availableHeight - _paddingTop - _paddingBottom;
+      contentArea = SingleChildScrollView(
         controller: _scrollController,
+        scrollDirection: Axis.vertical,
+        physics: const NeverScrollableScrollPhysics(),
         padding: EdgeInsets.only(
           left: _contentOffset.value,
           right: _paddingRight,
-          top: _paddingTop,
-          bottom: _paddingBottom,
         ),
-        itemCount: childControls.length,
-        cacheExtent: 500,
-        itemBuilder: (context, index) {
-          return Padding(
-            key: ValueKey(childControls[index].id),
-            padding: const EdgeInsets.symmetric(vertical: 4),
-            child: ControlWidget(control: childControls[index]),
-          );
-        },
+        child: Column(
+          children: childControls
+              .map((child) => SizedBox(
+                    key: ValueKey(child.id),
+                    height: galleryHeight,
+                    width: double.infinity,
+                    child: Padding(
+                      padding: EdgeInsets.symmetric(vertical: _paddingTop),
+                      child: ControlWidget(control: child),
+                    ),
+                  ))
+              .toList(),
+        ),
       );
     }
 
@@ -1467,6 +1472,9 @@ class _PaneWidgetState extends State<PaneWidget>
     }
 
     final ghostLine = _buildGhostLine();
+    final hArrowSize = _arrowSize + 16;
+    final hArrowTop = _layoutHeight - _gutterWidth.value +
+        (_gutterWidth.value - hArrowSize) / 2;
     return Stack(
       children: [
         // Main content area above gutter
@@ -1551,6 +1559,32 @@ class _PaneWidgetState extends State<PaneWidget>
             ),
           ),
         ),
+
+        // Scroll-left arrow (on top of gutter strip)
+        if (_isExpanded)
+          Positioned(
+            left: 4,
+            bottom: (_hoverWidth - hArrowSize) / 2,
+            child: _buildArrowButton(
+              icon: Icons.keyboard_arrow_left,
+              onTap: _scrollLeft,
+              onDoubleTap: _scrollToStart,
+              dimmed: _atTop,
+            ),
+          ),
+
+        // Scroll-right arrow (on top of gutter strip)
+        if (_isExpanded)
+          Positioned(
+            right: 4,
+            bottom: (_hoverWidth - hArrowSize) / 2,
+            child: _buildArrowButton(
+              icon: Icons.keyboard_arrow_right,
+              onTap: _scrollRight,
+              onDoubleTap: _scrollToEnd,
+              dimmed: _atBottom,
+            ),
+          ),
       ],
     );
   }
@@ -1849,20 +1883,48 @@ class _PaneWidgetState extends State<PaneWidget>
         left: left,
         top: top,
         child: IgnorePointer(
-          child: Material(
-            color: Colors.transparent,
-            elevation: 8,
-            borderRadius: BorderRadius.circular(8),
-            child: Container(
-              width: 160,
-              padding: const EdgeInsets.only(top: 24),
-              decoration: BoxDecoration(
-                color: Colors.black87,
-                borderRadius: BorderRadius.circular(8),
-              ),
+          child: Container(
+            width: 160,
+            decoration: BoxDecoration(
+              color: Colors.black87,
+              borderRadius: BorderRadius.circular(8),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.4),
+                  blurRadius: 8,
+                  offset: const Offset(0, 3),
+                ),
+              ],
+            ),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(8),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                    color: Colors.black87,
+                    alignment: Alignment.center,
+                    child: Text(
+                      controlName,
+                      style: TextStyle(
+                        color: previewColor,
+                        fontSize: 14,
+                        fontWeight: FontWeight.bold,
+                        decoration: TextDecoration.none,
+                        shadows: const [
+                          Shadow(
+                            color: Colors.white,
+                            blurRadius: 1,
+                            offset: Offset(1, 1),
+                          ),
+                        ],
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
                   _buildPreviewBody(thumbData, displayVal),
                 ],
               ),
@@ -1885,20 +1947,18 @@ class _PaneWidgetState extends State<PaneWidget>
   }) {
     final btnSize = _arrowSize + 16;
     return GestureDetector(
+      behavior: HitTestBehavior.translucent,
       onTap: onTap,
       onDoubleTap: onDoubleTap,
       child: AnimatedOpacity(
         opacity: dimmed ? _dimOpacity : 1.0,
         duration: Duration(milliseconds: _arrowFadeMs),
-        child: Container(
+        child: SizedBox(
           width: btnSize,
           height: btnSize,
-          decoration: BoxDecoration(
-            color: _gutterColor,
-            borderRadius: BorderRadius.circular(6),
+          child: Center(
+            child: Icon(icon, size: _arrowSize, color: Colors.white70),
           ),
-          alignment: Alignment.center,
-          child: Icon(icon, size: _arrowSize, color: Colors.white70),
         ),
       ),
     );
