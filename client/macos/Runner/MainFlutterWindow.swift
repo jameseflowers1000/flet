@@ -45,6 +45,37 @@ class MainFlutterWindow: NSWindow {
     return super.performKeyEquivalent(with: event)
   }
 
+  // ── Clipboard preservation across first responder changes ─────
+  // When Flutter's text editing system loses first responder (e.g.,
+  // user clicks on a WKWebView terminal), Flutter/SelectableText may
+  // clear its text selection, which on macOS writes empty content to
+  // the system pasteboard — destroying whatever the user just copied.
+  //
+  // Fix: snapshot the pasteboard before first responder changes and
+  // restore it if the transition cleared it.
+  private var _savedClipboard: String?
+
+  override func makeFirstResponder(_ responder: NSResponder?) -> Bool {
+    // Snapshot current clipboard
+    _savedClipboard = NSPasteboard.general.string(forType: .string)
+
+    let result = super.makeFirstResponder(responder)
+
+    // Check if the transition cleared the clipboard and restore if so
+    if let saved = _savedClipboard, !saved.isEmpty {
+      DispatchQueue.main.async {
+        let current = NSPasteboard.general.string(forType: .string)
+        if current == nil || current!.isEmpty {
+          NSPasteboard.general.clearContents()
+          NSPasteboard.general.setString(saved, forType: .string)
+        }
+      }
+    }
+    _savedClipboard = nil
+
+    return result
+  }
+
   /// Walk up from a view to find an enclosing WKWebView.
   private func ancestorWKWebView(of view: NSView) -> WKWebView? {
     var current: NSView? = view
