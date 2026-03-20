@@ -46,6 +46,8 @@ import 'package:flet_markdown/flet_markdown.dart' as flet_markdown;
 import 'package:flet_window_manager/flet_window_manager.dart' as flet_window_manager;
 import 'package:syncfusion_flutter_core/core.dart';
 
+import 'orchestrator_overlay.dart';
+
 const bool isProduction = bool.fromEnvironment('dart.vm.product');
 
 Tester? tester;
@@ -397,14 +399,18 @@ class _CatalogScreenState extends State<CatalogScreen> {
   bool _loading = true;
   String _searchQuery = '';
   final _logoKey = GlobalKey<EpyxLogoState>();
+  bool _showOrchestrator = false;
+  List<String> _docletPaths = [];
 
   @override
   void initState() {
     super.initState();
+    _docletPaths = _loadDocletPaths();
     _scanDoclets();
   }
 
-  String get _docletsPath {
+  /// Default doclet path based on platform.
+  String get _defaultDocletsPath {
     if (Platform.isMacOS) {
       return '${Platform.environment['HOME']}/Library/Application Support/Epyx/Doclets';
     } else if (Platform.isLinux) {
@@ -415,17 +421,75 @@ class _CatalogScreenState extends State<CatalogScreen> {
     return '';
   }
 
-  void _scanDoclets() {
-    final dir = Directory(_docletsPath);
-    if (!dir.existsSync()) {
-      setState(() => _loading = false);
-      return;
+  /// Load doclet search paths from config, falling back to default.
+  List<String> _loadDocletPaths() {
+    try {
+      final home = Platform.environment['HOME'] ?? '';
+      if (home.isEmpty) return [_defaultDocletsPath];
+
+      String configPath;
+      if (Platform.isMacOS) {
+        configPath = '$home/Library/Application Support/Epyx/config.yaml';
+      } else if (Platform.isLinux) {
+        final xdg = Platform.environment['XDG_CONFIG_HOME'] ?? '$home/.config';
+        configPath = '$xdg/epyx/config.yaml';
+      } else {
+        return [_defaultDocletsPath];
+      }
+
+      final file = File(configPath);
+      if (!file.existsSync()) return [_defaultDocletsPath];
+
+      // Simple YAML parsing for storage.doclet_paths list
+      final lines = file.readAsLinesSync();
+      bool inStorage = false;
+      bool inDocletPaths = false;
+      final paths = <String>[];
+
+      for (final line in lines) {
+        if (line.startsWith('storage:')) {
+          inStorage = true;
+          continue;
+        }
+        if (inStorage && !line.startsWith(' ') && !line.startsWith('\t') && line.isNotEmpty) {
+          inStorage = false;
+        }
+        if (inStorage && line.trim().startsWith('doclet_paths:')) {
+          inDocletPaths = true;
+          continue;
+        }
+        if (inDocletPaths) {
+          final trimmed = line.trim();
+          if (trimmed.startsWith('- ')) {
+            paths.add(trimmed.substring(2).trim());
+          } else {
+            inDocletPaths = false;
+          }
+        }
+      }
+
+      if (paths.isNotEmpty) return paths;
+    } catch (_) {
+      // Fall through to default
     }
+    return [_defaultDocletsPath];
+  }
+
+  void _scanDoclets() {
     final doclets = <DocletInfo>[];
-    for (final entity in dir.listSync()) {
-      if (entity is Directory) {
-        final info = DocletInfo.fromDirectory(entity);
-        if (info != null) doclets.add(info);
+    final seenVins = <String>{};
+
+    for (final path in _docletPaths) {
+      final dir = Directory(path);
+      if (!dir.existsSync()) continue;
+      for (final entity in dir.listSync()) {
+        if (entity is Directory) {
+          final info = DocletInfo.fromDirectory(entity);
+          if (info != null && !seenVins.contains(info.vin)) {
+            doclets.add(info);
+            if (info.vin.isNotEmpty) seenVins.add(info.vin);
+          }
+        }
       }
     }
     // Sort by modified date descending (most recent first)
@@ -449,20 +513,66 @@ class _CatalogScreenState extends State<CatalogScreen> {
         (d.description?.toLowerCase().contains(q) ?? false)).toList();
   }
 
+  /// Build doclet context list for the agent.
+  List<Map<String, dynamic>> get _docletContextForAgent {
+    return _doclets.map((d) => {
+      'name': d.name,
+      'template': d.template,
+      'description': d.description ?? '',
+      'modified': d.modifiedAt?.toIso8601String(),
+      'path': d.path,
+    }).toList();
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: Column(
+      body: Stack(
         children: [
-          _buildHeader(),
-          if (!_loading) _buildSearchBar(),
-          Expanded(
-            child: _loading
-                ? const Center(child: CircularProgressIndicator())
-                : _filtered.isEmpty
-                    ? _buildEmptyState()
-                    : _buildGrid(),
+          Column(
+            children: [
+              _buildHeader(),
+              if (!_loading) _buildSearchBar(),
+              Expanded(
+                child: _loading
+                    ? const Center(child: CircularProgressIndicator())
+                    : _filtered.isEmpty
+                        ? _buildEmptyState()
+                        : _buildGrid(),
+              ),
+            ],
           ),
+          if (_showOrchestrator)
+            OrchestratorOverlay(
+              onClose: () {
+                _logoKey.currentState?.stopBusy();
+                setState(() => _showOrchestrator = false);
+              },
+              doclets: _docletContextForAgent,
+              docletPaths: _docletPaths,
+              onDocletCreated: () {
+                _logoKey.currentState?.stopBusy();
+                setState(() {
+                  _showOrchestrator = false;
+                  _loading = true;
+                });
+                _scanDoclets();
+              },
+              onDocletPathsChanged: (paths) {
+                setState(() {
+                  _docletPaths = paths;
+                  _loading = true;
+                });
+                _scanDoclets();
+              },
+              onBusyChanged: (busy) {
+                if (busy) {
+                  _logoKey.currentState?.startBusy();
+                } else {
+                  _logoKey.currentState?.stopBusy();
+                }
+              },
+            ),
         ],
       ),
     );
@@ -473,7 +583,10 @@ class _CatalogScreenState extends State<CatalogScreen> {
       padding: const EdgeInsets.fromLTRB(32, 24, 32, 8),
       child: Row(
         children: [
-          EpyxLogo(key: _logoKey, height: 60),
+          GestureDetector(
+            onTap: () => setState(() => _showOrchestrator = true),
+            child: EpyxLogo(key: _logoKey, height: 60),
+          ),
           const SizedBox(width: 16),
           Text(
             'Documents',

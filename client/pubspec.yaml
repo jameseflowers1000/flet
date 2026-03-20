@@ -123,6 +123,9 @@ dependencies:
   syncfusion_flutter_core: any
   wakelock_plus: ^1.4.0
   package_info_plus: ^9.0.0
+  flutter_markdown_plus: ^1.0.7
+  markdown: ^7.3.0
+  highlight: ^0.7.0
 
   integration_test:
     sdk: flutter
