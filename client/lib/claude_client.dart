@@ -46,7 +46,7 @@ class ClaudeClient implements LlmClient {
     request.headers.set('Content-Type', 'application/json');
     request.headers.set('x-api-key', apiKey);
     request.headers.set('anthropic-version', '2023-06-01');
-    request.write(jsonEncode(body));
+    request.add(utf8.encode(jsonEncode(body)));
 
     final response = await request.close();
     final responseBody = await response.transform(utf8.decoder).join();
