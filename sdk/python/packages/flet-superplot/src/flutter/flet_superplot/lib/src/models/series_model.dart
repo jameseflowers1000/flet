@@ -66,6 +66,7 @@ class DataPoints {
 /// Populated from the `data_buffers` Flet property.
 class DataBufferStore {
   final Map<String, Float64List> _buffers = {};
+  int generation = 0;
 
   Float64List? operator [](String name) => _buffers[name];
   void operator []=(String name, Float64List data) => _buffers[name] = data;
@@ -87,6 +88,7 @@ class DataBufferStore {
   /// Parse the data_buffers JSON into named Float64Lists.
   void parseJson(String json) {
     _buffers.clear();
+    generation++;
     final Map<String, dynamic> map = jsonDecode(json);
     for (final entry in map.entries) {
       final bufInfo = entry.value as Map<String, dynamic>;

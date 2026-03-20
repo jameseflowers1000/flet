@@ -3334,7 +3334,7 @@ class ChartPainter extends CustomPainter {
         oldDelegate.yAxis != yAxis ||
         oldDelegate.gestureActive != gestureActive ||
         oldDelegate.series != series ||
-        oldDelegate.dataBuffers != dataBuffers ||
+        oldDelegate.dataBuffers.generation != dataBuffers.generation ||
         oldDelegate.backgroundColor != backgroundColor ||
         oldDelegate.showMajorGridLines != showMajorGridLines ||
         oldDelegate.showMinorGridLines != showMinorGridLines ||
