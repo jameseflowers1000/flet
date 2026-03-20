@@ -1,53 +1,24 @@
 /// Native orchestrator overlay for the bodyless catalog screen.
 ///
-/// Chrome extracted directly from FloatingWindowWidget (flet-window-manager),
-/// with FletBackend calls removed. Same visual structure: title bar, resize
-/// handles, window buttons, cyan border, drop shadow.
+/// Chrome: extracted from FloatingWindowWidget (flet-window-manager),
+/// FletBackend calls removed — same title bar, resize handles, window buttons.
 ///
-/// Chat content uses the same AgentTheme colors and markdown rendering
-/// as flet-agentview.
+/// Chat content: uses MessageList + ChatComposer from flet-agentview directly,
+/// matching the exact widget tree from AgentViewControl.build().
+
+import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
-import 'package:highlight/highlight.dart' show highlight, Node;
-import 'package:markdown/markdown.dart' as md;
+
+// Use the exact same widgets the real orchestrator uses
+import 'package:flet_agentview/src/chat_composer.dart';
+import 'package:flet_agentview/src/message_list.dart';
+import 'package:flet_agentview/src/models.dart';
 
 import 'api_key.dart';
 import 'claude_client.dart';
 import 'native_agent.dart';
-
-// ── Theme (AgentTheme + FloatingWindow chrome — exact values from source) ──
-
-class _Theme {
-  // Chat content (from flet-agentview models.dart AgentTheme)
-  static const bgColor = Color(0xFF1A191F);
-  static const inputBgColor = Color(0xFF2A2930);
-  static const accentColor = Color(0xFF97C977);
-  static const userBubbleColor = Color(0xFF2D4A2D);
-  static const assistantBubbleColor = Color(0xFF2A2930);
-  static const borderColor = Color(0xFF444444);
-  static const textColor = Colors.white;
-  static const mutedTextColor = Color(0xFF888888);
-
-  // FloatingWindow chrome (from floating_window_widget.dart)
-  static const titleBarColor = Color(0xFF1E1E2E);
-  static const chromeColor = Color(0xFF26252D);
-  static const windowBorderColor = Color(0xFF0891B3); // cyan
-  static const titleBarHeight = 32.0;
-  static const resizeHandleSize = 6.0;
-  static const minWidth = 200.0;
-  static const minHeight = 100.0;
-}
-
-// ── Chat message model ────────────────────────────────────────────────
-
-class _ChatMessage {
-  final String role;
-  final String content;
-  const _ChatMessage({required this.role, required this.content});
-  bool get isUser => role == 'user';
-}
 
 // ── Rect for position/size (from floating_window_widget.dart) ─────────
 
@@ -64,7 +35,6 @@ class OrchestratorOverlay extends StatefulWidget {
   final List<String> docletPaths;
   final void Function() onDocletCreated;
   final void Function(List<String> paths) onDocletPathsChanged;
-  /// Called when the agent starts/stops processing — wire to EpyxLogo busy.
   final void Function(bool busy) onBusyChanged;
 
   const OrchestratorOverlay({
@@ -82,30 +52,54 @@ class OrchestratorOverlay extends StatefulWidget {
 }
 
 class _OrchestratorOverlayState extends State<OrchestratorOverlay> {
-  final List<_ChatMessage> _messages = [];
-  final TextEditingController _textController = TextEditingController();
-  final FocusNode _inputFocusNode = FocusNode();
-  final ScrollController _scrollController = ScrollController();
+  // Chat state — same types as AgentViewControl
+  final List<ChatMessage> _messages = [];
+  final FocusNode _composerFocusNode = FocusNode();
   NativeAgent? _agent;
   bool _needsApiKey = false;
   bool _showApiKeyDialog = false;
   final TextEditingController _apiKeyController = TextEditingController();
 
-  // ── FloatingWindow state (extracted from floating_window_widget.dart) ──
-  // Initial position: matches main.py orch_window (left=0, top=420, 1280×380)
-  // but we compute top dynamically = vpHeight - 380.
+  // Orch.png loaded as base64 — same as orchestrator.py get_cached_image_resource('Orch.png')
+  String _orchIconBase64 = '';
+
+  // FloatingWindow state (from floating_window_widget.dart)
   final _rect = ValueNotifier<_Rect>(_Rect(0, 0, 1280, 380));
   bool _maximized = false;
   double _savedLeft = 0, _savedTop = 0, _savedWidth = 0, _savedHeight = 0;
   double _vpWidth = 0, _vpHeight = 0;
+  bool _positionInitialized = false;
+
+  // FloatingWindow constants (from floating_window_widget.dart)
+  static const _titleBarHeight = 32.0;
+  static const _resizeHandleSize = 6.0;
+  static const _minWidth = 200.0;
+  static const _minHeight = 100.0;
+  static const _borderColor = Color(0xFF0891B3);
+  static const _titleBarColor = Color(0xFF1E1E2E);
+  static const _chromeColor = Color(0xFF26252D);
 
   @override
   void initState() {
     super.initState();
+    _loadOrchIcon();
     _initAgent();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      _inputFocusNode.requestFocus();
+      _composerFocusNode.requestFocus();
     });
+  }
+
+  /// Load Orch.png as base64 — same encoding the Python side uses
+  /// via get_cached_image_resource() → base64.b64encode(png_bytes).
+  Future<void> _loadOrchIcon() async {
+    try {
+      final data = await rootBundle.load('assets/Orch.png');
+      setState(() {
+        _orchIconBase64 = base64Encode(data.buffer.asUint8List());
+      });
+    } catch (_) {
+      // Asset not found — placeholder icon will be used
+    }
   }
 
   void _initAgent() {
@@ -121,9 +115,8 @@ class _OrchestratorOverlayState extends State<OrchestratorOverlay> {
       onMessage: (role, content) {
         if (mounted) {
           setState(() {
-            _messages.add(_ChatMessage(role: role, content: content));
+            _messages.add(ChatMessage(role: role, content: content));
           });
-          _scrollToBottom();
         }
       },
       onAction: (action, data) {
@@ -142,31 +135,14 @@ class _OrchestratorOverlayState extends State<OrchestratorOverlay> {
     _agent!.updateDocletPaths(widget.docletPaths);
   }
 
-  void _scrollToBottom() {
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (_scrollController.hasClients) {
-        _scrollController.animateTo(
-          _scrollController.position.maxScrollExtent,
-          duration: const Duration(milliseconds: 200),
-          curve: Curves.easeOut,
-        );
-      }
-    });
-  }
-
-  void _submit() {
-    final text = _textController.text.trim();
+  void _onSubmit(String text) {
     if (text.isEmpty || _agent == null || _agent!.isProcessing) return;
 
     setState(() {
-      _messages.add(_ChatMessage(role: 'user', content: text));
+      _messages.add(ChatMessage(role: 'user', content: text));
     });
-    _textController.clear();
-    _scrollToBottom();
 
-    // Start logo busy animation
     widget.onBusyChanged(true);
-
     _agent!.sendMessage(text).then((_) {
       if (mounted) {
         setState(() {});
@@ -184,14 +160,12 @@ class _OrchestratorOverlayState extends State<OrchestratorOverlay> {
       _showApiKeyDialog = false;
     });
     _initAgent();
-    _inputFocusNode.requestFocus();
+    _composerFocusNode.requestFocus();
   }
 
   @override
   void dispose() {
-    _textController.dispose();
-    _inputFocusNode.dispose();
-    _scrollController.dispose();
+    _composerFocusNode.dispose();
     _apiKeyController.dispose();
     _rect.dispose();
     super.dispose();
@@ -206,9 +180,11 @@ class _OrchestratorOverlayState extends State<OrchestratorOverlay> {
         _vpWidth = constraints.maxWidth;
         _vpHeight = constraints.maxHeight;
 
-        // Set initial position: bottom of viewport, full width
-        if (_rect.value.top == 0 && !_maximized) {
+        // Initial position: bottom of viewport, full width
+        // (matches main.py: win_left=0, win_top=420, win_width=1280, win_height=380)
+        if (!_positionInitialized) {
           _rect.value = _Rect(0, _vpHeight - 380, _vpWidth, 380);
+          _positionInitialized = true;
         }
 
         return SizedBox.expand(
@@ -220,8 +196,8 @@ class _OrchestratorOverlayState extends State<OrchestratorOverlay> {
                 eL = 0; eT = 0; eW = _vpWidth; eH = _vpHeight;
               } else {
                 eL = rect.left; eT = rect.top;
-                eW = rect.width.clamp(_Theme.minWidth, _vpWidth);
-                eH = rect.height.clamp(_Theme.minHeight, _vpHeight);
+                eW = rect.width.clamp(_minWidth, _vpWidth);
+                eH = rect.height.clamp(_minHeight, _vpHeight);
               }
 
               return Stack(
@@ -255,9 +231,9 @@ class _OrchestratorOverlayState extends State<OrchestratorOverlay> {
   Widget _buildWindowChrome() {
     return Container(
       decoration: BoxDecoration(
-        color: _Theme.chromeColor,
+        color: _chromeColor,
         borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: _Theme.windowBorderColor, width: 1),
+        border: Border.all(color: _borderColor, width: 1),
         boxShadow: const [
           BoxShadow(
             color: Color(0x66000000),
@@ -275,7 +251,7 @@ class _OrchestratorOverlayState extends State<OrchestratorOverlay> {
                 bottomLeft: Radius.circular(7),
                 bottomRight: Radius.circular(7),
               ),
-              child: _buildChatBody(),
+              child: _buildContent(),
             ),
           ),
         ],
@@ -292,16 +268,16 @@ class _OrchestratorOverlayState extends State<OrchestratorOverlay> {
               final r = _rect.value;
               _rect.value = _Rect(
                 (r.left + details.delta.dx).clamp(-r.width + 100, _vpWidth - 100),
-                (r.top + details.delta.dy).clamp(0.0, _vpHeight - _Theme.titleBarHeight),
+                (r.top + details.delta.dy).clamp(0.0, _vpHeight - _titleBarHeight),
                 r.width,
                 r.height,
               );
             },
       onDoubleTap: _toggleMaximize,
       child: Container(
-        height: _Theme.titleBarHeight,
+        height: _titleBarHeight,
         decoration: const BoxDecoration(
-          color: _Theme.titleBarColor,
+          color: _titleBarColor,
           borderRadius: BorderRadius.only(
             topLeft: Radius.circular(7),
             topRight: Radius.circular(7),
@@ -309,11 +285,7 @@ class _OrchestratorOverlayState extends State<OrchestratorOverlay> {
         ),
         child: Row(
           children: [
-            const SizedBox(width: 8),
-            // Epyx neon logo — same asset as CatalogScreen EpyxLogo
-            Image.asset('assets/epyx-logo-neon.png',
-                height: 18, fit: BoxFit.fitHeight),
-            const SizedBox(width: 8),
+            const SizedBox(width: 12),
             const Expanded(
               child: Text(
                 'Orchestrator',
@@ -331,14 +303,14 @@ class _OrchestratorOverlayState extends State<OrchestratorOverlay> {
               tooltip: _maximized ? 'Restore' : 'Maximize',
               onPressed: _toggleMaximize,
               hoverColor: const Color(0x33FFFFFF),
-              size: _Theme.titleBarHeight - 4,
+              size: _titleBarHeight - 4,
             ),
             _HoverIconButton(
               icon: Icons.close,
               tooltip: 'Close',
               onPressed: widget.onClose,
               hoverColor: const Color(0xFFE81123),
-              size: _Theme.titleBarHeight - 4,
+              size: _titleBarHeight - 4,
             ),
             const SizedBox(width: 4),
           ],
@@ -360,41 +332,158 @@ class _OrchestratorOverlayState extends State<OrchestratorOverlay> {
     setState(() {});
   }
 
+  // ── Content: exact same layout as AgentViewControl.build() ─────────
+
+  Widget _buildContent() {
+    if (_needsApiKey && !_showApiKeyDialog) return _buildApiKeyPrompt();
+    if (_showApiKeyDialog) return _buildApiKeyInput();
+
+    // Matches AgentViewControl.build():
+    //   Container(color: bgColor)
+    //     Column
+    //       Expanded → MessageList(...)
+    //       ChatComposer(...)
+    return Container(
+      color: AgentTheme.bgColor,
+      child: Column(
+        children: [
+          Expanded(
+            child: MessageList(
+              messages: _messages,
+              placeholderText: 'What would you like to build?',
+              placeholderIcon: _orchIconBase64,
+              bgColor: AgentTheme.bgColor,
+            ),
+          ),
+          ChatComposer(
+            hintText: 'Ask about templates, doclets, or what to build...',
+            slashCommands: const [],
+            onSubmit: _onSubmit,
+            focusNode: _composerFocusNode,
+            modeIcon: _orchIconBase64,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildApiKeyPrompt() {
+    return Container(
+      color: AgentTheme.bgColor,
+      child: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.key,
+                color: AgentTheme.mutedTextColor.withValues(alpha: 0.5), size: 48),
+            const SizedBox(height: 16),
+            const Text('API Key Required',
+                style: TextStyle(color: AgentTheme.textColor, fontSize: 16, fontWeight: FontWeight.w500)),
+            const SizedBox(height: 8),
+            const Text('Set ANTHROPIC_API_KEY in your environment,\nor configure it here.',
+                style: TextStyle(color: AgentTheme.mutedTextColor, fontSize: 13),
+                textAlign: TextAlign.center),
+            const SizedBox(height: 24),
+            TextButton(
+              onPressed: () => setState(() => _showApiKeyDialog = true),
+              style: TextButton.styleFrom(
+                backgroundColor: AgentTheme.accentColor.withValues(alpha: 0.15),
+                side: BorderSide(color: AgentTheme.accentColor.withValues(alpha: 0.4), width: 0.5),
+                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              ),
+              child: const Text('Enter API Key',
+                  style: TextStyle(color: AgentTheme.accentColor, fontSize: 13)),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildApiKeyInput() {
+    return Container(
+      color: AgentTheme.bgColor,
+      child: Center(
+        child: Container(
+          constraints: const BoxConstraints(maxWidth: 400),
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text('Enter your Anthropic API Key',
+                  style: TextStyle(color: AgentTheme.textColor, fontSize: 16, fontWeight: FontWeight.w500)),
+              const SizedBox(height: 16),
+              TextField(
+                controller: _apiKeyController,
+                obscureText: true,
+                style: const TextStyle(color: AgentTheme.textColor, fontSize: 13),
+                decoration: InputDecoration(
+                  hintText: 'sk-ant-...',
+                  hintStyle: const TextStyle(color: AgentTheme.mutedTextColor, fontSize: 13),
+                  filled: true, fillColor: AgentTheme.inputBgColor,
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide.none),
+                ),
+                onSubmitted: (_) => _saveApiKeyAndInit(),
+              ),
+              const SizedBox(height: 16),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  TextButton(
+                    onPressed: () => setState(() => _showApiKeyDialog = false),
+                    child: const Text('Cancel', style: TextStyle(color: AgentTheme.mutedTextColor)),
+                  ),
+                  const SizedBox(width: 8),
+                  TextButton(
+                    onPressed: _saveApiKeyAndInit,
+                    style: TextButton.styleFrom(backgroundColor: AgentTheme.accentColor.withValues(alpha: 0.15)),
+                    child: const Text('Save', style: TextStyle(color: AgentTheme.accentColor)),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   // ── Resize handles (from floating_window_widget.dart) ──────────────
 
   List<Widget> _buildResizeHandles(double windowWidth, double windowHeight) {
     return [
       _resizeHandle(cursor: SystemMouseCursors.resizeUp,
-        left: _Theme.resizeHandleSize, top: 0,
-        width: windowWidth - _Theme.resizeHandleSize * 2, height: _Theme.resizeHandleSize,
+        left: _resizeHandleSize, top: 0,
+        width: windowWidth - _resizeHandleSize * 2, height: _resizeHandleSize,
         onDrag: (dx, dy) => _resizeTop(dy)),
       _resizeHandle(cursor: SystemMouseCursors.resizeDown,
-        left: _Theme.resizeHandleSize, top: windowHeight - _Theme.resizeHandleSize,
-        width: windowWidth - _Theme.resizeHandleSize * 2, height: _Theme.resizeHandleSize,
+        left: _resizeHandleSize, top: windowHeight - _resizeHandleSize,
+        width: windowWidth - _resizeHandleSize * 2, height: _resizeHandleSize,
         onDrag: (dx, dy) => _resizeBottom(dy)),
       _resizeHandle(cursor: SystemMouseCursors.resizeLeft,
-        left: 0, top: _Theme.resizeHandleSize,
-        width: _Theme.resizeHandleSize, height: windowHeight - _Theme.resizeHandleSize * 2,
+        left: 0, top: _resizeHandleSize,
+        width: _resizeHandleSize, height: windowHeight - _resizeHandleSize * 2,
         onDrag: (dx, dy) => _resizeLeft(dx)),
       _resizeHandle(cursor: SystemMouseCursors.resizeRight,
-        left: windowWidth - _Theme.resizeHandleSize, top: _Theme.resizeHandleSize,
-        width: _Theme.resizeHandleSize, height: windowHeight - _Theme.resizeHandleSize * 2,
+        left: windowWidth - _resizeHandleSize, top: _resizeHandleSize,
+        width: _resizeHandleSize, height: windowHeight - _resizeHandleSize * 2,
         onDrag: (dx, dy) => _resizeRight(dx)),
       _resizeHandle(cursor: SystemMouseCursors.resizeUpLeft,
         left: 0, top: 0,
-        width: _Theme.resizeHandleSize, height: _Theme.resizeHandleSize,
+        width: _resizeHandleSize, height: _resizeHandleSize,
         onDrag: (dx, dy) { _resizeLeft(dx); _resizeTop(dy); }),
       _resizeHandle(cursor: SystemMouseCursors.resizeUpRight,
-        left: windowWidth - _Theme.resizeHandleSize, top: 0,
-        width: _Theme.resizeHandleSize, height: _Theme.resizeHandleSize,
+        left: windowWidth - _resizeHandleSize, top: 0,
+        width: _resizeHandleSize, height: _resizeHandleSize,
         onDrag: (dx, dy) { _resizeRight(dx); _resizeTop(dy); }),
       _resizeHandle(cursor: SystemMouseCursors.resizeDownLeft,
-        left: 0, top: windowHeight - _Theme.resizeHandleSize,
-        width: _Theme.resizeHandleSize, height: _Theme.resizeHandleSize,
+        left: 0, top: windowHeight - _resizeHandleSize,
+        width: _resizeHandleSize, height: _resizeHandleSize,
         onDrag: (dx, dy) { _resizeLeft(dx); _resizeBottom(dy); }),
       _resizeHandle(cursor: SystemMouseCursors.resizeDownRight,
-        left: windowWidth - _Theme.resizeHandleSize, top: windowHeight - _Theme.resizeHandleSize,
-        width: _Theme.resizeHandleSize, height: _Theme.resizeHandleSize,
+        left: windowWidth - _resizeHandleSize, top: windowHeight - _resizeHandleSize,
+        width: _resizeHandleSize, height: _resizeHandleSize,
         onDrag: (dx, dy) { _resizeRight(dx); _resizeBottom(dy); }),
     ];
   }
@@ -421,7 +510,7 @@ class _OrchestratorOverlayState extends State<OrchestratorOverlay> {
     final r = _rect.value;
     final nw = r.width - dx;
     final nl = r.left + dx;
-    if (nw >= _Theme.minWidth && nl >= -50) {
+    if (nw >= _minWidth && nl >= -50) {
       _rect.value = _Rect(nl, r.top, nw, r.height);
     }
   }
@@ -429,7 +518,7 @@ class _OrchestratorOverlayState extends State<OrchestratorOverlay> {
   void _resizeRight(double dx) {
     final r = _rect.value;
     final nw = r.width + dx;
-    if (nw >= _Theme.minWidth && r.left + nw <= _vpWidth + 50) {
+    if (nw >= _minWidth && r.left + nw <= _vpWidth + 50) {
       _rect.value = _Rect(r.left, r.top, nw, r.height);
     }
   }
@@ -438,7 +527,7 @@ class _OrchestratorOverlayState extends State<OrchestratorOverlay> {
     final r = _rect.value;
     final nh = r.height - dy;
     final nt = r.top + dy;
-    if (nh >= _Theme.minHeight && nt >= 0) {
+    if (nh >= _minHeight && nt >= 0) {
       _rect.value = _Rect(r.left, nt, r.width, nh);
     }
   }
@@ -446,204 +535,9 @@ class _OrchestratorOverlayState extends State<OrchestratorOverlay> {
   void _resizeBottom(double dy) {
     final r = _rect.value;
     final nh = r.height + dy;
-    if (nh >= _Theme.minHeight && r.top + nh <= _vpHeight + 50) {
+    if (nh >= _minHeight && r.top + nh <= _vpHeight + 50) {
       _rect.value = _Rect(r.left, r.top, r.width, nh);
     }
-  }
-
-  // ── Chat body (same structure as orchestrator.py + agentview) ───────
-
-  Widget _buildChatBody() {
-    return Container(
-      color: _Theme.bgColor,
-      padding: const EdgeInsets.only(top: 2, bottom: 2, left: 2, right: 2),
-      child: Column(
-        children: [
-          Expanded(
-            child: _needsApiKey && !_showApiKeyDialog
-                ? _buildApiKeyPrompt()
-                : _showApiKeyDialog
-                    ? _buildApiKeyInput()
-                    : _messages.isEmpty
-                        ? _buildPlaceholder()
-                        : _buildMessageList(),
-          ),
-          if (!_needsApiKey || _showApiKeyDialog) _buildComposer(),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildPlaceholder() {
-    return Center(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          // Same neon logo as agentview placeholder (base64 icon pattern),
-          // but using the asset directly since we're in the client app.
-          Image.asset('assets/epyx-logo-neon.png',
-              height: 48, fit: BoxFit.fitHeight,
-              opacity: const AlwaysStoppedAnimation(0.4)),
-          const SizedBox(height: 16),
-          const Text(
-            'What would you like to build?',
-            style: TextStyle(color: _Theme.mutedTextColor, fontSize: 14),
-            textAlign: TextAlign.center,
-          ),
-          const SizedBox(height: 8),
-          Text(
-            'I can help you choose a template, find doclets, or create new documents.',
-            style: TextStyle(
-                color: _Theme.mutedTextColor.withValues(alpha: 0.6),
-                fontSize: 12),
-            textAlign: TextAlign.center,
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildApiKeyPrompt() {
-    return Center(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(Icons.key,
-              color: _Theme.mutedTextColor.withValues(alpha: 0.5), size: 48),
-          const SizedBox(height: 16),
-          const Text('API Key Required',
-              style: TextStyle(color: _Theme.textColor, fontSize: 16, fontWeight: FontWeight.w500)),
-          const SizedBox(height: 8),
-          const Text('Set ANTHROPIC_API_KEY in your environment,\nor configure it here.',
-              style: TextStyle(color: _Theme.mutedTextColor, fontSize: 13),
-              textAlign: TextAlign.center),
-          const SizedBox(height: 24),
-          TextButton(
-            onPressed: () => setState(() => _showApiKeyDialog = true),
-            style: TextButton.styleFrom(
-              backgroundColor: _Theme.accentColor.withValues(alpha: 0.15),
-              side: BorderSide(color: _Theme.accentColor.withValues(alpha: 0.4), width: 0.5),
-              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-            ),
-            child: const Text('Enter API Key',
-                style: TextStyle(color: _Theme.accentColor, fontSize: 13)),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildApiKeyInput() {
-    return Center(
-      child: Container(
-        constraints: const BoxConstraints(maxWidth: 400),
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Text('Enter your Anthropic API Key',
-                style: TextStyle(color: _Theme.textColor, fontSize: 16, fontWeight: FontWeight.w500)),
-            const SizedBox(height: 16),
-            TextField(
-              controller: _apiKeyController,
-              obscureText: true,
-              style: const TextStyle(color: _Theme.textColor, fontSize: 13),
-              decoration: InputDecoration(
-                hintText: 'sk-ant-...',
-                hintStyle: const TextStyle(color: _Theme.mutedTextColor, fontSize: 13),
-                filled: true, fillColor: _Theme.inputBgColor,
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide.none),
-              ),
-              onSubmitted: (_) => _saveApiKeyAndInit(),
-            ),
-            const SizedBox(height: 16),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.end,
-              children: [
-                TextButton(
-                  onPressed: () => setState(() => _showApiKeyDialog = false),
-                  child: const Text('Cancel', style: TextStyle(color: _Theme.mutedTextColor)),
-                ),
-                const SizedBox(width: 8),
-                TextButton(
-                  onPressed: _saveApiKeyAndInit,
-                  style: TextButton.styleFrom(backgroundColor: _Theme.accentColor.withValues(alpha: 0.15)),
-                  child: const Text('Save', style: TextStyle(color: _Theme.accentColor)),
-                ),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildMessageList() {
-    return ListView.builder(
-      controller: _scrollController,
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      itemCount: _messages.length,
-      itemBuilder: (_, index) => _MessageBubble(message: _messages[index]),
-    );
-  }
-
-  // ── Keyboard (same pattern as flet-agentview chat_composer.dart) ────
-
-  KeyEventResult _handleKeyEvent(FocusNode node, KeyEvent event) {
-    if (event is! KeyDownEvent) return KeyEventResult.ignored;
-
-    if (event.logicalKey == LogicalKeyboardKey.escape) {
-      widget.onClose();
-      return KeyEventResult.handled;
-    }
-    // Shift+Enter → newline (let TextField handle)
-    if (event.logicalKey == LogicalKeyboardKey.enter &&
-        HardwareKeyboard.instance.isShiftPressed) {
-      return KeyEventResult.ignored;
-    }
-    // Enter → submit
-    if (event.logicalKey == LogicalKeyboardKey.enter) {
-      _submit();
-      return KeyEventResult.handled;
-    }
-    return KeyEventResult.ignored;
-  }
-
-  Widget _buildComposer() {
-    _inputFocusNode.onKeyEvent = _handleKeyEvent;
-    return Container(
-      padding: const EdgeInsets.all(8),
-      decoration: const BoxDecoration(
-        border: Border(top: BorderSide(color: _Theme.borderColor, width: 0.5)),
-      ),
-      child: Row(
-        children: [
-          Expanded(
-            child: TextField(
-              controller: _textController,
-              focusNode: _inputFocusNode,
-              maxLines: 5, minLines: 1,
-              style: const TextStyle(color: _Theme.textColor, fontSize: 13),
-              cursorColor: _Theme.accentColor,
-              decoration: InputDecoration(
-                hintText: _showApiKeyDialog ? '' : 'Ask about templates, doclets, or what to build...',
-                hintStyle: const TextStyle(color: _Theme.mutedTextColor, fontSize: 13),
-                filled: true, fillColor: _Theme.inputBgColor,
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
-                contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-              ),
-            ),
-          ),
-          const SizedBox(width: 8),
-          IconButton(
-            icon: const Icon(Icons.send, color: _Theme.accentColor, size: 20),
-            onPressed: _submit,
-            tooltip: 'Send (Enter)',
-          ),
-        ],
-      ),
-    );
   }
 }
 
@@ -698,171 +592,3 @@ class _HoverIconButtonState extends State<_HoverIconButton> {
     );
   }
 }
-
-// ── Message bubble (from flet-agentview message_list.dart) ────────────
-
-class _MessageBubble extends StatelessWidget {
-  final _ChatMessage message;
-  const _MessageBubble({required this.message});
-
-  @override
-  Widget build(BuildContext context) {
-    final isUser = message.isUser;
-    return Align(
-      alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
-      child: Container(
-        constraints: BoxConstraints(
-          maxWidth: MediaQuery.of(context).size.width * 0.85,
-        ),
-        margin: const EdgeInsets.symmetric(vertical: 4),
-        padding: const EdgeInsets.all(12),
-        decoration: BoxDecoration(
-          color: isUser ? _Theme.userBubbleColor : _Theme.assistantBubbleColor,
-          borderRadius: BorderRadius.circular(12),
-        ),
-        child: isUser ? _buildUserContent() : _buildAssistantContent(),
-      ),
-    );
-  }
-
-  Widget _buildUserContent() {
-    return SelectableText(
-      message.content,
-      style: const TextStyle(color: _Theme.textColor, fontSize: 13),
-    );
-  }
-
-  Widget _buildAssistantContent() {
-    return SelectionArea(
-      child: MarkdownBody(
-        data: message.content,
-        extensionSet: md.ExtensionSet.gitHubFlavored,
-        builders: {'code': _CodeElementBuilder(_darkCodeTheme)},
-        styleSheet: _darkMarkdownStyleSheet(),
-        shrinkWrap: true, fitContent: true, softLineBreak: true,
-        onTapLink: (text, href, title) {},
-      ),
-    );
-  }
-}
-
-// ── Markdown styling (from flet-agentview message_list.dart) ──────────
-
-MarkdownStyleSheet _darkMarkdownStyleSheet() {
-  return MarkdownStyleSheet(
-    p: const TextStyle(color: Colors.white, fontSize: 13, height: 1.5),
-    h1: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold),
-    h2: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
-    h3: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
-    h4: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold),
-    code: const TextStyle(color: Color(0xFFE0E0E0), backgroundColor: Color(0xFF1E1E2E), fontFamily: 'monospace', fontSize: 12),
-    codeblockDecoration: BoxDecoration(color: const Color(0xFF1E1E2E), borderRadius: BorderRadius.circular(8)),
-    codeblockPadding: const EdgeInsets.all(12),
-    blockquote: const TextStyle(color: Color(0xFFAAAAAA), fontSize: 13),
-    blockquoteDecoration: const BoxDecoration(border: Border(left: BorderSide(color: Color(0xFF555555), width: 3))),
-    blockquotePadding: const EdgeInsets.only(left: 12),
-    listBullet: const TextStyle(color: Colors.white, fontSize: 13),
-    a: const TextStyle(color: _Theme.accentColor, decoration: TextDecoration.underline),
-    strong: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-    em: const TextStyle(color: Colors.white, fontStyle: FontStyle.italic),
-    tableHead: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-    tableBody: const TextStyle(color: Colors.white),
-    tableBorder: TableBorder.all(color: const Color(0xFF444444)),
-    horizontalRuleDecoration: const BoxDecoration(border: Border(top: BorderSide(color: Color(0xFF444444)))),
-  );
-}
-
-// ── Code highlighting (from flet-agentview message_list.dart) ─────────
-
-class _CodeElementBuilder extends MarkdownElementBuilder {
-  final Map<String, TextStyle> codeTheme;
-  _CodeElementBuilder(this.codeTheme);
-
-  @override
-  Widget? visitElementAfter(md.Element element, TextStyle? preferredStyle) {
-    if (!element.textContent.endsWith('\n')) return null;
-    var language = '';
-    if (element.attributes['class'] != null) {
-      final lg = element.attributes['class'] as String;
-      if (lg.startsWith('language-')) language = lg.substring(9);
-    }
-    final source = element.textContent.substring(0, element.textContent.length - 1);
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        return Container(
-          width: constraints.maxWidth == double.infinity ? 10000 : double.infinity,
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(color: const Color(0xFF1E1E2E), borderRadius: BorderRadius.circular(8)),
-          child: SelectableText.rich(
-            TextSpan(
-              style: const TextStyle(fontFamily: 'monospace', fontSize: 12, color: Color(0xFFE0E0E0)),
-              children: _highlightSource(source, language),
-            ),
-          ),
-        );
-      },
-    );
-  }
-
-  List<TextSpan> _highlightSource(String source, String language) {
-    try {
-      final result = language.isNotEmpty
-          ? highlight.parse(source, language: language)
-          : highlight.parse(source, autoDetection: true);
-      return _convertNodes(result.nodes ?? []);
-    } catch (_) {
-      return [TextSpan(text: source)];
-    }
-  }
-
-  List<TextSpan> _convertNodes(List<Node> nodes) {
-    final spans = <TextSpan>[];
-    for (final node in nodes) {
-      if (node.value != null) {
-        spans.add(node.className == null
-            ? TextSpan(text: node.value)
-            : TextSpan(text: node.value, style: codeTheme[node.className!]));
-      } else if (node.children != null) {
-        spans.add(TextSpan(children: _convertNodes(node.children!), style: codeTheme[node.className!]));
-      }
-    }
-    return spans;
-  }
-}
-
-const _darkCodeTheme = <String, TextStyle>{
-  'root': TextStyle(color: Color(0xFFE0E0E0), backgroundColor: Color(0xFF1E1E2E)),
-  'keyword': TextStyle(color: Color(0xFF569CD6)),
-  'built_in': TextStyle(color: Color(0xFF4EC9B0)),
-  'type': TextStyle(color: Color(0xFF4EC9B0)),
-  'literal': TextStyle(color: Color(0xFF569CD6)),
-  'number': TextStyle(color: Color(0xFFB5CEA8)),
-  'string': TextStyle(color: Color(0xFFCE9178)),
-  'symbol': TextStyle(color: Color(0xFFCE9178)),
-  'comment': TextStyle(color: Color(0xFF6A9955)),
-  'doctag': TextStyle(color: Color(0xFF608B4E)),
-  'meta': TextStyle(color: Color(0xFF9B9B9B)),
-  'meta-keyword': TextStyle(color: Color(0xFF569CD6)),
-  'meta-string': TextStyle(color: Color(0xFFCE9178)),
-  'function': TextStyle(color: Color(0xFFDCDCAA)),
-  'title': TextStyle(color: Color(0xFFDCDCAA)),
-  'class': TextStyle(color: Color(0xFF4EC9B0)),
-  'variable': TextStyle(color: Color(0xFF9CDCFE)),
-  'params': TextStyle(color: Color(0xFF9CDCFE)),
-  'attr': TextStyle(color: Color(0xFF9CDCFE)),
-  'attribute': TextStyle(color: Color(0xFF9CDCFE)),
-  'tag': TextStyle(color: Color(0xFF569CD6)),
-  'name': TextStyle(color: Color(0xFF569CD6)),
-  'selector-tag': TextStyle(color: Color(0xFF569CD6)),
-  'selector-id': TextStyle(color: Color(0xFFD7BA7D)),
-  'selector-class': TextStyle(color: Color(0xFFD7BA7D)),
-  'regexp': TextStyle(color: Color(0xFFD16969)),
-  'deletion': TextStyle(color: Color(0xFFCE9178)),
-  'addition': TextStyle(color: Color(0xFFB5CEA8)),
-  'subst': TextStyle(color: Color(0xFF9CDCFE)),
-  'section': TextStyle(color: Color(0xFFDCDCAA)),
-  'bullet': TextStyle(color: Color(0xFFD7BA7D)),
-  'emphasis': TextStyle(fontStyle: FontStyle.italic),
-  'strong': TextStyle(fontWeight: FontWeight.bold),
-  'link': TextStyle(color: Color(0xFF569CD6)),
-};
