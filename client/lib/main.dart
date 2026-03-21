@@ -572,6 +572,19 @@ class _CatalogScreenState extends State<CatalogScreen> {
                   _logoKey.currentState?.stopBusy();
                 }
               },
+              onOpenDoclet: (name) {
+                _logoKey.currentState?.stopBusy();
+                setState(() => _showOrchestrator = false);
+                // Find the doclet by name and open it
+                final match = _doclets.where(
+                    (d) => d.name.toLowerCase() == name.toLowerCase());
+                if (match.isNotEmpty) {
+                  _openDoclet(match.first);
+                } else {
+                  // Try opening by dirName directly
+                  _launchEdd(['open', name]);
+                }
+              },
             ),
         ],
       ),
@@ -584,7 +597,10 @@ class _CatalogScreenState extends State<CatalogScreen> {
       child: Row(
         children: [
           GestureDetector(
-            onTap: () => setState(() => _showOrchestrator = true),
+            onTap: () {
+              if (_showOrchestrator) _logoKey.currentState?.stopBusy();
+              setState(() => _showOrchestrator = !_showOrchestrator);
+            },
             child: EpyxLogo(key: _logoKey, height: 60),
           ),
           const SizedBox(width: 16),

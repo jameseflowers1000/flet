@@ -146,7 +146,9 @@ $pathList
 - Help users browse and find doclets by description
 - Answer general questions about Epyx
 - Create a new doclet via the create_doclet tool
+- Open an existing doclet by name
 - Manage doclet search locations (add/remove folders)
+- Save/dump the conversation to a file
 
 ## What you CANNOT do (needs a running container)
 - Execute formulas or code
@@ -180,6 +182,10 @@ $pathList
         return await _toolAddDocletLocation(toolCall.arguments);
       case 'remove_doclet_location':
         return await _toolRemoveDocletLocation(toolCall.arguments);
+      case 'open_doclet':
+        return _toolOpenDoclet(toolCall.arguments);
+      case 'dump_conversation':
+        return await _toolDumpConversation(toolCall.arguments);
       default:
         return 'Unknown tool: ${toolCall.name}';
     }
@@ -307,6 +313,9 @@ $pathList
   Future<String> _toolCreateDoclet(Map<String, dynamic> args) async {
     final name = args['name'] as String? ?? '';
     final template = args['template'] as String? ?? '';
+    final description = args['description'] as String? ?? '';
+    final creationContext = args['creation_context'] as String? ?? '';
+    final greeting = args['greeting'] as String? ?? '';
 
     if (name.isEmpty || template.isEmpty) {
       return 'Error: both name and template are required.';
@@ -323,8 +332,16 @@ $pathList
     }
 
     try {
-      final result = await Process.run(eddPath, ['create', '-t', template, name]);
+      final cmdArgs = ['create', '--template', template];
+      if (description.isNotEmpty) {
+        cmdArgs.addAll(['--desc', description]);
+      }
+      cmdArgs.add(name);
+      final result = await Process.run(eddPath, cmdArgs);
       if (result.exitCode == 0) {
+        // Write the creation conversation as the first session in the new doclet,
+        // using the same format as ConversationStore (conversation.py).
+        _writeCreationSession(name, creationContext, greeting);
         onAction('doclet_created', {'name': name, 'template': template});
         return 'Successfully created doclet "$name" with template "$template".';
       } else {
@@ -459,6 +476,70 @@ $pathList
     }
   }
 
+  /// Write the bodyless creation conversation as the first session in the
+  /// new doclet's .meta/conversations/ — same JSON format as ConversationStore.
+  /// Tagged "creation" so the in-document orchestrator can identify it.
+  void _writeCreationSession(String docletName, String creationContext, String greeting) {
+    try {
+      // Find the doclet directory — scan all doclet paths for a match
+      String? docletPath;
+      for (final searchPath in _docletPaths) {
+        final dir = Directory(searchPath);
+        if (!dir.existsSync()) continue;
+        for (final entity in dir.listSync()) {
+          if (entity is Directory) {
+            final manifest = File('${entity.path}/manifest.json');
+            if (manifest.existsSync()) {
+              final data = jsonDecode(manifest.readAsStringSync()) as Map<String, dynamic>;
+              if (data['name'] == docletName) {
+                docletPath = entity.path;
+                break;
+              }
+            }
+          }
+        }
+        if (docletPath != null) break;
+      }
+      if (docletPath == null) return;
+
+      final convDir = Directory('$docletPath/.meta/conversations');
+      convDir.createSync(recursive: true);
+
+      final now = DateTime.now().toUtc().toIso8601String();
+      final ts = DateTime.now().toUtc().toIso8601String().replaceAll(RegExp(r'[-:T.]'), '').substring(0, 14);
+      final sessionId = 'sess_${ts}_0000';
+
+      // Build messages from conversation history — user and assistant only
+      final messages = <Map<String, dynamic>>[];
+      for (final msg in _conversationHistory) {
+        if (msg.role == 'user' || (msg.role == 'assistant' && msg.toolName == null)) {
+          messages.add({
+            'role': msg.role,
+            'content': msg.content,
+            'ts': now,
+          });
+        }
+      }
+
+      // Add the creation_context as a summary if provided
+      final session = {
+        'session_id': sessionId,
+        'started_at': now,
+        'ended_at': now,
+        'messages': messages,
+        'summary': creationContext.isNotEmpty ? creationContext : null,
+        'greeting': greeting.isNotEmpty ? greeting : null,
+        'tags': ['creation'],
+      };
+
+      final sessionFile = File('${convDir.path}/$sessionId.json');
+      sessionFile.writeAsStringSync(
+          const JsonEncoder.withIndent('  ').convert(session));
+    } catch (_) {
+      // Best effort — don't fail the create if this doesn't work
+    }
+  }
+
   String? _findEdd() {
     final result = Process.runSync('which', ['edd']);
     if (result.exitCode == 0) return (result.stdout as String).trim();
@@ -466,6 +547,71 @@ $pathList
     final homeBin = '$home/bin/edd';
     if (File(homeBin).existsSync()) return homeBin;
     return null;
+  }
+
+  String _toolOpenDoclet(Map<String, dynamic> args) {
+    final name = args['name'] as String? ?? '';
+    if (name.isEmpty) return 'Error: name is required.';
+
+    // Find the doclet in our context
+    final match = _docletContext.where(
+        (d) => (d['name'] as String? ?? '').toLowerCase() == name.toLowerCase());
+    if (match.isEmpty) {
+      return 'Error: doclet "$name" not found.';
+    }
+
+    onAction('open_doclet', match.first);
+    return 'Opening doclet "$name"...';
+  }
+
+  Future<String> _toolDumpConversation(Map<String, dynamic> args) async {
+    final path = args['path'] as String? ?? '';
+
+    // Build readable transcript from messages shown to user
+    final buf = StringBuffer();
+    buf.writeln('# Epyx Orchestrator Conversation');
+    buf.writeln('# ${DateTime.now().toIso8601String()}');
+    buf.writeln();
+
+    // Include the full LLM conversation history (has tool calls too)
+    for (final msg in _conversationHistory) {
+      if (msg.role == 'user') {
+        buf.writeln('> **User**: ${msg.content}');
+        buf.writeln();
+      } else if (msg.role == 'assistant' && msg.toolName == null) {
+        buf.writeln('**Assistant**: ${msg.content}');
+        buf.writeln();
+      } else if (msg.role == 'assistant' && msg.toolName != null) {
+        buf.writeln('_[tool_use: ${msg.toolName}(${jsonEncode(msg.toolArguments)})]_');
+        buf.writeln();
+      } else if (msg.role == 'tool_result') {
+        final preview = msg.content.length > 200
+            ? '${msg.content.substring(0, 200)}...'
+            : msg.content;
+        buf.writeln('_[tool_result: $preview]_');
+        buf.writeln();
+      }
+    }
+
+    // Determine output path
+    String outputPath;
+    if (path.isNotEmpty) {
+      outputPath = path.startsWith('~')
+          ? path.replaceFirst('~', Platform.environment['HOME'] ?? '')
+          : path;
+    } else {
+      final home = Platform.environment['HOME'] ?? '/tmp';
+      outputPath = '$home/epyx-conversation-${DateTime.now().millisecondsSinceEpoch}.md';
+    }
+
+    try {
+      final file = File(outputPath);
+      file.parent.createSync(recursive: true);
+      file.writeAsStringSync(buf.toString());
+      return 'Conversation saved to $outputPath';
+    } catch (e) {
+      return 'Error saving conversation: $e';
+    }
   }
 
   void clearHistory() {
@@ -531,7 +677,7 @@ $pathList
     const ToolDefinition(
       name: 'create_doclet',
       description:
-          'Create a new doclet with the given name and template. Confirm with the user before calling.',
+          'Create a new doclet with the given name and template. Confirm with the user before calling. Always include description, creation_context, and greeting.',
       inputSchema: {
         'type': 'object',
         'properties': {
@@ -542,6 +688,18 @@ $pathList
           'template': {
             'type': 'string',
             'description': 'Template name to use',
+          },
+          'description': {
+            'type': 'string',
+            'description': 'Brief description of the doclet based on the conversation (e.g. "Table for entering and reconciling values")',
+          },
+          'creation_context': {
+            'type': 'string',
+            'description': 'Factual summary of what the user wants to build, for the in-document agent system prompt. Include requirements, decisions made, and template choice rationale.',
+          },
+          'greeting': {
+            'type': 'string',
+            'description': 'A warm, natural greeting for the user when they first open this doclet. Address them directly, reference what they want to build, and offer to help. E.g. "Hi! I see you need a table for reconciliation. Would you like me to help you set that up?"',
           },
         },
         'required': ['name', 'template'],
@@ -584,6 +742,35 @@ $pathList
           },
         },
         'required': ['path'],
+      },
+    ),
+    const ToolDefinition(
+      name: 'open_doclet',
+      description: 'Open an existing doclet by name. Use this when the user asks to open a doclet.',
+      inputSchema: {
+        'type': 'object',
+        'properties': {
+          'name': {
+            'type': 'string',
+            'description': 'Name of the doclet to open',
+          },
+        },
+        'required': ['name'],
+      },
+    ),
+    const ToolDefinition(
+      name: 'dump_conversation',
+      description:
+          'Save the full conversation transcript to a file. The user may ask to "save this conversation" or "dump the chat".',
+      inputSchema: {
+        'type': 'object',
+        'properties': {
+          'path': {
+            'type': 'string',
+            'description': 'Output file path (optional — defaults to ~/epyx-conversation-<timestamp>.md)',
+          },
+        },
+        'required': <String>[],
       },
     ),
   ];

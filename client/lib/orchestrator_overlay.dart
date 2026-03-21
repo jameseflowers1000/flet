@@ -36,6 +36,7 @@ class OrchestratorOverlay extends StatefulWidget {
   final void Function() onDocletCreated;
   final void Function(List<String> paths) onDocletPathsChanged;
   final void Function(bool busy) onBusyChanged;
+  final void Function(String name) onOpenDoclet;
 
   const OrchestratorOverlay({
     super.key,
@@ -45,6 +46,7 @@ class OrchestratorOverlay extends StatefulWidget {
     required this.onDocletCreated,
     required this.onDocletPathsChanged,
     required this.onBusyChanged,
+    required this.onOpenDoclet,
   });
 
   @override
@@ -128,6 +130,11 @@ class _OrchestratorOverlayState extends State<OrchestratorOverlay> {
         } else if (action == 'doclet_paths_changed') {
           final paths = (data['paths'] as List).cast<String>();
           widget.onDocletPathsChanged(paths);
+        } else if (action == 'open_doclet') {
+          final name = data['name'] as String? ?? '';
+          if (name.isNotEmpty) {
+            widget.onOpenDoclet(name);
+          }
         }
       },
     );
@@ -180,10 +187,12 @@ class _OrchestratorOverlayState extends State<OrchestratorOverlay> {
         _vpWidth = constraints.maxWidth;
         _vpHeight = constraints.maxHeight;
 
-        // Initial position: bottom of viewport, full width
+        // Initial position: bottom of viewport, full width, 380px tall
         // (matches main.py: win_left=0, win_top=420, win_width=1280, win_height=380)
+        // Clamp height to viewport so it never extends beyond bounds.
         if (!_positionInitialized) {
-          _rect.value = _Rect(0, _vpHeight - 380, _vpWidth, 380);
+          final h = 380.0.clamp(_minHeight, _vpHeight);
+          _rect.value = _Rect(0, _vpHeight - h, _vpWidth, h);
           _positionInitialized = true;
         }
 
