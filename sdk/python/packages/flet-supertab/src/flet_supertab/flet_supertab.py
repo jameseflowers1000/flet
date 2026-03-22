@@ -66,6 +66,10 @@ class SuperTab(ft.LayoutControl):
     # JSON array of "row:col_name" strings identifying cells with overrides
     override_cells: Optional[str] = field(default=None, metadata={"data_field": "override_cells"})
 
+    # JSON-encoded cell styles for conditional formatting (§9.5)
+    # Structure: [[{"bg": "#color", "fg": "#color"} | null, ...], ...]
+    cell_styles: Optional[str] = field(default=None, metadata={"data_field": "cell_styles"})
+
     # Event: called when a cell is edited
     # Event data (in e.data as JSON): {"row_index": int, "column_name": str, "old_value": str, "new_value": str}
     on_cell_edit: Optional[ft.ControlEventHandler["SuperTab"]] = None
@@ -77,6 +81,14 @@ class SuperTab(ft.LayoutControl):
     # Event: called when checkbox selection changes (only when show_checkbox_column=True)
     # Event data (in e.data as JSON): {"selected_rows": [int, ...]}
     on_checkbox_selection: Optional[ft.ControlEventHandler["SuperTab"]] = None
+
+    # Event: LOD page request — fired when Dart scrolls near the end of loaded data
+    # Event data (in e.data as JSON): {"offset": int, "limit": int}
+    # EScalar analog: same Flet event pattern as on_cell_edit (escalar has no LOD)
+    on_page_request: Optional[ft.ControlEventHandler["SuperTab"]] = None
+
+    # Total row count for LOD (Dart uses this to size the scrollbar)
+    total_rows: int = field(default=0, metadata={"data_field": "total_rows"})
 
     # Internal storage for the actual list data
     _columns_data: list[dict[str, Any]] = field(default_factory=list, repr=False, metadata={"skip": True})
