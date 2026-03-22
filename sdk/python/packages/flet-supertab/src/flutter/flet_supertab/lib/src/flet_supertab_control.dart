@@ -342,7 +342,7 @@ class _SuperTabControlState extends State<SuperTabControl> {
     );
 
     final errorMessage = widget.control.getString("error_message") ?? "";
-    final child = errorMessage.isNotEmpty
+    Widget result = errorMessage.isNotEmpty
         ? Column(children: [
             Container(
               width: double.infinity,
@@ -364,7 +364,45 @@ class _SuperTabControlState extends State<SuperTabControl> {
           ])
         : themed;
 
-    return LayoutControl(control: widget.control, child: child);
+    // Tab header bar: label, ctype badge, row count
+    final label = widget.control.getString("label") ?? "";
+    final ctype = widget.control.getString("ctype") ?? "";
+    final rowCount = _dataRows.length;
+
+    if (label.isNotEmpty || ctype.isNotEmpty) {
+      result = Column(
+        children: [
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+            color: headerBg,
+            child: Row(
+              children: [
+                if (label.isNotEmpty)
+                  Text(label, style: TextStyle(
+                    color: headerTextColor, fontWeight: FontWeight.bold, fontSize: 14)),
+                const SizedBox(width: 8),
+                if (ctype.isNotEmpty)
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: Colors.blue.withValues(alpha: 0.2),
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: Text(ctype, style: TextStyle(
+                      color: Colors.blue.shade200, fontSize: 11)),
+                  ),
+                const Spacer(),
+                Text('$rowCount rows', style: TextStyle(
+                  color: headerTextColor.withValues(alpha: 0.6), fontSize: 11)),
+              ],
+            ),
+          ),
+          Expanded(child: result),
+        ],
+      );
+    }
+
+    return LayoutControl(control: widget.control, child: result);
   }
 
   void _handleCellSecondaryTap(DataGridCellTapDetails details) {
