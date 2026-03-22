@@ -364,9 +364,11 @@ class _SuperTabControlState extends State<SuperTabControl> {
           ])
         : themed;
 
-    // Tab header bar: label, ctype badge, row count
+    // Tab header bar: label, ctype badge, status indicators, row count
     final label = widget.control.getString("label") ?? "";
     final ctype = widget.control.getString("ctype") ?? "";
+    final sortIndicator = widget.control.getString("sort_indicator") ?? "";
+    final filterActive = widget.control.getBool("filter_active", false) ?? false;
     final rowCount = _dataRows.length;
 
     if (label.isNotEmpty || ctype.isNotEmpty) {
@@ -391,6 +393,21 @@ class _SuperTabControlState extends State<SuperTabControl> {
                     child: Text(ctype, style: TextStyle(
                       color: Colors.blue.shade200, fontSize: 11)),
                   ),
+                // Sort/filter status indicators (O1d)
+                if (sortIndicator.isNotEmpty) ...[
+                  const SizedBox(width: 8),
+                  Icon(Icons.sort, size: 14, color: headerTextColor.withValues(alpha: 0.5)),
+                  const SizedBox(width: 2),
+                  Text(sortIndicator, style: TextStyle(
+                    color: headerTextColor.withValues(alpha: 0.5), fontSize: 10)),
+                ],
+                if (filterActive) ...[
+                  const SizedBox(width: 8),
+                  Icon(Icons.filter_alt, size: 14, color: Colors.orange.shade300),
+                  const SizedBox(width: 2),
+                  Text('filtered', style: TextStyle(
+                    color: Colors.orange.shade300, fontSize: 10)),
+                ],
                 const Spacer(),
                 Text('$rowCount rows', style: TextStyle(
                   color: headerTextColor.withValues(alpha: 0.6), fontSize: 11)),

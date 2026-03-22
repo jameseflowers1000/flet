@@ -61,9 +61,11 @@ class SuperTab(ft.LayoutControl):
     grid_line_width: float = field(default=1.0, metadata={"data_field": "grid_line_width"})
     current_cell_border_width: float = field(default=2.0, metadata={"data_field": "current_cell_border_width"})
 
-    # Tab header: label and ctype for the header bar above the grid
+    # Tab header: label, ctype, and status indicators for the header bar
     label: str = field(default="", metadata={"data_field": "label"})
     ctype: str = field(default="", metadata={"data_field": "ctype"})
+    sort_indicator: str = field(default="", metadata={"data_field": "sort_indicator"})
+    filter_active: bool = field(default=False, metadata={"data_field": "filter_active"})
 
     # Error message to display as a banner above the grid
     error_message: str = field(default="", metadata={"data_field": "error_message"})
