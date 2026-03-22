@@ -4,6 +4,8 @@ import 'package:syncfusion_flutter_datagrid/datagrid.dart';
 typedef CellEditCallback = void Function(
     int rowIndex, String columnName, Object? oldValue, Object? newValue);
 
+typedef PageRequestCallback = void Function(int offset, int limit);
+
 class FletDataGridSource extends DataGridSource {
   FletDataGridSource({
     required List<List<Object?>> rows,
@@ -11,6 +13,7 @@ class FletDataGridSource extends DataGridSource {
     required List<String> columnNames,
     List<dynamic>? columnDefs,
     this.onCellEdit,
+    this.onPageRequest,
     this.showRowNumbers = false,
     this.cellTextColor = Colors.transparent,
     this.cellBgColor = Colors.transparent,
@@ -20,6 +23,7 @@ class FletDataGridSource extends DataGridSource {
     this.cellPaddingHorizontal = 12.0,
     this.cellPaddingVertical = 4.0,
     this.overrideCells = const {},
+    this.cellStyles = const [],
   })  : _columnNames = columnNames,
         _columnDefs = columnDefs ?? [],
         _rawRows = rawRows ?? [] {
@@ -60,6 +64,12 @@ class FletDataGridSource extends DataGridSource {
 
   /// Callback when a cell is edited
   final CellEditCallback? onCellEdit;
+
+  /// Callback for page requests (LOD / lazy loading)
+  final PageRequestCallback? onPageRequest;
+
+  /// Per-cell styles: cellStyles[rowIndex][colIndex] may be {"bg": "#hex", "fg": "#hex"} or null
+  final List<List<Map<String, String>?>> cellStyles;
 
   /// Holds the new value during editing
   dynamic _newCellValue;
@@ -120,15 +130,24 @@ class FletDataGridSource extends DataGridSource {
   List<DataGridRow> get rows => _rows;
 
   @override
+  Future<void> handleLoadMoreRows() async {
+    if (onPageRequest != null) {
+      onPageRequest!(_dataRows.length, 100);
+    }
+  }
+
+  @override
   DataGridRowAdapter buildRow(DataGridRow row) {
     final rowIndex = _rows.indexOf(row);
     final useAltColor = _hasAlternateRowColor && rowIndex.isOdd;
+    final cells = row.getCells();
 
     return DataGridRowAdapter(
       color: useAltColor
           ? alternateRowColor
           : (_hasCellBgColor ? cellBgColor : null),
-      cells: row.getCells().map<Widget>((cell) {
+      cells: List.generate(cells.length, (i) {
+        final cell = cells[i];
         // Row-number column: centered, muted style
         if (cell.columnName == '__row_num__') {
           return Container(
@@ -146,16 +165,36 @@ class FletDataGridSource extends DataGridSource {
             ),
           );
         }
+
+        // Resolve per-cell style from cellStyles
+        // colIndex is the data column index (excluding row-number column)
+        final colIndex = showRowNumbers ? i - 1 : i;
+        Color? perCellBg;
+        Color? perCellFg;
+        if (rowIndex >= 0 && rowIndex < cellStyles.length &&
+            colIndex >= 0 && colIndex < cellStyles[rowIndex].length) {
+          final style = cellStyles[rowIndex][colIndex];
+          if (style != null) {
+            if (style.containsKey('bg')) {
+              perCellBg = _parseHexColor(style['bg']!);
+            }
+            if (style.containsKey('fg')) {
+              perCellFg = _parseHexColor(style['fg']!);
+            }
+          }
+        }
+
         final isNumeric = _isNumericColumn(cell.columnName);
         final container = Container(
           alignment: isNumeric ? Alignment.centerRight : Alignment.centerLeft,
           padding: EdgeInsets.symmetric(
               horizontal: cellPaddingHorizontal, vertical: cellPaddingVertical),
+          color: perCellBg,
           child: Text(
             _formatValue(cell.value, cell.columnName),
             style: TextStyle(
               fontSize: cellFontSize,
-              color: _hasCellTextColor ? cellTextColor : null,
+              color: perCellFg ?? (_hasCellTextColor ? cellTextColor : null),
               fontFamily: fontFamily,
             ),
             overflow: TextOverflow.ellipsis,
@@ -179,7 +218,7 @@ class FletDataGridSource extends DataGridSource {
           );
         }
         return container;
-      }).toList(),
+      }),
     );
   }
 
@@ -368,6 +407,13 @@ class FletDataGridSource extends DataGridSource {
       onCellEdit?.call(rowIndex, columnName, oldValue, newValue);
     }
   }
+}
+
+Color? _parseHexColor(String hex) {
+  hex = hex.replaceAll('#', '');
+  if (hex.length == 6) hex = 'FF$hex';
+  if (hex.length != 8) return null;
+  return Color(int.parse(hex, radix: 16));
 }
 
 /// Paints a small filled triangle in the top-left corner to indicate an override.

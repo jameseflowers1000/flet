@@ -28,6 +28,7 @@ class _SuperTabControlState extends State<SuperTabControl> {
   List<List<Object?>> _rawRows = [];
   List<String> _columnNames = [];
   Set<String> _overrideCells = {};
+  List<List<Map<String, String>?>> _cellStyles = [];
 
   /// Tracks user-resized column widths (columnName → width).
   /// Columns not in this map use auto-fill sizing.
@@ -82,6 +83,19 @@ class _SuperTabControlState extends State<SuperTabControl> {
     _overrideCells = overrideJson != null && overrideJson.isNotEmpty
         ? (jsonDecode(overrideJson) as List).cast<String>().toSet()
         : {};
+
+    final cellStylesJson = widget.control.getString("cell_styles");
+    if (cellStylesJson != null && cellStylesJson.isNotEmpty) {
+      final parsed = jsonDecode(cellStylesJson) as List;
+      _cellStyles = parsed.map<List<Map<String, String>?>>((row) {
+        return (row as List).map<Map<String, String>?>((cell) {
+          if (cell == null) return null;
+          return Map<String, String>.from(cell as Map);
+        }).toList();
+      }).toList();
+    } else {
+      _cellStyles = [];
+    }
   }
 
   /// Build the data source. [context] is used for Flet color name resolution;
@@ -102,6 +116,7 @@ class _SuperTabControlState extends State<SuperTabControl> {
       columnNames: _columnNames,
       columnDefs: _cols,
       onCellEdit: _handleCellEdit,
+      onPageRequest: _handlePageRequest,
       showRowNumbers: showRowNumbers,
       cellTextColor: cellTextColor,
       cellBgColor: cellBgColor,
@@ -111,6 +126,7 @@ class _SuperTabControlState extends State<SuperTabControl> {
       cellPaddingHorizontal: cellPadH,
       cellPaddingVertical: cellPadV,
       overrideCells: _overrideCells,
+      cellStyles: _cellStyles,
     );
   }
 
@@ -123,6 +139,14 @@ class _SuperTabControlState extends State<SuperTabControl> {
       "new_value": newValue?.toString(),
     });
     widget.control.triggerEventWithoutSubscribers("cell_edit", eventData);
+  }
+
+  void _handlePageRequest(int offset, int limit) {
+    final eventData = jsonEncode({
+      "offset": offset,
+      "limit": limit,
+    });
+    widget.control.triggerEventWithoutSubscribers("page_request", eventData);
   }
 
   void _handleSelectionChanged(
@@ -279,6 +303,24 @@ class _SuperTabControlState extends State<SuperTabControl> {
       frozenRowsCount: frozenRowsCount,
       headerRowHeight: headerRowHeight,
       rowHeight: rowHeight,
+      loadMoreViewBuilder:
+          (BuildContext context, LoadMoreRows loadMoreRows) {
+        return FutureBuilder<void>(
+          future: loadMoreRows(),
+          builder: (context, snapshot) {
+            if (snapshot.connectionState == ConnectionState.waiting) {
+              return const Align(
+                alignment: Alignment.center,
+                child: Padding(
+                  padding: EdgeInsets.all(16.0),
+                  child: CircularProgressIndicator(strokeWidth: 3),
+                ),
+              );
+            }
+            return const SizedBox.shrink();
+          },
+        );
+      },
       columns: [
         if (showRowNumbers) _buildRowNumberColumn(headerBg, headerTextColor, headerFontSize, fontFamily),
         ...dataColumns,
