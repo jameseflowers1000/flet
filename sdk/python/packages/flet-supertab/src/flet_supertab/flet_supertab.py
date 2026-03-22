@@ -33,6 +33,7 @@ class SuperTab(ft.LayoutControl):
     show_row_numbers: bool = field(default=False, metadata={"data_field": "show_row_numbers"})
     show_checkbox_column: bool = field(default=False, metadata={"data_field": "show_checkbox_column"})
     frozen_columns_count: int = field(default=0, metadata={"data_field": "frozen_columns_count"})
+    frozen_rows_count: int = field(default=0, metadata={"data_field": "frozen_rows_count"})
     row_height: float = field(default=36.0, metadata={"data_field": "row_height"})
     header_row_height: float = field(default=40.0, metadata={"data_field": "header_row_height"})
 

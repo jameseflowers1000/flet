@@ -224,6 +224,7 @@ class _SuperTabControlState extends State<SuperTabControl> {
       }
     }
     final frozenColumnsCount = widget.control.getInt("frozen_columns_count", 0)!;
+    final frozenRowsCount = widget.control.getInt("frozen_rows_count", 0)!;
     final rowHeight = widget.control.getDouble("row_height", 36.0)!;
     final headerRowHeight = widget.control.getDouble("header_row_height", 40.0)!;
 
@@ -275,6 +276,7 @@ class _SuperTabControlState extends State<SuperTabControl> {
       headerGridLinesVisibility: GridLinesVisibility.both,
       showCheckboxColumn: showCheckboxColumn,
       frozenColumnsCount: frozenColumnsCount + (showRowNumbers ? 1 : 0),
+      frozenRowsCount: frozenRowsCount,
       headerRowHeight: headerRowHeight,
       rowHeight: rowHeight,
       columns: [
