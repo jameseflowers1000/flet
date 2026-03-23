@@ -37,16 +37,33 @@ class _SuperTabControlState extends State<SuperTabControl> {
   /// Whether the source needs rebuilding (data changed since last build).
   bool _sourceNeedsRebuild = true;
 
+  /// Vertical scroll controller for tracking visible row position.
+  final ScrollController _verticalScroll = ScrollController();
+
+  /// First visible row index (updated on scroll).
+  int _firstVisibleRow = 0;
+
   @override
   void initState() {
     super.initState();
     _gridController = DataGridController();
+    _verticalScroll.addListener(_onScroll);
     _parseData();
     // _sourceNeedsRebuild starts true; first build() will create source with context
   }
 
+  void _onScroll() {
+    final rh = widget.control.getDouble("row_height", 36.0) ?? 36.0;
+    final newFirst = (_verticalScroll.offset / rh).floor();
+    if (newFirst != _firstVisibleRow) {
+      setState(() { _firstVisibleRow = newFirst; });
+    }
+  }
+
   @override
   void dispose() {
+    _verticalScroll.removeListener(_onScroll);
+    _verticalScroll.dispose();
     _gridController.dispose();
     super.dispose();
   }
@@ -278,6 +295,7 @@ class _SuperTabControlState extends State<SuperTabControl> {
     final grid = SfDataGrid(
       source: _source,
       controller: _gridController,
+      verticalScrollController: _verticalScroll,
       allowEditing: editable,
       allowSorting: allowSorting,
       allowColumnsResizing: allowColumnResize,
@@ -410,9 +428,9 @@ class _SuperTabControlState extends State<SuperTabControl> {
                     color: Colors.orange.shade300, fontSize: 10)),
                 ],
                 const Spacer(),
-                Text(totalRows > 0 && _dataRows.length < totalRows
-                    ? '${_dataRows.length} of $totalRows rows'
-                    : '$rowCount rows', style: TextStyle(
+                Text(rowCount > 0
+                    ? 'row ${_firstVisibleRow + 1} of $rowCount'
+                    : '0 rows', style: TextStyle(
                   color: headerTextColor.withValues(alpha: 0.6), fontSize: 11)),
               ],
             ),
