@@ -410,7 +410,9 @@ class _SuperTabControlState extends State<SuperTabControl> {
                     color: Colors.orange.shade300, fontSize: 10)),
                 ],
                 const Spacer(),
-                Text('$rowCount rows', style: TextStyle(
+                Text(totalRows > 0 && _dataRows.length < totalRows
+                    ? '${_dataRows.length} of $totalRows rows'
+                    : '$rowCount rows', style: TextStyle(
                   color: headerTextColor.withValues(alpha: 0.6), fontSize: 11)),
               ],
             ),
