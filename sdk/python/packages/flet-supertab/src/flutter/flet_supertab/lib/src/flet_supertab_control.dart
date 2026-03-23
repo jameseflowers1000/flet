@@ -369,7 +369,8 @@ class _SuperTabControlState extends State<SuperTabControl> {
     final ctype = widget.control.getString("ctype") ?? "";
     final sortIndicator = widget.control.getString("sort_indicator") ?? "";
     final filterActive = widget.control.getBool("filter_active", false) ?? false;
-    final rowCount = _dataRows.length;
+    final totalRows = widget.control.getInt("total_rows", 0) ?? 0;
+    final rowCount = totalRows > 0 ? totalRows : _dataRows.length;
 
     if (label.isNotEmpty || ctype.isNotEmpty) {
       result = Column(
