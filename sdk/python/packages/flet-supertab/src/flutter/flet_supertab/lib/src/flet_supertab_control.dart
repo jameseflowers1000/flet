@@ -347,7 +347,7 @@ class _SuperTabControlState extends State<SuperTabControl> {
               ),
           ],
         ),
-      ] : null,
+      ] : [],
       loadMoreViewBuilder:
           (BuildContext context, LoadMoreRows loadMoreRows) {
         return FutureBuilder<void>(
