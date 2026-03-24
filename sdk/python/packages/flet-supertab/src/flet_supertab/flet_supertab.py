@@ -77,6 +77,9 @@ class SuperTab(ft.LayoutControl):
     # Structure: [[{"bg": "#color", "fg": "#color"} | null, ...], ...]
     cell_styles: Optional[str] = field(default=None, metadata={"data_field": "cell_styles"})
 
+    # JSON-encoded summary row values (list of strings in column order) for footer display
+    summary_row: str = field(default="", metadata={"data_field": "summary_row"})
+
     # Event: called when a cell is edited
     # Event data (in e.data as JSON): {"row_index": int, "column_name": str, "old_value": str, "new_value": str}
     on_cell_edit: Optional[ft.ControlEventHandler["SuperTab"]] = None

@@ -436,11 +436,47 @@ class _SuperTabControlState extends State<SuperTabControl> {
             ),
           ),
           Expanded(child: result),
+          // Summary footer row (§15) — Python-computed values
+          _buildSummaryFooter(headerBg, headerTextColor, cellFontSize, fontFamily),
         ],
       );
     }
 
     return LayoutControl(control: widget.control, child: result);
+  }
+
+  Widget _buildSummaryFooter(Color bg, Color textColor, double fontSize, String? fontFamily) {
+    final summaryJson = widget.control.getString("summary_row") ?? "";
+    if (summaryJson.isEmpty) return const SizedBox.shrink();
+
+    List<String> values;
+    try {
+      values = (jsonDecode(summaryJson) as List).cast<String>();
+    } catch (_) {
+      return const SizedBox.shrink();
+    }
+
+    // Skip if all values are empty
+    if (values.every((v) => v.isEmpty)) return const SizedBox.shrink();
+
+    return Container(
+      color: bg,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      child: Row(
+        children: values.map((v) => Expanded(
+          child: Text(
+            v,
+            style: TextStyle(
+              color: textColor,
+              fontSize: fontSize,
+              fontWeight: FontWeight.bold,
+              fontFamily: fontFamily,
+            ),
+            overflow: TextOverflow.ellipsis,
+          ),
+        )).toList(),
+      ),
+    );
   }
 
   void _handleCellSecondaryTap(DataGridCellTapDetails details) {
