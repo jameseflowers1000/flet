@@ -485,7 +485,7 @@ class FletDataGridSource extends DataGridSource {
     _lastEnterKeyMs = 0;
     if (enterRecent && _gridController != null && rowIndex + 1 < _dataRows.length) {
       final nextRow = RowColumnIndex(rowIndex + 1, rowColumnIndex.columnIndex);
-      _gridController!.moveCurrentCellTo(nextRow);
+      _gridController!.selectedIndex = rowIndex + 1;
     }
   }
 }
