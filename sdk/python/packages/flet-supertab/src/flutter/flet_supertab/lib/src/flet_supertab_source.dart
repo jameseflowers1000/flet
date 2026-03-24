@@ -158,6 +158,9 @@ class FletDataGridSource extends DataGridSource {
       padding: EdgeInsets.symmetric(
           horizontal: cellPaddingHorizontal, vertical: cellPaddingVertical),
       alignment: Alignment.centerRight,
+      decoration: const BoxDecoration(
+        border: Border(top: BorderSide(color: Colors.white24, width: 2)),
+      ),
       child: Text(
         text,
         style: TextStyle(
