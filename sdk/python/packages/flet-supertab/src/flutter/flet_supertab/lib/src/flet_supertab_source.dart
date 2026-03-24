@@ -480,14 +480,12 @@ class FletDataGridSource extends DataGridSource {
       onCellEdit?.call(rowIndex, columnName, oldValue, newValue);
     }
 
-    // Auto-advance to next row — only if Enter was pressed recently (< 200ms)
-    // Invalidate the timestamp so it can't fire again from the same keypress
+    // Move current cell down on Enter — just select, don't auto-edit.
+    // This avoids the flicker from beginEdit tearing down and rebuilding.
     _lastEnterKeyMs = 0;
     if (enterRecent && _gridController != null && rowIndex + 1 < _dataRows.length) {
       final nextRow = RowColumnIndex(rowIndex + 1, rowColumnIndex.columnIndex);
-      Future.delayed(const Duration(milliseconds: 150), () {
-        _gridController!.beginEdit(nextRow);
-      });
+      _gridController!.currentCell = nextRow;
     }
   }
 }
