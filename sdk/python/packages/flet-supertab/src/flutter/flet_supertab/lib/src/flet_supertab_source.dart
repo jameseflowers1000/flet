@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:syncfusion_flutter_datagrid/datagrid.dart';
 
 typedef CellEditCallback = void Function(
@@ -415,30 +416,37 @@ class FletDataGridSource extends DataGridSource {
       padding: EdgeInsets.symmetric(
           horizontal: cellPaddingHorizontal / 1.5, vertical: 2),
       alignment: isNumeric ? Alignment.centerRight : Alignment.centerLeft,
-      child: TextField(
-        controller: _editingController,
-        autofocus: true,
-        textAlign: isNumeric ? TextAlign.right : TextAlign.left,
-        keyboardType: isNumeric
-            ? const TextInputType.numberWithOptions(decimal: true)
-            : TextInputType.text,
-        style: TextStyle(
-          fontSize: cellFontSize,
-          fontFamily: fontFamily,
-        ),
-        decoration: const InputDecoration(
-          contentPadding: EdgeInsets.symmetric(horizontal: 4, vertical: 8),
-          border: InputBorder.none,
-          isDense: true,
-        ),
-        onChanged: (value) {
-          _newCellValue = value;
+      child: KeyboardListener(
+        focusNode: FocusNode(),
+        onKeyEvent: (event) {
+          if (event is KeyDownEvent &&
+              event.logicalKey == LogicalKeyboardKey.enter) {
+            _enterKeySubmit = true;
+          }
         },
-        onSubmitted: (value) {
-          print('[SuperTab] onSubmitted fired — Enter key');
-          _enterKeySubmit = true;
-          submitCell();
-        },
+        child: TextField(
+          controller: _editingController,
+          autofocus: true,
+          textAlign: isNumeric ? TextAlign.right : TextAlign.left,
+          keyboardType: isNumeric
+              ? const TextInputType.numberWithOptions(decimal: true)
+              : TextInputType.text,
+          style: TextStyle(
+            fontSize: cellFontSize,
+            fontFamily: fontFamily,
+          ),
+          decoration: const InputDecoration(
+            contentPadding: EdgeInsets.symmetric(horizontal: 4, vertical: 8),
+            border: InputBorder.none,
+            isDense: true,
+          ),
+          onChanged: (value) {
+            _newCellValue = value;
+          },
+          onSubmitted: (value) {
+            submitCell();
+          },
+        ),
       ),
     );
   }
