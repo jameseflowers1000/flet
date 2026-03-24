@@ -85,6 +85,9 @@ class FletDataGridSource extends DataGridSource {
   /// Python-computed summary values (one per column, in column order)
   final List<String> summaryValues;
 
+  /// True when Enter key triggered the submit (advance to next row)
+  bool _enterKeySubmit = false;
+
   /// Holds the new value during editing
   dynamic _newCellValue;
 
@@ -432,6 +435,7 @@ class FletDataGridSource extends DataGridSource {
           _newCellValue = value;
         },
         onSubmitted: (value) {
+          _enterKeySubmit = true;
           submitCell();
         },
       ),
@@ -465,13 +469,15 @@ class FletDataGridSource extends DataGridSource {
       onCellEdit?.call(rowIndex, columnName, oldValue, newValue);
     }
 
-    // Move to the next row in the same column and begin editing
-    if (_gridController != null && rowIndex + 1 < _dataRows.length) {
+    // Move to the next row in the same column — only on Enter key submit
+    if (_enterKeySubmit && _gridController != null && rowIndex + 1 < _dataRows.length) {
+      _enterKeySubmit = false;
       Future.delayed(const Duration(milliseconds: 100), () {
         final nextRow = RowColumnIndex(rowIndex + 1, rowColumnIndex.columnIndex);
         _gridController!.beginEdit(nextRow);
       });
     }
+    _enterKeySubmit = false;
   }
 }
 
