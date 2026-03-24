@@ -433,15 +433,6 @@ class FletDataGridSource extends DataGridSource {
         },
         onSubmitted: (value) {
           submitCell();
-          // After commit, move to the next row in the same column
-          // Delay slightly so Syncfusion finishes the submit cycle
-          Future.delayed(const Duration(milliseconds: 50), () {
-            if (_gridController != null) {
-              final nextRow = rowColumnIndex.rowIndex + 1;
-              final col = rowColumnIndex.columnIndex;
-              _gridController!.beginEdit(RowColumnIndex(nextRow, col));
-            }
-          });
         },
       ),
     );
@@ -472,6 +463,14 @@ class FletDataGridSource extends DataGridSource {
       _buildDataGridRows();
       notifyListeners();
       onCellEdit?.call(rowIndex, columnName, oldValue, newValue);
+    }
+
+    // Move to the next row in the same column and begin editing
+    if (_gridController != null && rowIndex + 1 < _dataRows.length) {
+      Future.delayed(const Duration(milliseconds: 100), () {
+        final nextRow = RowColumnIndex(rowIndex + 1, rowColumnIndex.columnIndex);
+        _gridController!.beginEdit(nextRow);
+      });
     }
   }
 }
