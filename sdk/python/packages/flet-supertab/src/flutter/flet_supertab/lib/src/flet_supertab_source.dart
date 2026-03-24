@@ -5,6 +5,7 @@ typedef CellEditCallback = void Function(
     int rowIndex, String columnName, Object? oldValue, Object? newValue);
 
 typedef PageRequestCallback = void Function(int offset, int limit);
+typedef SortRequestCallback = void Function(String columnName, bool ascending);
 
 class FletDataGridSource extends DataGridSource {
   FletDataGridSource({
@@ -14,6 +15,7 @@ class FletDataGridSource extends DataGridSource {
     List<dynamic>? columnDefs,
     this.onCellEdit,
     this.onPageRequest,
+    this.onSortRequest,
     this.showRowNumbers = false,
     this.cellTextColor = Colors.transparent,
     this.cellBgColor = Colors.transparent,
@@ -68,6 +70,9 @@ class FletDataGridSource extends DataGridSource {
 
   /// Callback for page requests (LOD / lazy loading)
   final PageRequestCallback? onPageRequest;
+
+  /// Callback for sort requests — Python-side sort
+  final SortRequestCallback? onSortRequest;
 
   /// Per-cell styles: cellStyles[rowIndex][colIndex] may be {"bg": "#hex", "fg": "#hex"} or null
   final List<List<Map<String, String>?>> cellStyles;
@@ -132,6 +137,18 @@ class FletDataGridSource extends DataGridSource {
 
   @override
   List<DataGridRow> get rows => _rows;
+
+  @override
+  void performSorting(List<DataGridRow> rows) {
+    // Don't sort locally — fire event to Python for server-side sort.
+    // Python computes _sorted_indices and pushes a re-ordered page.
+    if (onSortRequest != null && sortedColumns.isNotEmpty) {
+      final sc = sortedColumns.first;
+      final ascending = sc.sortDirection == DataGridSortDirection.ascending;
+      onSortRequest!(sc.name, ascending);
+    }
+    // Don't call super — prevent Syncfusion from sorting the local rows
+  }
 
   @override
   Future<void> handleLoadMoreRows() async {

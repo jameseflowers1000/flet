@@ -146,6 +146,7 @@ class _SuperTabControlState extends State<SuperTabControl> {
       columnDefs: _cols,
       onCellEdit: _handleCellEdit,
       onPageRequest: _handlePageRequest,
+      onSortRequest: _handleSortRequest,
       showRowNumbers: showRowNumbers,
       cellTextColor: cellTextColor,
       cellBgColor: cellBgColor,
@@ -177,6 +178,14 @@ class _SuperTabControlState extends State<SuperTabControl> {
       "limit": limit,
     });
     widget.control.triggerEventWithoutSubscribers("page_request", eventData);
+  }
+
+  void _handleSortRequest(String columnName, bool ascending) {
+    final eventData = jsonEncode({
+      "column": columnName,
+      "ascending": ascending,
+    });
+    widget.control.triggerEventWithoutSubscribers("sort_request", eventData);
   }
 
   void _handleSelectionChanged(

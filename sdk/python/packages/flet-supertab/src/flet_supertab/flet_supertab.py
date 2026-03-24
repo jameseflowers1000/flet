@@ -97,6 +97,10 @@ class SuperTab(ft.LayoutControl):
     # EScalar analog: same Flet event pattern as on_cell_edit (escalar has no LOD)
     on_page_request: Optional[ft.ControlEventHandler["SuperTab"]] = None
 
+    # Event: sort request — fired when user clicks a column header to sort
+    # Event data (in e.data as JSON): {"column": str, "ascending": bool}
+    on_sort_request: Optional[ft.ControlEventHandler["SuperTab"]] = None
+
     # Total row count for LOD (Dart uses this to size the scrollbar)
     total_rows: int = field(default=0, metadata={"data_field": "total_rows"})
 
