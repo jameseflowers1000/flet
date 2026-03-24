@@ -86,8 +86,8 @@ class FletDataGridSource extends DataGridSource {
   /// Python-computed summary values (one per column, in column order)
   final List<String> summaryValues;
 
-  /// True when Enter key triggered the submit (advance to next row)
-  bool _enterKeySubmit = false;
+  /// Timestamp of last Enter keypress — only advance if recent (< 200ms)
+  int _lastEnterKeyMs = 0;
 
   /// Holds the new value during editing
   dynamic _newCellValue;
@@ -421,7 +421,7 @@ class FletDataGridSource extends DataGridSource {
         onKeyEvent: (event) {
           if (event is KeyDownEvent &&
               event.logicalKey == LogicalKeyboardKey.enter) {
-            _enterKeySubmit = true;
+            _lastEnterKeyMs = DateTime.now().millisecondsSinceEpoch;
           }
         },
         child: TextField(
@@ -457,7 +457,8 @@ class FletDataGridSource extends DataGridSource {
     RowColumnIndex rowColumnIndex,
     GridColumn column,
   ) async {
-    print('[SuperTab] onCellSubmit fired — enterKeySubmit=$_enterKeySubmit, row=${rowColumnIndex.rowIndex}');
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final enterRecent = (now - _lastEnterKeyMs) < 200;
     final rowIndex = rowColumnIndex.rowIndex;
     final columnName = column.columnName;
 
@@ -479,16 +480,15 @@ class FletDataGridSource extends DataGridSource {
       onCellEdit?.call(rowIndex, columnName, oldValue, newValue);
     }
 
-    // Auto-advance to next row on Enter key submit only
-    if (_enterKeySubmit && _gridController != null && rowIndex + 1 < _dataRows.length) {
-      _enterKeySubmit = false;
+    // Auto-advance to next row — only if Enter was pressed recently (< 200ms)
+    // Invalidate the timestamp so it can't fire again from the same keypress
+    _lastEnterKeyMs = 0;
+    if (enterRecent && _gridController != null && rowIndex + 1 < _dataRows.length) {
       final nextRow = RowColumnIndex(rowIndex + 1, rowColumnIndex.columnIndex);
-      print('[SuperTab] beginEdit → row ${rowIndex + 1}');
       Future.delayed(const Duration(milliseconds: 150), () {
         _gridController!.beginEdit(nextRow);
       });
     }
-    _enterKeySubmit = false;
   }
 }
 
