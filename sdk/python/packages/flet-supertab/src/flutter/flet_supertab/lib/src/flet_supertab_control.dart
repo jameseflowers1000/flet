@@ -147,6 +147,7 @@ class _SuperTabControlState extends State<SuperTabControl> {
       onCellEdit: _handleCellEdit,
       onPageRequest: _handlePageRequest,
       onSortRequest: _handleSortRequest,
+      gridController: _gridController,
       showRowNumbers: showRowNumbers,
       cellTextColor: cellTextColor,
       cellBgColor: cellBgColor,

@@ -16,6 +16,7 @@ class FletDataGridSource extends DataGridSource {
     this.onCellEdit,
     this.onPageRequest,
     this.onSortRequest,
+    DataGridController? gridController,
     this.showRowNumbers = false,
     this.cellTextColor = Colors.transparent,
     this.cellBgColor = Colors.transparent,
@@ -30,6 +31,7 @@ class FletDataGridSource extends DataGridSource {
   })  : _columnNames = columnNames,
         _columnDefs = columnDefs ?? [],
         _rawRows = rawRows ?? [] {
+    _gridController = gridController;
     _dataRows = rows;
     _buildColumnTypes();
     _buildDataGridRows();
@@ -73,6 +75,9 @@ class FletDataGridSource extends DataGridSource {
 
   /// Callback for sort requests — Python-side sort
   final SortRequestCallback? onSortRequest;
+
+  /// Grid controller for programmatic cell navigation (Enter → next row)
+  DataGridController? _gridController;
 
   /// Per-cell styles: cellStyles[rowIndex][colIndex] may be {"bg": "#hex", "fg": "#hex"} or null
   final List<List<Map<String, String>?>> cellStyles;
@@ -428,6 +433,15 @@ class FletDataGridSource extends DataGridSource {
         },
         onSubmitted: (value) {
           submitCell();
+          // After commit, move to the next row in the same column
+          // Delay slightly so Syncfusion finishes the submit cycle
+          Future.delayed(const Duration(milliseconds: 50), () {
+            if (_gridController != null) {
+              final nextRow = rowColumnIndex.rowIndex + 1;
+              final col = rowColumnIndex.columnIndex;
+              _gridController!.beginEdit(RowColumnIndex(nextRow, col));
+            }
+          });
         },
       ),
     );
