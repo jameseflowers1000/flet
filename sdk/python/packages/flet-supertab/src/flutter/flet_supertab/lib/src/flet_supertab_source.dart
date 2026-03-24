@@ -86,8 +86,6 @@ class FletDataGridSource extends DataGridSource {
   /// Python-computed summary values (one per column, in column order)
   final List<String> summaryValues;
 
-  /// Timestamp of last Enter keypress — only advance if recent (< 200ms)
-  int _lastEnterKeyMs = 0;
 
   /// Holds the new value during editing
   dynamic _newCellValue;
@@ -416,13 +414,23 @@ class FletDataGridSource extends DataGridSource {
       padding: EdgeInsets.symmetric(
           horizontal: cellPaddingHorizontal / 1.5, vertical: 2),
       alignment: isNumeric ? Alignment.centerRight : Alignment.centerLeft,
-      child: KeyboardListener(
-        focusNode: FocusNode(),
-        onKeyEvent: (event) {
+      child: Focus(
+        onKeyEvent: (node, event) {
           if (event is KeyDownEvent &&
               event.logicalKey == LogicalKeyboardKey.enter) {
-            _lastEnterKeyMs = DateTime.now().millisecondsSinceEpoch;
+            // Consume Enter — prevent Syncfusion from seeing it.
+            // We handle submit + navigation ourselves.
+            _newCellValue = _editingController.text;
+            submitCell();
+            if (_gridController != null && rowColumnIndex.rowIndex + 1 < _dataRows.length) {
+              Future.delayed(const Duration(milliseconds: 50), () {
+                _gridController!.beginEdit(
+                  RowColumnIndex(rowColumnIndex.rowIndex + 1, rowColumnIndex.columnIndex));
+              });
+            }
+            return KeyEventResult.handled; // swallow the event
           }
+          return KeyEventResult.ignored; // let other keys pass through
         },
         child: TextField(
           controller: _editingController,
@@ -457,8 +465,6 @@ class FletDataGridSource extends DataGridSource {
     RowColumnIndex rowColumnIndex,
     GridColumn column,
   ) async {
-    final now = DateTime.now().millisecondsSinceEpoch;
-    final enterRecent = (now - _lastEnterKeyMs) < 200;
     final rowIndex = rowColumnIndex.rowIndex;
     final columnName = column.columnName;
 
@@ -480,13 +486,7 @@ class FletDataGridSource extends DataGridSource {
       onCellEdit?.call(rowIndex, columnName, oldValue, newValue);
     }
 
-    // Move current cell down on Enter — just select, don't auto-edit.
-    // This avoids the flicker from beginEdit tearing down and rebuilding.
-    _lastEnterKeyMs = 0;
-    if (enterRecent && _gridController != null && rowIndex + 1 < _dataRows.length) {
-      final nextRow = RowColumnIndex(rowIndex + 1, rowColumnIndex.columnIndex);
-      _gridController!.selectedIndex = rowIndex + 1;
-    }
+    // Enter key navigation handled in Focus.onKeyEvent in buildEditWidget.
   }
 }
 
