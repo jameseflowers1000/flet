@@ -24,6 +24,7 @@ class FletDataGridSource extends DataGridSource {
     this.cellPaddingVertical = 4.0,
     this.overrideCells = const {},
     this.cellStyles = const [],
+    this.summaryValues = const [],
   })  : _columnNames = columnNames,
         _columnDefs = columnDefs ?? [],
         _rawRows = rawRows ?? [] {
@@ -70,6 +71,9 @@ class FletDataGridSource extends DataGridSource {
 
   /// Per-cell styles: cellStyles[rowIndex][colIndex] may be {"bg": "#hex", "fg": "#hex"} or null
   final List<List<Map<String, String>?>> cellStyles;
+
+  /// Python-computed summary values (one per column, in column order)
+  final List<String> summaryValues;
 
   /// Holds the new value during editing
   dynamic _newCellValue;
@@ -134,6 +138,35 @@ class FletDataGridSource extends DataGridSource {
     if (onPageRequest != null) {
       onPageRequest!(_dataRows.length, 100);
     }
+  }
+
+  @override
+  Widget? buildTableSummaryCellWidget(
+      GridTableSummaryRow summaryRow,
+      GridSummaryColumn? summaryColumn,
+      RowColumnIndex rowColumnIndex,
+      String summaryValue) {
+    if (summaryColumn == null) return null;
+    // Find column index by name
+    final colIdx = _columnNames.indexOf(summaryColumn.columnName);
+    // Account for row-number column offset
+    final valueIdx = showRowNumbers ? colIdx : colIdx;
+    final text = (valueIdx >= 0 && valueIdx < summaryValues.length)
+        ? summaryValues[valueIdx]
+        : '';
+    return Container(
+      padding: EdgeInsets.symmetric(
+          horizontal: cellPaddingHorizontal, vertical: cellPaddingVertical),
+      alignment: Alignment.centerRight,
+      child: Text(
+        text,
+        style: TextStyle(
+          fontWeight: FontWeight.bold,
+          fontSize: cellFontSize,
+          fontFamily: fontFamily,
+        ),
+      ),
+    );
   }
 
   @override
