@@ -469,15 +469,9 @@ class FletDataGridSource extends DataGridSource {
       onCellEdit?.call(rowIndex, columnName, oldValue, newValue);
     }
 
-    // Move to the next row in the same column — only on Enter key submit
-    if (_enterKeySubmit && _gridController != null && rowIndex + 1 < _dataRows.length) {
-      _enterKeySubmit = false;
-      Future.delayed(const Duration(milliseconds: 100), () {
-        final nextRow = RowColumnIndex(rowIndex + 1, rowColumnIndex.columnIndex);
-        _gridController!.beginEdit(nextRow);
-      });
-    }
-    _enterKeySubmit = false;
+    // TODO: auto-advance to next row on Enter — needs proper Syncfusion
+    // keyboard event integration. Current attempts cause runaway loops
+    // or don't fire. Revisit with Syncfusion documentation.
   }
 }
 
