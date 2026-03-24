@@ -139,7 +139,7 @@ class FletDataGridSource extends DataGridSource {
   List<DataGridRow> get rows => _rows;
 
   @override
-  void performSorting(List<DataGridRow> rows) {
+  Future<void> performSorting(List<DataGridRow> rows) async {
     // Don't sort locally — fire event to Python for server-side sort.
     // Python computes _sorted_indices and pushes a re-ordered page.
     if (onSortRequest != null && sortedColumns.isNotEmpty) {
