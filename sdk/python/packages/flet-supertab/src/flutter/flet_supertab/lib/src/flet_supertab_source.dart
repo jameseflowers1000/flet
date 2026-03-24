@@ -435,6 +435,7 @@ class FletDataGridSource extends DataGridSource {
           _newCellValue = value;
         },
         onSubmitted: (value) {
+          print('[SuperTab] onSubmitted fired — Enter key');
           _enterKeySubmit = true;
           submitCell();
         },
@@ -448,6 +449,7 @@ class FletDataGridSource extends DataGridSource {
     RowColumnIndex rowColumnIndex,
     GridColumn column,
   ) async {
+    print('[SuperTab] onCellSubmit fired — enterKeySubmit=$_enterKeySubmit, row=${rowColumnIndex.rowIndex}');
     final rowIndex = rowColumnIndex.rowIndex;
     final columnName = column.columnName;
 
@@ -469,9 +471,16 @@ class FletDataGridSource extends DataGridSource {
       onCellEdit?.call(rowIndex, columnName, oldValue, newValue);
     }
 
-    // TODO: auto-advance to next row on Enter — needs proper Syncfusion
-    // keyboard event integration. Current attempts cause runaway loops
-    // or don't fire. Revisit with Syncfusion documentation.
+    // Auto-advance to next row on Enter key submit only
+    if (_enterKeySubmit && _gridController != null && rowIndex + 1 < _dataRows.length) {
+      _enterKeySubmit = false;
+      final nextRow = RowColumnIndex(rowIndex + 1, rowColumnIndex.columnIndex);
+      print('[SuperTab] beginEdit → row ${rowIndex + 1}');
+      Future.delayed(const Duration(milliseconds: 150), () {
+        _gridController!.beginEdit(nextRow);
+      });
+    }
+    _enterKeySubmit = false;
   }
 }
 
