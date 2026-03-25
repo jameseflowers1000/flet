@@ -1143,9 +1143,6 @@ class RowSelectionManager extends SelectionManagerBase {
   Future<void> handleKeyEvent(KeyEvent keyEvent) async {
     final DataGridConfiguration dataGridConfiguration =
         _dataGridStateDetails!();
-    // EPYX: capture editing state BEFORE onCellSubmit ends it
-    final bool _wasEditingBeforeSubmit = dataGridConfiguration.currentCell.isEditing;
-    print('[EPYX handleKeyEvent] key=${keyEvent.logicalKey.keyLabel} wasEditing=$_wasEditingBeforeSubmit');
     if (dataGridConfiguration.currentCell.isEditing &&
         keyEvent.logicalKey != LogicalKeyboardKey.escape) {
       if (!await dataGridConfiguration.currentCell.canSubmitCell(
@@ -1188,28 +1185,6 @@ class RowSelectionManager extends SelectionManagerBase {
         keyEvent.logicalKey == LogicalKeyboardKey.enter) {
       _processKeyDown(keyEvent);
       if (keyEvent.logicalKey == LogicalKeyboardKey.enter) {
-        // EPYX PATCH: If was editing, auto-start editing the next cell.
-        // _wasEditingBeforeSubmit captured at top of handleKeyEvent,
-        // BEFORE onCellSubmit (line 1154) ended the edit.
-        print('[EPYX PATCH] enter key: wasEditing=$_wasEditingBeforeSubmit allowEditing=${dataGridConfiguration.allowEditing} navMode=${dataGridConfiguration.navigationMode}');
-        if (_wasEditingBeforeSubmit &&
-            dataGridConfiguration.allowEditing &&
-            dataGridConfiguration.navigationMode == GridNavigationMode.cell) {
-          // EPYX PATCH: Begin editing the cell we just moved to.
-          // Use needToResolveIndex: false because _processKeyDown already
-          // resolved the indices. Then force a source notify to rebuild the cell widget.
-          final RowColumnIndex nextRowCol = RowColumnIndex(
-            dataGridConfiguration.currentCell.rowIndex,
-            dataGridConfiguration.currentCell.columnIndex,
-          );
-          dataGridConfiguration.currentCell.onCellBeginEdit(
-            editingRowColumnIndex: nextRowCol,
-            isProgrammatic: true,
-            needToResolveIndex: false,
-          );
-          // Force the source to rebuild the cell with the editing widget
-          dataGridConfiguration.source.notifyListeners();
-        }
         return;
       }
     }
