@@ -1673,10 +1673,9 @@ packages:
   syncfusion_flutter_datagrid:
     dependency: transitive
     description:
-      name: syncfusion_flutter_datagrid
-      sha256: b767fb85658de0007de1409d04a37d5a40a332bdcaac0c6049382aada787c438
-      url: "https://pub.dev"
-    source: hosted
+      path: "../vendor/syncfusion_flutter_datagrid"
+      relative: true
+    source: path
     version: "32.2.7"
   synchronized:
     dependency: transitive

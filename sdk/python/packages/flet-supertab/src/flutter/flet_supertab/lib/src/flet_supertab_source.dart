@@ -436,7 +436,6 @@ class FletDataGridSource extends DataGridSource {
             submitCell();
           },
         ),
-      ),
     );
   }
 
