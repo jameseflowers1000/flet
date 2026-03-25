@@ -1186,20 +1186,23 @@ class RowSelectionManager extends SelectionManagerBase {
       final bool wasEditing = dataGridConfiguration.currentCell.isEditing;
       _processKeyDown(keyEvent);
       if (keyEvent.logicalKey == LogicalKeyboardKey.enter) {
-        // EPYX PATCH: If was editing, auto-start editing the next cell
-        // (same pattern as F2 key at line 1225)
+        // EPYX PATCH: If was editing, auto-start editing the next cell.
+        // Must schedule after the current event cycle completes so
+        // Syncfusion finishes its cell-move + submit cleanup first.
         if (wasEditing &&
             dataGridConfiguration.allowEditing &&
             dataGridConfiguration.navigationMode == GridNavigationMode.cell) {
-          final RowColumnIndex nextRowCol = RowColumnIndex(
-            dataGridConfiguration.currentCell.rowIndex,
-            dataGridConfiguration.currentCell.columnIndex,
-          );
-          dataGridConfiguration.currentCell.onCellBeginEdit(
-            editingRowColumnIndex: nextRowCol,
-            isProgrammatic: true,
-            needToResolveIndex: false,
-          );
+          Future<void>.delayed(Duration.zero, () {
+            final RowColumnIndex nextRowCol = RowColumnIndex(
+              dataGridConfiguration.currentCell.rowIndex,
+              dataGridConfiguration.currentCell.columnIndex,
+            );
+            dataGridConfiguration.currentCell.onCellBeginEdit(
+              editingRowColumnIndex: nextRowCol,
+              isProgrammatic: true,
+              needToResolveIndex: false,
+            );
+          });
         }
         return;
       }
