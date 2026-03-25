@@ -1195,18 +1195,20 @@ class RowSelectionManager extends SelectionManagerBase {
         if (_wasEditingBeforeSubmit &&
             dataGridConfiguration.allowEditing &&
             dataGridConfiguration.navigationMode == GridNavigationMode.cell) {
-          // Use DataGridController.beginEdit — the public API that handles
-          // handleTap, index resolution, and widget rebuild correctly.
-          final controller = dataGridConfiguration.controller;
-          if (controller != null) {
-            final RowColumnIndex nextRowCol = RowColumnIndex(
-              dataGridConfiguration.currentCell.rowIndex,
-              dataGridConfiguration.currentCell.columnIndex,
-            );
-            Future<void>.delayed(const Duration(milliseconds: 50), () {
-              controller.beginEdit(nextRowCol);
-            });
-          }
+          // EPYX PATCH: Begin editing the cell we just moved to.
+          // Use needToResolveIndex: false because _processKeyDown already
+          // resolved the indices. Then force a source notify to rebuild the cell widget.
+          final RowColumnIndex nextRowCol = RowColumnIndex(
+            dataGridConfiguration.currentCell.rowIndex,
+            dataGridConfiguration.currentCell.columnIndex,
+          );
+          dataGridConfiguration.currentCell.onCellBeginEdit(
+            editingRowColumnIndex: nextRowCol,
+            isProgrammatic: true,
+            needToResolveIndex: false,
+          );
+          // Force the source to rebuild the cell with the editing widget
+          dataGridConfiguration.source.notifyListeners();
         }
         return;
       }
