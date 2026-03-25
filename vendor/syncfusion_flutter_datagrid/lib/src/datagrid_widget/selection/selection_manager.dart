@@ -1205,7 +1205,6 @@ class RowSelectionManager extends SelectionManagerBase {
             dataGridConfiguration.currentCell.onCellBeginEdit(
               editingRowColumnIndex: nextRowCol,
               isProgrammatic: true,
-              needToResolveIndex: false,
             );
             print('[EPYX PATCH] after beginEdit: isEditing=${dataGridConfiguration.currentCell.isEditing}');
           });
