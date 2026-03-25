@@ -414,25 +414,7 @@ class FletDataGridSource extends DataGridSource {
       padding: EdgeInsets.symmetric(
           horizontal: cellPaddingHorizontal / 1.5, vertical: 2),
       alignment: isNumeric ? Alignment.centerRight : Alignment.centerLeft,
-      child: Focus(
-        onKeyEvent: (node, event) {
-          if (event is KeyDownEvent &&
-              event.logicalKey == LogicalKeyboardKey.enter) {
-            // Consume Enter — prevent Syncfusion from seeing it.
-            // We handle submit + navigation ourselves.
-            _newCellValue = _editingController.text;
-            submitCell();
-            if (_gridController != null && rowColumnIndex.rowIndex + 1 < _dataRows.length) {
-              Future.delayed(const Duration(milliseconds: 50), () {
-                _gridController!.beginEdit(
-                  RowColumnIndex(rowColumnIndex.rowIndex + 1, rowColumnIndex.columnIndex));
-              });
-            }
-            return KeyEventResult.handled; // swallow the event
-          }
-          return KeyEventResult.ignored; // let other keys pass through
-        },
-        child: TextField(
+      child: TextField(
           controller: _editingController,
           autofocus: true,
           textAlign: isNumeric ? TextAlign.right : TextAlign.left,
@@ -486,7 +468,11 @@ class FletDataGridSource extends DataGridSource {
       onCellEdit?.call(rowIndex, columnName, oldValue, newValue);
     }
 
-    // Enter key navigation handled in Focus.onKeyEvent in buildEditWidget.
+    // TODO: Enter-to-next-row navigation. Requires either modifying
+    // Syncfusion source or building custom editing widget that fully
+    // controls keyboard events. All attempts to intercept Enter from
+    // within buildEditWidget failed — Syncfusion handles it at the
+    // grid level and overrides any navigation we attempt.
   }
 }
 
