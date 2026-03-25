@@ -1143,6 +1143,8 @@ class RowSelectionManager extends SelectionManagerBase {
   Future<void> handleKeyEvent(KeyEvent keyEvent) async {
     final DataGridConfiguration dataGridConfiguration =
         _dataGridStateDetails!();
+    // EPYX: capture editing state BEFORE onCellSubmit ends it
+    final bool _wasEditingBeforeSubmit = dataGridConfiguration.currentCell.isEditing;
     if (dataGridConfiguration.currentCell.isEditing &&
         keyEvent.logicalKey != LogicalKeyboardKey.escape) {
       if (!await dataGridConfiguration.currentCell.canSubmitCell(
@@ -1183,13 +1185,12 @@ class RowSelectionManager extends SelectionManagerBase {
 
     if (keyEvent.logicalKey == LogicalKeyboardKey.arrowDown ||
         keyEvent.logicalKey == LogicalKeyboardKey.enter) {
-      final bool wasEditing = dataGridConfiguration.currentCell.isEditing;
       _processKeyDown(keyEvent);
       if (keyEvent.logicalKey == LogicalKeyboardKey.enter) {
         // EPYX PATCH: If was editing, auto-start editing the next cell.
-        // Must schedule after the current event cycle completes so
-        // Syncfusion finishes its cell-move + submit cleanup first.
-        if (wasEditing &&
+        // _wasEditingBeforeSubmit captured at top of handleKeyEvent,
+        // BEFORE onCellSubmit (line 1154) ended the edit.
+        if (_wasEditingBeforeSubmit &&
             dataGridConfiguration.allowEditing &&
             dataGridConfiguration.navigationMode == GridNavigationMode.cell) {
           Future<void>.delayed(Duration.zero, () {
