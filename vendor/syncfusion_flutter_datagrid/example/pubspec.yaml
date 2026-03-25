@@ -1,0 +1,19 @@
+name: datagrid_example
+description: This project demonstrates how to use Syncfusion Flutter DataGrid widget.
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.7.0
+
+flutter:
+  uses-material-design: true
+
+dependencies:
+  flutter:
+    sdk: flutter
+  syncfusion_flutter_datagrid:
+    path: ../
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
