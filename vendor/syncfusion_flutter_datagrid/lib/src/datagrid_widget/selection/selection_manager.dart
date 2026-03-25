@@ -1145,6 +1145,7 @@ class RowSelectionManager extends SelectionManagerBase {
         _dataGridStateDetails!();
     // EPYX: capture editing state BEFORE onCellSubmit ends it
     final bool _wasEditingBeforeSubmit = dataGridConfiguration.currentCell.isEditing;
+    print('[EPYX handleKeyEvent] key=${keyEvent.logicalKey.keyLabel} wasEditing=$_wasEditingBeforeSubmit');
     if (dataGridConfiguration.currentCell.isEditing &&
         keyEvent.logicalKey != LogicalKeyboardKey.escape) {
       if (!await dataGridConfiguration.currentCell.canSubmitCell(
@@ -1190,9 +1191,11 @@ class RowSelectionManager extends SelectionManagerBase {
         // EPYX PATCH: If was editing, auto-start editing the next cell.
         // _wasEditingBeforeSubmit captured at top of handleKeyEvent,
         // BEFORE onCellSubmit (line 1154) ended the edit.
+        print('[EPYX PATCH] enter key: wasEditing=$_wasEditingBeforeSubmit allowEditing=${dataGridConfiguration.allowEditing} navMode=${dataGridConfiguration.navigationMode}');
         if (_wasEditingBeforeSubmit &&
             dataGridConfiguration.allowEditing &&
             dataGridConfiguration.navigationMode == GridNavigationMode.cell) {
+          print('[EPYX PATCH] scheduling beginEdit on next cell');
           Future<void>.delayed(Duration.zero, () {
             final RowColumnIndex nextRowCol = RowColumnIndex(
               dataGridConfiguration.currentCell.rowIndex,
