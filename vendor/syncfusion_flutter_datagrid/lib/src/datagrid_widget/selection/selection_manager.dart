@@ -1195,19 +1195,18 @@ class RowSelectionManager extends SelectionManagerBase {
         if (_wasEditingBeforeSubmit &&
             dataGridConfiguration.allowEditing &&
             dataGridConfiguration.navigationMode == GridNavigationMode.cell) {
-          print('[EPYX PATCH] scheduling beginEdit on next cell');
-          Future<void>.delayed(const Duration(milliseconds: 50), () {
+          // Use DataGridController.beginEdit — the public API that handles
+          // handleTap, index resolution, and widget rebuild correctly.
+          final controller = dataGridConfiguration.controller;
+          if (controller != null) {
             final RowColumnIndex nextRowCol = RowColumnIndex(
               dataGridConfiguration.currentCell.rowIndex,
               dataGridConfiguration.currentCell.columnIndex,
             );
-            print('[EPYX PATCH] executing beginEdit at row=${nextRowCol.rowIndex} col=${nextRowCol.columnIndex} isEditing=${dataGridConfiguration.currentCell.isEditing}');
-            dataGridConfiguration.currentCell.onCellBeginEdit(
-              editingRowColumnIndex: nextRowCol,
-              isProgrammatic: true,
-            );
-            print('[EPYX PATCH] after beginEdit: isEditing=${dataGridConfiguration.currentCell.isEditing}');
-          });
+            Future<void>.delayed(const Duration(milliseconds: 50), () {
+              controller.beginEdit(nextRowCol);
+            });
+          }
         }
         return;
       }
