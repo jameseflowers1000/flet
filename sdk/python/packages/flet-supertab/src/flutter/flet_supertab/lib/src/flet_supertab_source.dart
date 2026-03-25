@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:syncfusion_flutter_datagrid/datagrid.dart';
 
 typedef CellEditCallback = void Function(
@@ -468,11 +467,8 @@ class FletDataGridSource extends DataGridSource {
       onCellEdit?.call(rowIndex, columnName, oldValue, newValue);
     }
 
-    // TODO: Enter-to-next-row navigation. Requires either modifying
-    // Syncfusion source or building custom editing widget that fully
-    // controls keyboard events. All attempts to intercept Enter from
-    // within buildEditWidget failed — Syncfusion handles it at the
-    // grid level and overrides any navigation we attempt.
+    // Enter-to-next-row handled by vendored Syncfusion patch
+    // (selection_manager.dart EPYX PATCH at _processKeyDown)
   }
 }
 

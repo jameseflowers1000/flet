@@ -14,7 +14,8 @@ dependencies:
   flet:
     path: ../../../../../../../packages/flet
 
-  syncfusion_flutter_datagrid: any
+  syncfusion_flutter_datagrid:
+    path: ../../../../../../../vendor/syncfusion_flutter_datagrid
 
 dev_dependencies:
   flutter_test:
