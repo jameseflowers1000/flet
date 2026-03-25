@@ -298,6 +298,8 @@ class FletDataGridSource extends DataGridSource {
           ? value.toDouble()
           : double.tryParse(value.toString());
       if (d != null) {
+        if (d.isNaN) return 'NaN';
+        if (d.isInfinite) return d.isNegative ? '-Inf' : 'Inf';
         if (d == d.roundToDouble() && d.abs() < 1e15) {
           return d.toInt().toString();
         }
@@ -347,6 +349,8 @@ class FletDataGridSource extends DataGridSource {
     double? numValue =
         value is num ? value.toDouble() : double.tryParse(value.toString());
     if (numValue == null) return null;
+    if (numValue.isNaN) return 'NaN';
+    if (numValue.isInfinite) return numValue.isNegative ? '-Inf' : 'Inf';
 
     String result;
     if (decimals > 0) {
