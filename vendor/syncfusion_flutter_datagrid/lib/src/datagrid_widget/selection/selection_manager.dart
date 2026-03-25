@@ -1196,7 +1196,7 @@ class RowSelectionManager extends SelectionManagerBase {
             dataGridConfiguration.allowEditing &&
             dataGridConfiguration.navigationMode == GridNavigationMode.cell) {
           print('[EPYX PATCH] scheduling beginEdit on next cell');
-          Future<void>.delayed(Duration.zero, () {
+          Future<void>.delayed(const Duration(milliseconds: 50), () {
             final RowColumnIndex nextRowCol = RowColumnIndex(
               dataGridConfiguration.currentCell.rowIndex,
               dataGridConfiguration.currentCell.columnIndex,
