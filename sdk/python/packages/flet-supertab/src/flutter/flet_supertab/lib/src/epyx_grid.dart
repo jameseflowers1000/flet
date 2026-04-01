@@ -182,6 +182,7 @@ class _EpyxGridState extends State<EpyxGrid> {
       _sourceNeedsRebuild = false;
       _sourceInitialized = true;
     }
+    print('[EpyxGrid] build: ${_source.rowCount} rows, ${_source.columnCount} cols');
 
     final totalRows = widget.control.getInt("total_rows", 0) ?? 0;
     final label = widget.control.getString("label") ?? "";
@@ -556,37 +557,40 @@ class _EpyxGridState extends State<EpyxGrid> {
     final textColor = fg ?? _source.cellTextColor;
     final bgColor = bg;
 
-    return Container(
-      width: _source.columnWidth(colIndex),
-      height: _source.rowHeight,
-      padding: EdgeInsets.symmetric(
-        horizontal: _source.cellPaddingH,
-        vertical: _source.cellPaddingV,
-      ),
-      alignment: _source.isNumericColumn(colIndex)
-          ? Alignment.centerRight
-          : Alignment.centerLeft,
-      decoration: BoxDecoration(
-        color: bgColor,
-        border: isSelected
-            ? Border.all(
-                color: _source.currentCellBorderColor,
-                width: _source.currentCellBorderWidth,
-              )
-            : Border(
-                right: BorderSide(
-                    color: _source.gridLineColor,
-                    width: _source.gridLineWidth),
-              ),
-      ),
-      child: Text(
-        cellText,
-        style: TextStyle(
-          color: textColor == Colors.transparent ? null : textColor,
-          fontSize: _source.cellFontSize,
-          fontFamily: _source.fontFamily,
+    return Semantics(
+      label: 'cell_${rowIndex}_${colIndex}_$cellText',
+      child: Container(
+        width: _source.columnWidth(colIndex),
+        height: _source.rowHeight,
+        padding: EdgeInsets.symmetric(
+          horizontal: _source.cellPaddingH,
+          vertical: _source.cellPaddingV,
         ),
-        overflow: TextOverflow.ellipsis,
+        alignment: _source.isNumericColumn(colIndex)
+            ? Alignment.centerRight
+            : Alignment.centerLeft,
+        decoration: BoxDecoration(
+          color: bgColor,
+          border: isSelected
+              ? Border.all(
+                  color: _source.currentCellBorderColor,
+                  width: _source.currentCellBorderWidth,
+                )
+              : Border(
+                  right: BorderSide(
+                      color: _source.gridLineColor,
+                      width: _source.gridLineWidth),
+                ),
+        ),
+        child: Text(
+          cellText,
+          style: TextStyle(
+            color: textColor == Colors.transparent ? null : textColor,
+            fontSize: _source.cellFontSize,
+            fontFamily: _source.fontFamily,
+          ),
+          overflow: TextOverflow.ellipsis,
+        ),
       ),
     );
   }
