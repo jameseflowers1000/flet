@@ -43,6 +43,14 @@ class _EpyxGridState extends State<EpyxGrid> {
   int _selectedRow = -1;
   int _selectedCol = -1;
 
+  // -- Editing state --
+  bool _isEditing = false;
+  bool _isCodeMode = false;  // = key triggers code editor
+  String _editValue = '';
+  String _editOriginalValue = '';
+  final TextEditingController _editController = TextEditingController();
+  final FocusNode _editFocusNode = FocusNode();
+
   // -- Scroll tracking for header display --
   int _firstVisibleRow = 0;
 
@@ -69,6 +77,8 @@ class _EpyxGridState extends State<EpyxGrid> {
     _xController.dispose();
     _xHeaderController.dispose();
     _yRowNumController?.dispose();
+    _editController.dispose();
+    _editFocusNode.dispose();
     _focusNode.dispose();
     super.dispose();
   }
@@ -599,6 +609,8 @@ class _EpyxGridState extends State<EpyxGrid> {
     final textColor = fg ?? _source.cellTextColor;
     final bgColor = bg;
 
+    final isEditingThis = _isEditing && isSelected;
+
     return Semantics(
       label: 'cell_${rowIndex}_${colIndex}_$cellText',
       child: Container(
@@ -624,17 +636,134 @@ class _EpyxGridState extends State<EpyxGrid> {
                       width: _source.gridLineWidth),
                 ),
         ),
-        child: Text(
-          cellText,
-          style: TextStyle(
-            color: textColor == Colors.transparent ? null : textColor,
-            fontSize: _source.cellFontSize,
-            fontFamily: _source.fontFamily,
-          ),
-          overflow: TextOverflow.ellipsis,
-        ),
+        child: isEditingThis
+            ? TextField(
+                controller: _editController,
+                focusNode: _editFocusNode,
+                autofocus: true,
+                style: TextStyle(
+                  fontSize: _source.cellFontSize,
+                  fontFamily: _source.fontFamily,
+                ),
+                maxLines: _isCodeMode ? null : 1,
+                decoration: const InputDecoration(
+                  isDense: true,
+                  contentPadding: EdgeInsets.zero,
+                  border: InputBorder.none,
+                ),
+                onSubmitted: (_) => _commitEdit(moveDown: true),
+              )
+            : Text(
+                cellText,
+                style: TextStyle(
+                  color: textColor == Colors.transparent ? null : textColor,
+                  fontSize: _source.cellFontSize,
+                  fontFamily: _source.fontFamily,
+                ),
+                overflow: TextOverflow.ellipsis,
+              ),
       ),
     );
+  }
+
+  // ────────────────────────────────────────────────────────────────
+  // Cell editing
+  // ────────────────────────────────────────────────────────────────
+
+  bool get _canEdit {
+    final editable = widget.control.getBool("editable", false) ?? false;
+    if (!editable) return false;
+    if (_selectedRow < 0 || _selectedCol < 0) return false;
+    if (_selectedCol < _source.columns.length) {
+      final readOnly = _source.columns[_selectedCol]['read_only'] ?? false;
+      if (readOnly == true) return false;
+    }
+    return true;
+  }
+
+  void _startEditing({String? initialText, bool codeMode = false}) {
+    if (!_canEdit) return;
+
+    // Get raw value for editing (not display-formatted)
+    final rawRowsJson = widget.control.getString("raw_rows");
+    String rawValue = _source.cellText(_selectedRow, _selectedCol);
+    if (rawRowsJson != null && rawRowsJson.isNotEmpty) {
+      try {
+        final rawRows = jsonDecode(rawRowsJson) as List;
+        if (_selectedRow < rawRows.length) {
+          final row = rawRows[_selectedRow] as List;
+          if (_selectedCol < row.length && row[_selectedCol] != null) {
+            rawValue = row[_selectedCol].toString();
+          }
+        }
+      } catch (_) {}
+    }
+
+    setState(() {
+      _isEditing = true;
+      _isCodeMode = codeMode;
+      _editOriginalValue = rawValue;
+      _editValue = initialText ?? rawValue;
+      _editController.text = _editValue;
+      if (initialText == null) {
+        // F2: cursor at end
+        _editController.selection = TextSelection.collapsed(
+            offset: _editController.text.length);
+      } else {
+        // Type-to-replace: select all (will be replaced by typed char)
+        _editController.selection = TextSelection(
+            baseOffset: 0, extentOffset: _editController.text.length);
+      }
+    });
+
+    // Focus the TextField on next frame
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _editFocusNode.requestFocus();
+    });
+  }
+
+  void _cancelEdit() {
+    setState(() {
+      _isEditing = false;
+      _isCodeMode = false;
+    });
+    _focusNode.requestFocus();
+  }
+
+  void _commitEdit({bool moveDown = false, bool moveRight = false,
+      bool moveUp = false, bool moveLeft = false}) {
+    final newValue = _editController.text;
+    final oldValue = _editOriginalValue;
+
+    setState(() {
+      _isEditing = false;
+      _isCodeMode = false;
+    });
+
+    // Fire on_cell_edit event if value changed
+    if (newValue != oldValue) {
+      final colName = _source.columnName(_selectedCol);
+      final eventData = jsonEncode({
+        'row_index': _selectedRow,
+        'column_name': colName,
+        'old_value': oldValue,
+        'new_value': newValue,
+      });
+      widget.control.triggerEventWithoutSubscribers('cell_edit', eventData);
+    }
+
+    // Move selection
+    if (moveDown && _selectedRow < _source.rowCount - 1) {
+      setState(() => _selectedRow++);
+    } else if (moveUp && _selectedRow > 0) {
+      setState(() => _selectedRow--);
+    } else if (moveRight && _selectedCol < _source.columnCount - 1) {
+      setState(() => _selectedCol++);
+    } else if (moveLeft && _selectedCol > 0) {
+      setState(() => _selectedCol--);
+    }
+
+    _focusNode.requestFocus();
   }
 
   // ────────────────────────────────────────────────────────────────
@@ -671,8 +800,42 @@ class _EpyxGridState extends State<EpyxGrid> {
 
   KeyEventResult _onKeyEvent(FocusNode node, KeyEvent event) {
     if (event is! KeyDownEvent) return KeyEventResult.ignored;
+    if (!_sourceInitialized) return KeyEventResult.ignored;
 
     final key = event.logicalKey;
+
+    // When editing, the TextField handles most keys.
+    // We intercept: Enter, Tab, Shift+Tab, Escape, arrow up/down
+    if (_isEditing) {
+      if (key == LogicalKeyboardKey.escape) {
+        _cancelEdit();
+        return KeyEventResult.handled;
+      }
+      if (key == LogicalKeyboardKey.enter &&
+          !HardwareKeyboard.instance.isShiftPressed) {
+        _commitEdit(moveDown: true);
+        return KeyEventResult.handled;
+      }
+      if (key == LogicalKeyboardKey.enter &&
+          HardwareKeyboard.instance.isShiftPressed) {
+        _commitEdit(moveUp: true);
+        return KeyEventResult.handled;
+      }
+      if (key == LogicalKeyboardKey.tab &&
+          !HardwareKeyboard.instance.isShiftPressed) {
+        _commitEdit(moveRight: true);
+        return KeyEventResult.handled;
+      }
+      if (key == LogicalKeyboardKey.tab &&
+          HardwareKeyboard.instance.isShiftPressed) {
+        _commitEdit(moveLeft: true);
+        return KeyEventResult.handled;
+      }
+      // Let TextField handle everything else (typing, arrow left/right, etc.)
+      return KeyEventResult.ignored;
+    }
+
+    // Not editing — navigation and edit-start keys
     bool handled = false;
 
     if (key == LogicalKeyboardKey.arrowDown) {
@@ -697,9 +860,44 @@ class _EpyxGridState extends State<EpyxGrid> {
         setState(() => _selectedCol--);
         handled = true;
       }
+    } else if (key == LogicalKeyboardKey.f2) {
+      // F2: edit current cell (cursor at end)
+      _startEditing();
+      handled = true;
+    } else if (key == LogicalKeyboardKey.enter) {
+      // Enter when not editing: start editing
+      _startEditing();
+      handled = true;
+    } else if (key == LogicalKeyboardKey.equal) {
+      // = key: code editor mode
+      _startEditing(codeMode: true);
+      handled = true;
+    } else if (_isCharacterKey(key)) {
+      // Type-to-replace: start editing with the typed character
+      final char = event.character;
+      if (char != null && char.isNotEmpty) {
+        _startEditing(initialText: char);
+        handled = true;
+      }
     }
 
     return handled ? KeyEventResult.handled : KeyEventResult.ignored;
+  }
+
+  bool _isCharacterKey(LogicalKeyboardKey key) {
+    // Printable characters: letters, digits, symbols
+    final keyId = key.keyId;
+    // Letters a-z
+    if (keyId >= 0x00000061 && keyId <= 0x0000007a) return true;
+    // Digits 0-9
+    if (keyId >= 0x00000030 && keyId <= 0x00000039) return true;
+    // Common symbols
+    if (key == LogicalKeyboardKey.space) return true;
+    if (key == LogicalKeyboardKey.period) return true;
+    if (key == LogicalKeyboardKey.comma) return true;
+    if (key == LogicalKeyboardKey.minus) return true;
+    if (key == LogicalKeyboardKey.slash) return true;
+    return false;
   }
 
   void _ensureRowVisible(int row) {
