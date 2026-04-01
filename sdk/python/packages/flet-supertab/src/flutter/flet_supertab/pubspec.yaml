@@ -14,6 +14,9 @@ dependencies:
   flet:
     path: ../../../../../../../packages/flet
 
+  flet_micropython:
+    path: ../../../../flet-micropython/src/flutter/flet_micropython
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

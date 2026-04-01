@@ -10,6 +10,8 @@ import 'dart:convert';
 import 'dart:math' as math;
 
 import 'package:flet/flet.dart';
+import 'package:flet_micropython/src/micropython_service.dart'
+    if (dart.library.io) 'package:flet_micropython/src/micropython_service_native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -40,22 +42,40 @@ class _EpyxGridState extends State<EpyxGrid> {
   ScrollController? _yRowNumController;
 
   // -- Selection state --
-  int _selectedRow = -1;
-  int _selectedCol = -1;
+  // Anchor: where selection started. End: where it extends to.
+  // For single-cell selection, anchor == end.
+  int _selectedRow = -1;   // anchor row
+  int _selectedCol = -1;   // anchor col
+  int _selEndRow = -1;     // selection end row
+  int _selEndCol = -1;     // selection end col
 
   // -- Editing state --
   bool _isEditing = false;
-  bool _isCodeMode = false;  // = key triggers code editor
+  bool _isCodeMode = false;
   String _editValue = '';
   String _editOriginalValue = '';
   final TextEditingController _editController = TextEditingController();
   final FocusNode _editFocusNode = FocusNode();
 
+  // -- Optimistic edit: show committed value immediately, before Python round-trip --
+  // Cleared when Python pushes new data via _onControlChanged.
+  final Map<String, String> _pendingEdits = {};
+
   // -- Scroll tracking for header display --
   int _firstVisibleRow = 0;
 
+  // -- Data version: skip rebuild when data hasn't changed --
+  String _lastRowsJson = '';
+  String _lastColsJson = '';
+  int _lastTotalRows = 0;
+  String _lastStylesJson = '';
+  String _lastOverridesJson = '';
+
   // -- Focus node for keyboard handling --
   late FocusNode _focusNode;
+
+  // -- Key for Natural mode auto-scroll (attached to selected row) --
+  final GlobalKey _selectedRowKey = GlobalKey();
 
   @override
   void initState() {
@@ -84,11 +104,36 @@ class _EpyxGridState extends State<EpyxGrid> {
   }
 
   void _onControlChanged() {
-    if (mounted) {
-      setState(() {
-        _sourceNeedsRebuild = true;
-      });
+    if (!mounted) return;
+
+    // Skip full rebuild if data hasn't changed.
+    // This avoids expensive JSON re-parse + widget tree rebuild when Python
+    // pushes the same data (common after single-cell edit with no formulas).
+    final newRows = widget.control.getString("rows") ?? '';
+    final newCols = widget.control.getString("columns") ?? '';
+    final newTotalRows = widget.control.getInt("total_rows", 0) ?? 0;
+    final newStyles = widget.control.getString("cell_styles") ?? '';
+    final newOverrides = widget.control.getString("override_cells") ?? '';
+    final dataKey = '$newRows|$newCols|$newTotalRows|$newStyles|$newOverrides';
+    final oldKey = '$_lastRowsJson|$_lastColsJson|$_lastTotalRows|$_lastStylesJson|$_lastOverridesJson';
+    if (dataKey == oldKey) {
+      // Data unchanged — just clear pending edits (Python confirmed)
+      if (_pendingEdits.isNotEmpty) {
+        setState(() => _pendingEdits.clear());
+      }
+      return;
     }
+    _lastRowsJson = newRows;
+    _lastColsJson = newCols;
+    _lastTotalRows = newTotalRows;
+    _lastStylesJson = newStyles;
+    _lastOverridesJson = newOverrides;
+
+    setState(() {
+      _sourceNeedsRebuild = true;
+      _lastRequestedOffset = -1; // reset LOD dedup — data changed
+      _pendingEdits.clear(); // Python has authoritative data now
+    });
   }
 
   @override
@@ -207,6 +252,12 @@ class _EpyxGridState extends State<EpyxGrid> {
     if (_sourceNeedsRebuild || !_sourceInitialized) {
       _source = EpyxGridSource.fromControl(widget.control, context);
       _sourceNeedsRebuild = false;
+      // Cache data version for change detection
+      _lastRowsJson = widget.control.getString("rows") ?? '';
+      _lastColsJson = widget.control.getString("columns") ?? '';
+      _lastTotalRows = widget.control.getInt("total_rows", 0) ?? 0;
+      _lastStylesJson = widget.control.getString("cell_styles") ?? '';
+      _lastOverridesJson = widget.control.getString("override_cells") ?? '';
       _sourceInitialized = true;
     }
     final totalRows = widget.control.getInt("total_rows", 0) ?? 0;
@@ -237,52 +288,48 @@ class _EpyxGridState extends State<EpyxGrid> {
                 style: TextStyle(color: Colors.grey, fontSize: 14)))
         : _buildGridBody(context);
 
-    // Use LayoutBuilder to handle unbounded height (Natural mode pane).
-    // Expanded requires bounded height — in Natural mode we calculate height.
+    final errorBanner = errorMessage.isNotEmpty
+        ? Container(
+            color: Colors.red.shade900,
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            child: Row(
+              children: [
+                const Icon(Icons.error_outline,
+                    color: Colors.white, size: 14),
+                const SizedBox(width: 4),
+                Expanded(
+                  child: Text(errorMessage,
+                      style:
+                          const TextStyle(color: Colors.white, fontSize: 12)),
+                ),
+              ],
+            ),
+          )
+        : null;
+
+    // Use LayoutBuilder to handle bounded vs unbounded height.
+    // Bounded (Gallery/Fit): Expanded fills available space.
+    // Unbounded (Natural mode): grid body determines own height (no Expanded).
     return LayoutControl(
       control: widget.control,
       child: LayoutBuilder(
         builder: (context, constraints) {
           final unbounded = constraints.maxHeight == double.infinity;
 
-          final errorBanner = errorMessage.isNotEmpty
-              ? Container(
-                  color: Colors.red.shade900,
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                  child: Row(
-                    children: [
-                      const Icon(Icons.error_outline,
-                          color: Colors.white, size: 14),
-                      const SizedBox(width: 4),
-                      Expanded(
-                        child: Text(errorMessage,
-                            style: const TextStyle(
-                                color: Colors.white, fontSize: 12)),
-                      ),
-                    ],
-                  ),
-                )
-              : null;
-
           if (unbounded) {
-            // Natural mode: no Expanded, use calculated height
-            final headerRowH =
-                widget.control.getDouble("header_row_height", 40.0) ?? 40.0;
-            final gridHeight =
-                (_source.rowCount * _source.rowHeight) + headerRowH + 30;
+            // Natural mode: Column with min size, grid body uses shrinkWrap
             return Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               mainAxisSize: MainAxisSize.min,
               children: [
                 headerBar,
                 if (errorBanner != null) errorBanner,
-                SizedBox(height: gridHeight, child: gridBody),
+                gridBody,  // No Expanded, no SizedBox — natural height
               ],
             );
           }
 
-          // Bounded (Gallery/Fit): use Expanded
+          // Bounded (Gallery/Fit): Expanded fills space
           return Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
@@ -371,14 +418,16 @@ class _EpyxGridState extends State<EpyxGrid> {
         final dataWidth = constraints.maxWidth - rowNumWidth;
         _source.setAvailableWidth(dataWidth);
 
+        final unbounded = constraints.maxHeight == double.infinity;
+        final dataArea = _buildDataArea(context, showRowNumbers, rowNumWidth);
+
         return Column(
+          mainAxisSize: unbounded ? MainAxisSize.min : MainAxisSize.max,
           children: [
             // Column headers
             _buildColumnHeaders(context, showRowNumbers, rowNumWidth),
-            // Data rows
-            Expanded(
-              child: _buildDataArea(context, showRowNumbers, rowNumWidth),
-            ),
+            // Data rows — Expanded only when height is bounded
+            if (unbounded) dataArea else Expanded(child: dataArea),
           ],
         );
       },
@@ -607,6 +656,7 @@ class _EpyxGridState extends State<EpyxGrid> {
     final isSelected = rowIndex == _selectedRow;
 
     return Container(
+      key: isSelected ? _selectedRowKey : null,
       height: _source.rowHeight,
       decoration: BoxDecoration(
         color: _source.rowBackground(rowIndex, isSelected),
@@ -625,9 +675,12 @@ class _EpyxGridState extends State<EpyxGrid> {
   }
 
   Widget _buildCell(int rowIndex, int colIndex) {
-    final isSelected =
-        rowIndex == _selectedRow && colIndex == _selectedCol;
-    final cellText = _source.cellText(rowIndex, colIndex);
+    final isAnchor = _isAnchor(rowIndex, colIndex);
+    final inRange = _isInSelection(rowIndex, colIndex);
+    // Show optimistic edit value if pending, otherwise source value
+    final pendingKey = '$rowIndex:$colIndex';
+    final cellText = _pendingEdits[pendingKey] ??
+        _source.cellText(rowIndex, colIndex);
     final cellStyle = _source.cellStyle(rowIndex, colIndex);
 
     Color? fg = cellStyle?['fg'] != null
@@ -638,9 +691,34 @@ class _EpyxGridState extends State<EpyxGrid> {
         : null;
 
     final textColor = fg ?? _source.cellTextColor;
-    final bgColor = bg;
+    // Range highlight: light blue tint for non-anchor cells in selection
+    final bgColor = isAnchor
+        ? bg
+        : inRange
+            ? (bg ?? const Color(0xFF1E1E1E)).withValues(alpha: 0.8)
+            : bg;
 
-    final isEditingThis = _isEditing && isSelected;
+    final isEditingThis = _isEditing && isAnchor;
+
+    // Selection border: anchor gets solid border, range gets thin highlight
+    BoxBorder cellBorder;
+    if (isAnchor) {
+      cellBorder = Border.all(
+        color: _source.currentCellBorderColor,
+        width: _source.currentCellBorderWidth,
+      );
+    } else if (inRange) {
+      cellBorder = Border.all(
+        color: _source.currentCellBorderColor.withValues(alpha: 0.4),
+        width: 1.0,
+      );
+    } else {
+      cellBorder = Border(
+        right: BorderSide(
+            color: _source.gridLineColor,
+            width: _source.gridLineWidth),
+      );
+    }
 
     return Semantics(
       label: 'cell_${rowIndex}_${colIndex}_$cellText',
@@ -651,50 +729,203 @@ class _EpyxGridState extends State<EpyxGrid> {
           horizontal: _source.cellPaddingH,
           vertical: _source.cellPaddingV,
         ),
-        alignment: _source.isNumericColumn(colIndex)
-            ? Alignment.centerRight
-            : Alignment.centerLeft,
         decoration: BoxDecoration(
           color: bgColor,
-          border: isSelected
-              ? Border.all(
-                  color: _source.currentCellBorderColor,
-                  width: _source.currentCellBorderWidth,
-                )
-              : Border(
-                  right: BorderSide(
-                      color: _source.gridLineColor,
-                      width: _source.gridLineWidth),
-                ),
+          border: cellBorder,
         ),
-        child: isEditingThis
-            ? TextField(
-                controller: _editController,
-                focusNode: _editFocusNode,
-                autofocus: true,
-                style: TextStyle(
-                  fontSize: _source.cellFontSize,
-                  fontFamily: _source.fontFamily,
-                ),
-                maxLines: _isCodeMode ? null : 1,
-                decoration: const InputDecoration(
-                  isDense: true,
-                  contentPadding: EdgeInsets.zero,
-                  border: InputBorder.none,
-                ),
-                onSubmitted: (_) => _commitEdit(moveDown: true),
-              )
-            : Text(
-                cellText,
-                style: TextStyle(
-                  color: textColor == Colors.transparent ? null : textColor,
-                  fontSize: _source.cellFontSize,
-                  fontFamily: _source.fontFamily,
-                ),
-                overflow: TextOverflow.ellipsis,
+        child: Stack(
+          clipBehavior: Clip.none,
+          children: [
+            Positioned.fill(
+              child: Align(
+                alignment: _source.isNumericColumn(colIndex)
+                    ? Alignment.centerRight
+                    : Alignment.centerLeft,
+                child: isEditingThis
+                    ? TextField(
+                        controller: _editController,
+                        focusNode: _editFocusNode,
+                        autofocus: true,
+                        style: TextStyle(
+                          fontSize: _source.cellFontSize,
+                          fontFamily: _source.fontFamily,
+                        ),
+                        maxLines: _isCodeMode ? null : 1,
+                        decoration: const InputDecoration(
+                          isDense: true,
+                          contentPadding: EdgeInsets.zero,
+                          border: InputBorder.none,
+                        ),
+                        onSubmitted: (_) => _commitEdit(moveDown: true),
+                      )
+                    : Text(
+                        cellText,
+                        style: TextStyle(
+                          color: textColor == Colors.transparent ? null : textColor,
+                          fontSize: _source.cellFontSize,
+                          fontFamily: _source.fontFamily,
+                        ),
+                        overflow: TextOverflow.ellipsis,
+                      ),
               ),
+            ),
+            // Orange triangle override indicator (top-left corner of cell)
+            if (_source.hasOverride(rowIndex, colIndex))
+              Positioned(
+                top: -_source.cellPaddingV,
+                left: -_source.cellPaddingH,
+                child: CustomPaint(
+                  size: const Size(6, 6),
+                  painter: _OverrideTrianglePainter(),
+                ),
+              ),
+          ],
+        ),
       ),
     );
+  }
+
+  // ────────────────────────────────────────────────────────────────
+  // Selection range helpers
+  // ────────────────────────────────────────────────────────────────
+
+  /// Selection bounds (top-left to bottom-right).
+  int get _selMinRow => math.min(_selectedRow, _selEndRow);
+  int get _selMaxRow => math.max(_selectedRow, _selEndRow);
+  int get _selMinCol => math.min(_selectedCol, _selEndCol);
+  int get _selMaxCol => math.max(_selectedCol, _selEndCol);
+
+  /// Is this cell within the current selection range?
+  bool _isInSelection(int row, int col) {
+    if (_selectedRow < 0) return false;
+    return row >= _selMinRow && row <= _selMaxRow &&
+           col >= _selMinCol && col <= _selMaxCol;
+  }
+
+  /// Is this the anchor cell (current/active cell)?
+  bool _isAnchor(int row, int col) {
+    return row == _selectedRow && col == _selectedCol;
+  }
+
+  /// Is the selection a multi-cell range?
+  bool get _hasRange =>
+      _selectedRow >= 0 && (_selectedRow != _selEndRow || _selectedCol != _selEndCol);
+
+  /// Move anchor (and collapse range unless extending).
+  void _moveTo(int row, int col, {bool extend = false}) {
+    setState(() {
+      if (extend) {
+        _selEndRow = row;
+        _selEndCol = col;
+      } else {
+        _selectedRow = row;
+        _selectedCol = col;
+        _selEndRow = row;
+        _selEndCol = col;
+      }
+    });
+    _scrollToAnchor();
+  }
+
+  /// Select entire row.
+  void _selectRow(int row) {
+    setState(() {
+      _selectedRow = row;
+      _selectedCol = 0;
+      _selEndRow = row;
+      _selEndCol = _source.columnCount - 1;
+    });
+  }
+
+  /// Select entire column.
+  void _selectColumn(int col) {
+    setState(() {
+      _selectedRow = 0;
+      _selectedCol = col;
+      _selEndRow = _source.rowCount - 1;
+      _selEndCol = col;
+    });
+  }
+
+  /// Select all cells.
+  void _selectAll() {
+    setState(() {
+      _selectedRow = 0;
+      _selectedCol = 0;
+      _selEndRow = _source.rowCount - 1;
+      _selEndCol = _source.columnCount - 1;
+    });
+  }
+
+  /// Get selected text as tab-separated values.
+  String _getSelectionText() {
+    final buf = StringBuffer();
+    for (int r = _selMinRow; r <= _selMaxRow; r++) {
+      for (int c = _selMinCol; c <= _selMaxCol; c++) {
+        if (c > _selMinCol) buf.write('\t');
+        buf.write(_source.cellText(r, c));
+      }
+      if (r < _selMaxRow) buf.write('\n');
+    }
+    return buf.toString();
+  }
+
+  // ────────────────────────────────────────────────────────────────
+  // Clipboard
+  // ────────────────────────────────────────────────────────────────
+
+  void _copySelection() {
+    if (_selectedRow < 0) return;
+    final text = _getSelectionText();
+    Clipboard.setData(ClipboardData(text: text));
+  }
+
+  void _cutSelection() {
+    if (_selectedRow < 0) return;
+    _copySelection();
+    _clearSelection();
+  }
+
+  void _clearSelection() {
+    if (!_canEdit) return;
+    // Fire cell_edit with empty value for each cell in selection
+    for (int r = _selMinRow; r <= _selMaxRow; r++) {
+      for (int c = _selMinCol; c <= _selMaxCol; c++) {
+        final colName = _source.columnName(c);
+        final eventData = jsonEncode({
+          'row_index': r,
+          'column_name': colName,
+          'old_value': _source.cellText(r, c),
+          'new_value': '',
+        });
+        widget.control.triggerEventWithoutSubscribers('cell_edit', eventData);
+      }
+    }
+  }
+
+  Future<void> _pasteAtSelection() async {
+    if (!_canEdit) return;
+    final data = await Clipboard.getData(Clipboard.kTextPlain);
+    if (data?.text == null || data!.text!.isEmpty) return;
+
+    final lines = data.text!.split('\n');
+    for (int r = 0; r < lines.length; r++) {
+      final cols = lines[r].split('\t');
+      final targetRow = _selectedRow + r;
+      if (targetRow >= _source.rowCount) break;
+      for (int c = 0; c < cols.length; c++) {
+        final targetCol = _selectedCol + c;
+        if (targetCol >= _source.columnCount) break;
+        final colName = _source.columnName(targetCol);
+        final eventData = jsonEncode({
+          'row_index': targetRow,
+          'column_name': colName,
+          'old_value': _source.cellText(targetRow, targetCol),
+          'new_value': cols[c],
+        });
+        widget.control.triggerEventWithoutSubscribers('cell_edit', eventData);
+      }
+    }
   }
 
   // ────────────────────────────────────────────────────────────────
@@ -736,21 +967,65 @@ class _EpyxGridState extends State<EpyxGrid> {
       _editOriginalValue = rawValue;
       _editValue = initialText ?? rawValue;
       _editController.text = _editValue;
-      if (initialText == null) {
-        // F2: cursor at end
-        _editController.selection = TextSelection.collapsed(
-            offset: _editController.text.length);
-      } else {
-        // Type-to-replace: select all (will be replaced by typed char)
-        _editController.selection = TextSelection(
-            baseOffset: 0, extentOffset: _editController.text.length);
-      }
+      // Cursor at end of text (F2 or type-to-replace)
+      _editController.selection = TextSelection.collapsed(
+          offset: _editController.text.length);
     });
 
     // Focus the TextField on next frame
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _editFocusNode.requestFocus();
     });
+  }
+
+  /// Try to format a value client-side via MicroPython.
+  /// Mirrors Python's _eval_display: format string fast path, then eval.
+  /// Returns null if MicroPython unavailable or code fails (fall back to raw).
+  /// Client-side display formatting via MicroPython _exec() contract.
+  /// Runs the column's display_code with {value, row columns} as context.
+  /// Returns null if MicroPython unavailable or code fails — caller
+  /// falls back to raw value, Python round-trip corrects.
+  String? _clientFormat(int colIndex, String rawValue) {
+    if (!MicroPythonService.isReady) return null;
+
+    final code = _source.displayCode(colIndex);
+    if (code.isEmpty) return null;
+
+    // Parse raw value to numeric for numeric columns
+    dynamic value = rawValue;
+    if (_source.isNumericColumn(colIndex)) {
+      value = double.tryParse(rawValue) ?? int.tryParse(rawValue) ?? rawValue;
+    }
+
+    // Build context: value + other columns in the row
+    final ctx = <String, dynamic>{'value': value};
+    final rawRowsJson = widget.control.getString("raw_rows");
+    if (rawRowsJson != null && rawRowsJson.isNotEmpty) {
+      try {
+        final rawRows = jsonDecode(rawRowsJson) as List;
+        if (_selectedRow < rawRows.length) {
+          final row = rawRows[_selectedRow] as List;
+          for (int c = 0; c < row.length && c < _source.columnCount; c++) {
+            ctx[_source.columnName(c)] = row[c];
+          }
+          ctx[_source.columnName(colIndex)] = value;
+        }
+      } catch (_) {}
+    }
+
+    try {
+      // _exec() contract: exec all lines, return last expression.
+      // Prepend "_r = str(...)" to last line so everything goes through
+      // exec() — MicroPython's eval() doesn't support f-strings.
+      final lines = code.trim().split('\n');
+      lines[lines.length - 1] = '_r = str(${lines.last.trim()})';
+      final fullCode = lines.join('\n');
+      final result = MicroPythonService.execEval(fullCode, '_r', ctx);
+      if (result == null) return null;
+      return result.toString();
+    } catch (_) {
+      return null;
+    }
   }
 
   void _cancelEdit() {
@@ -773,6 +1048,10 @@ class _EpyxGridState extends State<EpyxGrid> {
 
     // Fire on_cell_edit event if value changed
     if (newValue != oldValue) {
+      // Optimistic update: try client-side MicroPython formatting first,
+      // fall back to raw value. Python round-trip replaces with authoritative.
+      final formatted = _clientFormat(_selectedCol, newValue);
+      _pendingEdits['$_selectedRow:$_selectedCol'] = formatted ?? newValue;
       final colName = _source.columnName(_selectedCol);
       final eventData = jsonEncode({
         'row_index': _selectedRow,
@@ -783,15 +1062,18 @@ class _EpyxGridState extends State<EpyxGrid> {
       widget.control.triggerEventWithoutSubscribers('cell_edit', eventData);
     }
 
-    // Move selection
+    // Move selection (collapse range)
     if (moveDown && _selectedRow < _source.rowCount - 1) {
-      setState(() => _selectedRow++);
+      _moveTo(_selectedRow + 1, _selectedCol);
+    } else if (moveDown && _selectedRow == _source.rowCount - 1) {
+      // Enter at last row: fire add_row event (comparison, list ctypes)
+      widget.control.triggerEventWithoutSubscribers('add_row', '{}');
     } else if (moveUp && _selectedRow > 0) {
-      setState(() => _selectedRow--);
+      _moveTo(_selectedRow - 1, _selectedCol);
     } else if (moveRight && _selectedCol < _source.columnCount - 1) {
-      setState(() => _selectedCol++);
+      _moveTo(_selectedRow, _selectedCol + 1);
     } else if (moveLeft && _selectedCol > 0) {
-      setState(() => _selectedCol--);
+      _moveTo(_selectedRow, _selectedCol - 1);
     }
 
     _focusNode.requestFocus();
@@ -825,15 +1107,15 @@ class _EpyxGridState extends State<EpyxGrid> {
     int row = (absY / _source.rowHeight).floor();
     row = row.clamp(0, _source.rowCount - 1);
 
-    setState(() {
-      _selectedRow = row;
-      _selectedCol = col;
-    });
+    // Shift+click extends selection, plain click moves anchor
+    _moveTo(row, col, extend: HardwareKeyboard.instance.isShiftPressed);
     _focusNode.requestFocus();
   }
 
   KeyEventResult _onKeyEvent(FocusNode node, KeyEvent event) {
-    if (event is! KeyDownEvent) return KeyEventResult.ignored;
+    if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
+      return KeyEventResult.ignored;
+    }
     if (!_sourceInitialized) return KeyEventResult.ignored;
 
     final key = event.logicalKey;
@@ -843,6 +1125,13 @@ class _EpyxGridState extends State<EpyxGrid> {
     if (_isEditing) {
       if (key == LogicalKeyboardKey.escape) {
         _cancelEdit();
+        return KeyEventResult.handled;
+      }
+      // Ctrl+Enter: commit without moving
+      if (key == LogicalKeyboardKey.enter &&
+          (HardwareKeyboard.instance.isControlPressed ||
+           HardwareKeyboard.instance.isMetaPressed)) {
+        _commitEdit();
         return KeyEventResult.handled;
       }
       if (key == LogicalKeyboardKey.enter &&
@@ -871,29 +1160,148 @@ class _EpyxGridState extends State<EpyxGrid> {
 
     // Not editing — navigation and edit-start keys
     bool handled = false;
+    final isCtrl = HardwareKeyboard.instance.isControlPressed ||
+        HardwareKeyboard.instance.isMetaPressed;
+    final isShift = HardwareKeyboard.instance.isShiftPressed;
 
-    if (key == LogicalKeyboardKey.arrowDown) {
-      if (_selectedRow < _source.rowCount - 1) {
-        setState(() => _selectedRow++);
-        _ensureRowVisible(_selectedRow);
-        handled = true;
+    // -- Clipboard shortcuts --
+    if (isCtrl && key == LogicalKeyboardKey.keyC) {
+      _copySelection();
+      handled = true;
+    } else if (isCtrl && key == LogicalKeyboardKey.keyX) {
+      _cutSelection();
+      handled = true;
+    } else if (isCtrl && key == LogicalKeyboardKey.keyV) {
+      _pasteAtSelection();
+      handled = true;
+    } else if (isCtrl && key == LogicalKeyboardKey.keyA) {
+      _selectAll();
+      handled = true;
+    } else if (isCtrl && key == LogicalKeyboardKey.keyZ) {
+      widget.control.triggerEventWithoutSubscribers('undo', '{}');
+      handled = true;
+    } else if (isCtrl && key == LogicalKeyboardKey.keyY) {
+      widget.control.triggerEventWithoutSubscribers('redo', '{}');
+      handled = true;
+
+    // -- Ctrl+Enter: commit without moving --
+    } else if (isCtrl && key == LogicalKeyboardKey.enter) {
+      // Ctrl+Enter when not editing: no-op. When editing: handled above.
+      handled = true;
+
+    // -- Ctrl+Backspace: scroll to active cell --
+    } else if (isCtrl && key == LogicalKeyboardKey.backspace) {
+      _scrollToAnchor();
+      handled = true;
+
+    // -- Shift+Space: select row --
+    } else if (isShift && key == LogicalKeyboardKey.space) {
+      _selectRow(_selectedRow);
+      handled = true;
+
+    // -- Ctrl+Space: select column --
+    } else if (isCtrl && key == LogicalKeyboardKey.space) {
+      _selectColumn(_selectedCol);
+      handled = true;
+
+    // -- Arrow keys (with Ctrl+Shift, Ctrl, Shift, plain) --
+    } else if (key == LogicalKeyboardKey.arrowDown) {
+      final targetRow = isCtrl ? _source.rowCount - 1
+          : (isShift ? _selEndRow + 1 : _selectedRow + 1);
+      final row = targetRow.clamp(0, _source.rowCount - 1);
+      if (isShift) {
+        setState(() => _selEndRow = row);
+        _scrollToSelEnd();
+      } else {
+        _moveTo(row, _selectedCol);
       }
+      handled = true;
     } else if (key == LogicalKeyboardKey.arrowUp) {
-      if (_selectedRow > 0) {
-        setState(() => _selectedRow--);
-        _ensureRowVisible(_selectedRow);
-        handled = true;
+      final targetRow = isCtrl ? 0
+          : (isShift ? _selEndRow - 1 : _selectedRow - 1);
+      final row = targetRow.clamp(0, _source.rowCount - 1);
+      if (isShift) {
+        setState(() => _selEndRow = row);
+        _scrollToSelEnd();
+      } else {
+        _moveTo(row, _selectedCol);
       }
+      handled = true;
     } else if (key == LogicalKeyboardKey.arrowRight) {
-      if (_selectedCol < _source.columnCount - 1) {
-        setState(() => _selectedCol++);
-        handled = true;
+      final targetCol = isCtrl ? _source.columnCount - 1
+          : (isShift ? _selEndCol + 1 : _selectedCol + 1);
+      final col = targetCol.clamp(0, _source.columnCount - 1);
+      if (isShift) {
+        setState(() => _selEndCol = col);
+        _scrollToSelEnd();
+      } else {
+        _moveTo(_selectedRow, col);
       }
+      handled = true;
     } else if (key == LogicalKeyboardKey.arrowLeft) {
-      if (_selectedCol > 0) {
-        setState(() => _selectedCol--);
+      final targetCol = isCtrl ? 0
+          : (isShift ? _selEndCol - 1 : _selectedCol - 1);
+      final col = targetCol.clamp(0, _source.columnCount - 1);
+      if (isShift) {
+        setState(() => _selEndCol = col);
+        _scrollToSelEnd();
+      } else {
+        _moveTo(_selectedRow, col);
+      }
+      handled = true;
+
+    // -- Home/End --
+    } else if (key == LogicalKeyboardKey.home && isCtrl) {
+      _moveTo(0, 0, extend: isShift);
+      handled = true;
+    } else if (key == LogicalKeyboardKey.end && isCtrl) {
+      final lastRow = _source.rowCount - 1;
+      final lastCol = _source.columnCount - 1;
+      _moveTo(lastRow, lastCol, extend: isShift);
+      handled = true;
+    } else if (key == LogicalKeyboardKey.home) {
+      if (isShift) {
+        setState(() => _selEndCol = 0);
+        _scrollToSelEnd();
+      } else {
+        _moveTo(_selectedRow, 0);
+      }
+      handled = true;
+    } else if (key == LogicalKeyboardKey.end) {
+      final lastCol = _source.columnCount - 1;
+      if (isShift) {
+        setState(() => _selEndCol = lastCol);
+        _scrollToSelEnd();
+      } else {
+        _moveTo(_selectedRow, lastCol);
+      }
+      handled = true;
+    } else if (key == LogicalKeyboardKey.pageDown) {
+      final visibleRows = _yController.hasClients
+          ? (_yController.position.viewportDimension / _source.rowHeight).floor()
+          : 10;
+      final row = (_selectedRow + visibleRows).clamp(0, _source.rowCount - 1);
+      _moveTo(row, _selectedCol);
+      handled = true;
+    } else if (key == LogicalKeyboardKey.pageUp) {
+      final visibleRows = _yController.hasClients
+          ? (_yController.position.viewportDimension / _source.rowHeight).floor()
+          : 10;
+      final row = (_selectedRow - visibleRows).clamp(0, _source.rowCount - 1);
+      _moveTo(row, _selectedCol);
+      handled = true;
+    } else if (key == LogicalKeyboardKey.delete || key == LogicalKeyboardKey.backspace) {
+      // Delete/Backspace: clear selection
+      if (_canEdit) {
+        _clearSelection();
         handled = true;
       }
+    } else if (key == LogicalKeyboardKey.escape) {
+      // Escape: collapse range selection back to anchor
+      if (_hasRange) {
+        _moveTo(_selectedRow, _selectedCol);
+      }
+      handled = true;
     } else if (key == LogicalKeyboardKey.f2) {
       // F2: edit current cell (cursor at end)
       _startEditing();
@@ -902,36 +1310,19 @@ class _EpyxGridState extends State<EpyxGrid> {
       // Enter when not editing: start editing
       _startEditing();
       handled = true;
-    } else if (key == LogicalKeyboardKey.equal) {
-      // = key: code editor mode
-      _startEditing(codeMode: true);
-      handled = true;
-    } else if (_isCharacterKey(key)) {
-      // Type-to-replace: start editing with the typed character
+    } else {
+      // Character keys: check event.character for printable input
       final char = event.character;
-      if (char != null && char.isNotEmpty) {
-        _startEditing(initialText: char);
-        handled = true;
+      if (char != null && char.length == 1) {
+        if (char.codeUnitAt(0) >= 0x20) {
+          // Any printable character (>= space): type-to-replace
+          _startEditing(initialText: char);
+          handled = true;
+        }
       }
     }
 
     return handled ? KeyEventResult.handled : KeyEventResult.ignored;
-  }
-
-  bool _isCharacterKey(LogicalKeyboardKey key) {
-    // Printable characters: letters, digits, symbols
-    final keyId = key.keyId;
-    // Letters a-z
-    if (keyId >= 0x00000061 && keyId <= 0x0000007a) return true;
-    // Digits 0-9
-    if (keyId >= 0x00000030 && keyId <= 0x00000039) return true;
-    // Common symbols
-    if (key == LogicalKeyboardKey.space) return true;
-    if (key == LogicalKeyboardKey.period) return true;
-    if (key == LogicalKeyboardKey.comma) return true;
-    if (key == LogicalKeyboardKey.minus) return true;
-    if (key == LogicalKeyboardKey.slash) return true;
-    return false;
   }
 
   void _ensureRowVisible(int row) {
@@ -945,6 +1336,59 @@ class _EpyxGridState extends State<EpyxGrid> {
         _yController.offset + viewportHeight) {
       _yController.jumpTo(offset + _source.rowHeight - viewportHeight);
     }
+  }
+
+  void _ensureColumnVisible(int col) {
+    if (!_xController.hasClients) return;
+    // Calculate column's left offset
+    double colLeft = 0;
+    for (int i = 0; i < col; i++) {
+      colLeft += _source.columnWidth(i);
+    }
+    final colRight = colLeft + _source.columnWidth(col);
+    final viewportWidth = _xController.position.viewportDimension;
+    if (colLeft < _xController.offset) {
+      _xController.jumpTo(colLeft);
+    } else if (colRight > _xController.offset + viewportWidth) {
+      _xController.jumpTo(colRight - viewportWidth);
+    }
+  }
+
+  /// Scroll the anchor cell into view.
+  /// Bounded mode: direct jumpTo on controllers (math-based, works with virtualization).
+  /// Natural mode: Scrollable.ensureVisible on the row widget (scrolls parent pane).
+  void _scrollToAnchor() {
+    _ensureRowVisible(_selectedRow);
+    _ensureColumnVisible(_selectedCol);
+    _ensureRowVisibleNatural();
+  }
+
+  /// Scroll the selection-end cell into view (for Shift+Arrow).
+  void _scrollToSelEnd() {
+    _ensureRowVisible(_selEndRow);
+    _ensureColumnVisible(_selEndCol);
+    _ensureRowVisibleNatural();
+  }
+
+  /// Previous selected row — used to determine scroll direction in Natural mode.
+  int _prevSelectedRow = -1;
+
+  /// Natural mode: scroll the selected row into view via parent scrollable.
+  /// Picks alignment policy based on direction: keepVisibleAtEnd for downward
+  /// movement, keepVisibleAtStart for upward, so we scroll minimally.
+  void _ensureRowVisibleNatural() {
+    if (_yController.hasClients) return; // bounded mode handled above
+    final goingDown = _selectedRow >= _prevSelectedRow;
+    _prevSelectedRow = _selectedRow;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final ctx = _selectedRowKey.currentContext;
+      if (ctx == null) return;
+      Scrollable.ensureVisible(ctx,
+          duration: Duration.zero,
+          alignmentPolicy: goingDown
+              ? ScrollPositionAlignmentPolicy.keepVisibleAtEnd
+              : ScrollPositionAlignmentPolicy.keepVisibleAtStart);
+    });
   }
 
   // ────────────────────────────────────────────────────────────────
@@ -1003,4 +1447,24 @@ class _EpyxGridState extends State<EpyxGrid> {
       return null;
     }
   }
+}
+
+/// Paints a small orange triangle in the top-left corner of a cell
+/// to indicate the cell has a user override.
+class _OverrideTrianglePainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = Colors.orange
+      ..style = PaintingStyle.fill;
+    final path = Path()
+      ..moveTo(0, 0)
+      ..lineTo(size.width, 0)
+      ..lineTo(0, size.height)
+      ..close();
+    canvas.drawPath(path, paint);
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }

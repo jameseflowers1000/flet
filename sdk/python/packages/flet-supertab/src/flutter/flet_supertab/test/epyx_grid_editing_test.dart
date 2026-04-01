@@ -330,5 +330,355 @@ void main() {
       expect(find.byType(TextField), findsNothing,
           reason: 'F2 must not open editor when editable=false');
     });
+
+    testWidgets('Enter at last row fires add_row event', (tester) async {
+      final backend = _MockFletBackend();
+      final control = _mockControl(_editableGridProps(), backend: backend);
+      await tester.pumpWidget(_buildGrid(control));
+      await tester.pumpAndSettle();
+
+      // Select last row cell (2, 0) — "Transport"
+      await tester.tap(find.text('Transport'));
+      await tester.pump();
+      await tester.sendKeyEvent(LogicalKeyboardKey.f2);
+      await tester.pump();
+
+      await tester.enterText(find.byType(TextField), 'Transport');
+      await tester.pump();
+
+      // Enter at last row — should fire add_row
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pump();
+
+      final addEvents = backend.firedEvents
+          .where((e) => e['event'] == 'add_row')
+          .toList();
+      expect(addEvents, isNotEmpty,
+          reason: 'Enter at last row must fire add_row event');
+    });
+
+    testWidgets('Delete key clears cell', (tester) async {
+      final backend = _MockFletBackend();
+      final control = _mockControl(_editableGridProps(), backend: backend);
+      await tester.pumpWidget(_buildGrid(control));
+      await tester.pumpAndSettle();
+
+      // Select cell (0, 0) — "Rent"
+      await tester.tap(find.text('Rent'));
+      await tester.pump();
+
+      // Press Delete — should fire cell_edit with empty value
+      await tester.sendKeyEvent(LogicalKeyboardKey.delete);
+      await tester.pump();
+
+      final editEvents = backend.firedEvents
+          .where((e) => e['event'] == 'cell_edit')
+          .toList();
+      expect(editEvents, isNotEmpty,
+          reason: 'Delete must fire cell_edit with empty value');
+    });
+  });
+
+  group('P2: Keyboard navigation', () {
+    testWidgets('Ctrl+Down jumps to last row', (tester) async {
+      final control = _mockControl(_editableGridProps(
+        rows: [['A', '1'], ['B', '2'], ['C', '3'], ['D', '4'], ['E', '5']],
+        rawRows: [['A', 1], ['B', 2], ['C', 3], ['D', 4], ['E', 5]],
+      ));
+      await tester.pumpWidget(_buildGrid(control));
+      await tester.pumpAndSettle();
+
+      // Select first cell
+      await tester.tap(find.text('A'));
+      await tester.pump();
+
+      // Ctrl+Down → last row
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+      await tester.pump();
+
+      // Verify selection by F2 — editor should open on last row cell 'E'
+      await tester.sendKeyEvent(LogicalKeyboardKey.f2);
+      await tester.pump();
+      expect(find.byType(TextField), findsOneWidget);
+      expect(find.widgetWithText(TextField, 'E'), findsOneWidget,
+          reason: 'Ctrl+Down must move selection to last row');
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pump();
+    });
+
+    testWidgets('Ctrl+Up jumps to first row', (tester) async {
+      final control = _mockControl(_editableGridProps());
+      await tester.pumpWidget(_buildGrid(control));
+      await tester.pumpAndSettle();
+
+      // Select last row
+      await tester.tap(find.text('Transport'));
+      await tester.pump();
+
+      // Ctrl+Up → first row
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+      await tester.pump();
+
+      // Verify selection by F2
+      await tester.sendKeyEvent(LogicalKeyboardKey.f2);
+      await tester.pump();
+      expect(find.widgetWithText(TextField, 'Rent'), findsOneWidget,
+          reason: 'Ctrl+Up must move selection to first row');
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pump();
+    });
+
+    testWidgets('Ctrl+Right jumps to last column', (tester) async {
+      final control = _mockControl(_editableGridProps());
+      await tester.pumpWidget(_buildGrid(control));
+      await tester.pumpAndSettle();
+
+      // Select first cell
+      await tester.tap(find.text('Rent'));
+      await tester.pump();
+
+      // Ctrl+Right → last column
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+      await tester.pump();
+
+      // Verify: F2 should open editor on the Amount column (raw value 1500.0)
+      await tester.sendKeyEvent(LogicalKeyboardKey.f2);
+      await tester.pump();
+      expect(find.widgetWithText(TextField, '1500.0'), findsOneWidget,
+          reason: 'Ctrl+Right must move selection to last column');
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pump();
+    });
+
+    testWidgets('Home jumps to first column', (tester) async {
+      final control = _mockControl(_editableGridProps());
+      await tester.pumpWidget(_buildGrid(control));
+      await tester.pumpAndSettle();
+
+      // Select cell in second column
+      await tester.tap(find.text('1500.00'));
+      await tester.pump();
+
+      // Home → first column
+      await tester.sendKeyEvent(LogicalKeyboardKey.home);
+      await tester.pump();
+
+      // Verify by F2
+      await tester.sendKeyEvent(LogicalKeyboardKey.f2);
+      await tester.pump();
+      expect(find.widgetWithText(TextField, 'Rent'), findsOneWidget,
+          reason: 'Home must move to first column in current row');
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pump();
+    });
+
+    testWidgets('End jumps to last column', (tester) async {
+      final control = _mockControl(_editableGridProps());
+      await tester.pumpWidget(_buildGrid(control));
+      await tester.pumpAndSettle();
+
+      // Select first cell
+      await tester.tap(find.text('Rent'));
+      await tester.pump();
+
+      // End → last column
+      await tester.sendKeyEvent(LogicalKeyboardKey.end);
+      await tester.pump();
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.f2);
+      await tester.pump();
+      expect(find.widgetWithText(TextField, '1500.0'), findsOneWidget,
+          reason: 'End must move to last column in current row');
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pump();
+    });
+
+    testWidgets('Ctrl+Home jumps to cell (0,0)', (tester) async {
+      final control = _mockControl(_editableGridProps());
+      await tester.pumpWidget(_buildGrid(control));
+      await tester.pumpAndSettle();
+
+      // Select a cell not at origin — row 1, col 1
+      await tester.tap(find.text('300.00'));
+      await tester.pump();
+
+      // Ctrl+Home → (0,0)
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+      await tester.sendKeyEvent(LogicalKeyboardKey.home);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+      await tester.pump();
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.f2);
+      await tester.pump();
+      expect(find.widgetWithText(TextField, 'Rent'), findsOneWidget,
+          reason: 'Ctrl+Home must move to cell (0,0)');
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pump();
+    });
+
+    testWidgets('Ctrl+End jumps to last cell', (tester) async {
+      final control = _mockControl(_editableGridProps());
+      await tester.pumpWidget(_buildGrid(control));
+      await tester.pumpAndSettle();
+
+      // Select first cell
+      await tester.tap(find.text('Rent'));
+      await tester.pump();
+
+      // Ctrl+End → last cell
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+      await tester.sendKeyEvent(LogicalKeyboardKey.end);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+      await tester.pump();
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.f2);
+      await tester.pump();
+      expect(find.widgetWithText(TextField, '50.0'), findsOneWidget,
+          reason: 'Ctrl+End must move to last cell');
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pump();
+    });
+  });
+
+  group('P3: Range selection', () {
+    testWidgets('Shift+Down extends selection range', (tester) async {
+      final control = _mockControl(_editableGridProps());
+      await tester.pumpWidget(_buildGrid(control));
+      await tester.pumpAndSettle();
+
+      // Select cell (0, 0) — "Rent"
+      await tester.tap(find.text('Rent'));
+      await tester.pump();
+
+      // Shift+Down twice — should extend selection to rows 0-2
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+      await tester.pump();
+
+      // Anchor is still (0,0) — F2 should edit "Rent"
+      await tester.sendKeyEvent(LogicalKeyboardKey.f2);
+      await tester.pump();
+      expect(find.widgetWithText(TextField, 'Rent'), findsOneWidget,
+          reason: 'Anchor must stay at original cell during Shift+Arrow');
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pump();
+    });
+
+    testWidgets('Shift+Right extends selection range', (tester) async {
+      final control = _mockControl(_editableGridProps());
+      await tester.pumpWidget(_buildGrid(control));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Rent'));
+      await tester.pump();
+
+      // Shift+Right — extends to (0, 1)
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+      await tester.pump();
+
+      // Both cells should show range highlight (non-crash verification)
+      expect(find.text('Rent'), findsOneWidget);
+      expect(find.text('1500.00'), findsOneWidget);
+    });
+
+    testWidgets('Ctrl+A selects all cells', (tester) async {
+      final control = _mockControl(_editableGridProps());
+      await tester.pumpWidget(_buildGrid(control));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Rent'));
+      await tester.pump();
+
+      // Ctrl+A
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+      await tester.sendKeyEvent(LogicalKeyboardKey.keyA);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+      await tester.pump();
+
+      // All cells visible (non-crash, selection range covers all)
+      expect(find.text('Rent'), findsOneWidget);
+      expect(find.text('Transport'), findsOneWidget);
+      expect(find.text('50.00'), findsOneWidget);
+    });
+
+    testWidgets('Ctrl+Enter commits without moving', (tester) async {
+      final backend = _MockFletBackend();
+      final control = _mockControl(_editableGridProps(), backend: backend);
+      await tester.pumpWidget(_buildGrid(control));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Rent'));
+      await tester.pump();
+      await tester.sendKeyEvent(LogicalKeyboardKey.f2);
+      await tester.pump();
+
+      await tester.enterText(find.byType(TextField), 'Mortgage');
+      await tester.pump();
+
+      // Ctrl+Enter
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+      await tester.pump();
+
+      // Editor must close
+      expect(find.byType(TextField), findsNothing,
+          reason: 'Ctrl+Enter must close editor');
+
+      // Event must fire
+      final editEvents = backend.firedEvents
+          .where((e) => e['event'] == 'cell_edit')
+          .toList();
+      expect(editEvents, isNotEmpty,
+          reason: 'Ctrl+Enter must fire cell_edit');
+
+      // Selection must NOT have moved — F2 should open at same position
+      await tester.sendKeyEvent(LogicalKeyboardKey.f2);
+      await tester.pump();
+      // The cell value was changed to 'Mortgage' via event, but the grid
+      // still shows old data (no notify from Python). Just verify F2 opens.
+      expect(find.byType(TextField), findsOneWidget,
+          reason: 'Selection must stay at same cell after Ctrl+Enter');
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pump();
+    });
+
+    testWidgets('Delete clears entire range selection', (tester) async {
+      final backend = _MockFletBackend();
+      final control = _mockControl(_editableGridProps(), backend: backend);
+      await tester.pumpWidget(_buildGrid(control));
+      await tester.pumpAndSettle();
+
+      // Select (0,0) then Shift+Down+Right to get 2x2 range
+      await tester.tap(find.text('Rent'));
+      await tester.pump();
+
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+      await tester.pump();
+
+      // Delete — should fire cell_edit for each cell in 2x2 range
+      await tester.sendKeyEvent(LogicalKeyboardKey.delete);
+      await tester.pump();
+
+      final editEvents = backend.firedEvents
+          .where((e) => e['event'] == 'cell_edit')
+          .toList();
+      // 2 rows × 2 cols = 4 cell_edit events
+      expect(editEvents.length, greaterThanOrEqualTo(4),
+          reason: 'Delete on 2x2 range must fire 4 cell_edit events');
+    });
   });
 }

@@ -14,15 +14,18 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:flet_supertab/src/epyx_grid.dart';
 
+/// Strong reference to mock backend — prevents GC via WeakReference in Control.
+_MockFletBackend _keepAliveBackend = _MockFletBackend();
+
 /// Create a mock Control with the given properties.
 /// This simulates what Flet sends from Python.
 Control _mockControl(Map<String, dynamic> props) {
-  final backend = _MockFletBackend();
+  _keepAliveBackend = _MockFletBackend();
   return Control(
     id: 1,
     type: 'flet_supertab',
     properties: props,
-    backend: backend,
+    backend: _keepAliveBackend,
   );
 }
 
@@ -532,6 +535,202 @@ void main() {
       expect(find.text('X'), findsOneWidget);
       expect(find.byType(CircularProgressIndicator), findsNothing,
           reason: 'No spinner when total_rows is 0 (not yet set by Python)');
+    });
+  });
+
+  group('EpyxGrid LOD in Natural Mode', () {
+    testWidgets('Natural mode shows spinner when total_rows > loaded', (tester) async {
+      final control = _mockControl(_gridProps(
+        rows: [['A', '1'], ['B', '2']],
+        totalRows: 100,
+      ));
+
+      // Natural mode: SingleChildScrollView gives unbounded height
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SingleChildScrollView(
+              child: EpyxGrid(control: control),
+            ),
+          ),
+        ),
+      );
+      // Use pump() not pumpAndSettle() — spinner animation never settles
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+
+      expect(find.text('A'), findsOneWidget,
+          reason: 'Data must render in Natural mode with LOD');
+      expect(find.byType(CircularProgressIndicator), findsOneWidget,
+          reason: 'Spinner must show in Natural mode when total_rows > loaded');
+    });
+
+    testWidgets('Natural mode LOD loads second page after notify', (tester) async {
+      final control = _mockControl(_gridProps(
+        rows: [['A', '1'], ['B', '2']],
+        totalRows: 100,
+      ));
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SingleChildScrollView(
+              child: EpyxGrid(control: control),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+
+      // Verify first page
+      expect(find.text('A'), findsOneWidget);
+      expect(find.byType(CircularProgressIndicator), findsOneWidget);
+
+      // Python responds with more rows
+      control.properties['rows'] = jsonEncode([
+        ['A', '1'], ['B', '2'], ['C', '3'], ['D', '4'],
+      ]);
+      control.properties['total_rows'] = 4; // all loaded
+      control.notify();
+
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+
+      expect(find.text('C'), findsOneWidget,
+          reason: 'Second page must render in Natural mode after notify');
+      expect(find.text('D'), findsOneWidget);
+      expect(find.byType(CircularProgressIndicator), findsNothing,
+          reason: 'Spinner must disappear when all rows loaded');
+    });
+
+    testWidgets('Natural mode LOD re-requests after recalc resets data', (tester) async {
+      // This is THE BUG: after recalc, _lastRequestedOffset matches
+      // the new rowCount, so the dedup silently drops the page_request.
+      final control = _mockControl(_gridProps(
+        rows: [['A', '1'], ['B', '2']],
+        totalRows: 100,
+      ));
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SingleChildScrollView(
+              child: EpyxGrid(control: control),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+
+      // First page renders, spinner shows
+      expect(find.text('A'), findsOneWidget);
+      expect(find.byType(CircularProgressIndicator), findsOneWidget);
+
+      // SIMULATE RECALC: Python pushes back SAME row count but different data
+      // This is what happens when value_code recalcs — same number of rows,
+      // but _lastRequestedOffset was set to 2 from the first request.
+      control.properties['rows'] = jsonEncode([
+        ['X', '10'], ['Y', '20'],  // different data, same count
+      ]);
+      control.properties['total_rows'] = 100; // still more to load
+      control.notify();
+
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+
+      // Data must update to new values
+      expect(find.text('X'), findsOneWidget,
+          reason: 'Recalc data must appear after notify');
+      // Spinner must STILL be present (total_rows > loaded)
+      expect(find.byType(CircularProgressIndicator), findsOneWidget,
+          reason: 'Spinner must persist — more rows to load after recalc');
+      // The page_request must fire again (not deduped by stale offset)
+      // We can't directly check the event was fired, but we verify the
+      // spinner is present which means itemBuilder built the spinner item.
+    });
+
+    testWidgets('Natural mode spinner disappears after recalc lowers total_rows', (tester) async {
+      final control = _mockControl(_gridProps(
+        rows: [['A', '1'], ['B', '2']],
+        totalRows: 100,
+      ));
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SingleChildScrollView(
+              child: EpyxGrid(control: control),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+
+      expect(find.byType(CircularProgressIndicator), findsOneWidget);
+
+      // Recalc: now all data is loaded (total_rows == row count)
+      control.properties['rows'] = jsonEncode([
+        ['A', '1'], ['B', '2'],
+      ]);
+      control.properties['total_rows'] = 2;
+      control.notify();
+
+      await tester.pumpAndSettle();
+
+      expect(find.text('A'), findsOneWidget);
+      expect(find.byType(CircularProgressIndicator), findsNothing,
+          reason: 'Spinner must disappear when recalc sets total_rows == loaded');
+    });
+
+    testWidgets('Natural mode LOD after cell edit and recalc', (tester) async {
+      // Simulates: user edits cell → Python recalcs → pushes partial data
+      final control = _mockControl(_gridProps(
+        rows: [['A', '1'], ['B', '2'], ['C', '3']],
+        totalRows: 3,  // initially all loaded
+      ));
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SingleChildScrollView(
+              child: EpyxGrid(control: control),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // No spinner initially
+      expect(find.byType(CircularProgressIndicator), findsNothing);
+      expect(find.text('A'), findsOneWidget);
+
+      // SIMULATE: edit triggers recalc, table grows via value_code
+      control.properties['rows'] = jsonEncode([
+        ['A', '1'], ['B', '2'], ['C', '3'],
+      ]);
+      control.properties['total_rows'] = 50;  // table grew, partial data
+      control.notify();
+
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+
+      // Spinner must appear (need more data)
+      expect(find.byType(CircularProgressIndicator), findsOneWidget,
+          reason: 'Spinner must appear when recalc increases total_rows beyond loaded');
+
+      // Python responds with full data
+      final allRows = List.generate(50, (i) => ['R$i', '${i + 1}']);
+      control.properties['rows'] = jsonEncode(allRows);
+      control.properties['total_rows'] = 50;
+      control.notify();
+
+      await tester.pumpAndSettle();
+
+      expect(find.byType(CircularProgressIndicator), findsNothing,
+          reason: 'Spinner must disappear after full data loaded');
     });
   });
 }

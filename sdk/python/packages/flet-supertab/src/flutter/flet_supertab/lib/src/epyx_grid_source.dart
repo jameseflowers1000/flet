@@ -16,6 +16,8 @@ class EpyxGridSource {
   final List<String> columnNames;
   final List<String> columnLabels;
   final List<String> columnDtypes;
+  final List<String> columnFormats;
+  final List<String> columnDisplayCodes;
   final List<double> _columnWidths;
 
   // -- Row data (display-formatted strings) --
@@ -23,6 +25,9 @@ class EpyxGridSource {
 
   // -- Per-cell styles --
   final List<List<Map<String, String>?>> cellStyles;
+
+  // -- Override cells (set of "row:colName" strings) --
+  final Set<String> overrideCells;
 
   // -- Styling properties (ST1-ST18) --
   final Color headerBgColor;
@@ -48,9 +53,12 @@ class EpyxGridSource {
     required this.columnNames,
     required this.columnLabels,
     required this.columnDtypes,
+    this.columnFormats = const [],
+    this.columnDisplayCodes = const [],
     required List<double> columnWidths,
     required this.rows,
     this.cellStyles = const [],
+    this.overrideCells = const {},
     this.headerBgColor = const Color(0xFF2D2D30),
     this.headerTextColor = Colors.white,
     this.gridLineColor = const Color(0xFF3E3E42),
@@ -94,6 +102,10 @@ class EpyxGridSource {
         .toList();
     final dtypes =
         cols.map<String>((c) => (c["dtype"] as String?) ?? "str").toList();
+    final formats =
+        cols.map<String>((c) => (c["format"] as String?) ?? "").toList();
+    final displayCodes =
+        cols.map<String>((c) => (c["display_code"] as String?) ?? "").toList();
 
     // Column widths: default 120px, last column fills
     final widths = List<double>.generate(
@@ -112,6 +124,14 @@ class EpyxGridSource {
       }).toList();
     }
 
+    // Override cells: "row:colName" set
+    final overrideJson = control.getString("override_cells");
+    Set<String> overrides = {};
+    if (overrideJson != null && overrideJson.isNotEmpty) {
+      final parsed = jsonDecode(overrideJson) as List;
+      overrides = parsed.map<String>((e) => e.toString()).toSet();
+    }
+
     // Color helper
     Color color(String prop, Color fallback) {
       return control.getColor(prop, ctx, fallback) ?? fallback;
@@ -122,9 +142,12 @@ class EpyxGridSource {
       columnNames: names,
       columnLabels: labels,
       columnDtypes: dtypes,
+      columnFormats: formats,
+      columnDisplayCodes: displayCodes,
       columnWidths: widths,
       rows: parsedRows,
       cellStyles: styles,
+      overrideCells: overrides,
       headerBgColor: color("header_bg_color", const Color(0xFF2D2D30)),
       headerTextColor: color("header_text_color", Colors.white),
       gridLineColor: color("grid_line_color", const Color(0xFF3E3E42)),
@@ -218,6 +241,24 @@ class EpyxGridSource {
     final r = cellStyles[row];
     if (col >= r.length) return null;
     return r[col];
+  }
+
+  /// Get the display_code for a column (or empty string).
+  String displayCode(int col) {
+    if (col >= columnDisplayCodes.length) return "";
+    return columnDisplayCodes[col];
+  }
+
+  /// Get the format string for a column (or empty string).
+  String formatSpec(int col) {
+    if (col >= columnFormats.length) return "";
+    return columnFormats[col];
+  }
+
+  /// Does this cell have an override?
+  bool hasOverride(int row, int col) {
+    if (col >= columnNames.length) return false;
+    return overrideCells.contains('$row:${columnNames[col]}');
   }
 
   /// Row background color considering alternate rows and selection.
