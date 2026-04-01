@@ -156,12 +156,38 @@ class EpyxGridSource {
   String columnName(int i) => columnNames[i];
   String columnLabel(int i) => columnLabels[i];
 
+  /// Available viewport width — set by LayoutBuilder in the grid widget.
+  double _availableWidth = 0;
+
+  void setAvailableWidth(double width) {
+    _availableWidth = width;
+  }
+
   double columnWidth(int i) {
-    if (i < _columnWidths.length) return _columnWidths[i];
-    return 120.0;
+    if (i >= _columnWidths.length) return 120.0;
+    // Last column fills remaining space (Syncfusion lastColumnFill behavior)
+    if (i == _columnWidths.length - 1 && _availableWidth > 0) {
+      double otherColumnsWidth = 0;
+      for (int j = 0; j < _columnWidths.length - 1; j++) {
+        otherColumnsWidth += _columnWidths[j];
+      }
+      final remaining = _availableWidth - otherColumnsWidth;
+      if (remaining > _columnWidths[i]) {
+        return remaining;
+      }
+    }
+    return _columnWidths[i];
   }
 
   double get totalColumnsWidth {
+    if (_availableWidth > 0) {
+      double fixedWidth = 0;
+      for (int i = 0; i < _columnWidths.length - 1; i++) {
+        fixedWidth += _columnWidths[i];
+      }
+      final lastCol = columnWidth(_columnWidths.length - 1);
+      return fixedWidth + lastCol;
+    }
     double total = 0;
     for (final w in _columnWidths) {
       total += w;

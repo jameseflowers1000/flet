@@ -14,6 +14,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'epyx_grid_source.dart';
+import 'epyx_grid_test_api.dart';
 
 /// The main EpyxGrid widget. Reads Flet control properties and renders
 /// a virtualized grid using SliverList.
@@ -71,6 +72,54 @@ class _EpyxGridState extends State<EpyxGrid> {
   void didUpdateWidget(covariant EpyxGrid oldWidget) {
     super.didUpdateWidget(oldWidget);
     _sourceNeedsRebuild = true;
+
+    // Handle test commands if test mode is active
+    if (EpyxGridTestApi.isTestMode) {
+      final testCmd = widget.control.getString("test_command");
+      if (testCmd != null && testCmd.isNotEmpty) {
+        _handleTestCommand(testCmd);
+      }
+    }
+  }
+
+  void _handleTestCommand(String commandJson) {
+    final api = EpyxGridTestApi(
+      control: widget.control,
+      getCellText: (row, col) => _source.cellText(row, col),
+      getSelection: () => {'row': _selectedRow, 'col': _selectedCol},
+      getIsEditing: () => false, // P1: no editing
+      getVisibleRowCount: () {
+        if (!_yController.hasClients) return 0;
+        return (_yController.position.viewportDimension / _source.rowHeight)
+            .floor();
+      },
+      getFirstVisibleRow: () => _firstVisibleRow,
+      simulateTap: (row, col) {
+        setState(() {
+          _selectedRow = row;
+          _selectedCol = col;
+        });
+      },
+      simulateKey: (key, modifiers) {
+        // Simulate key press through the same handler
+        // This is a simplified version — full key simulation would
+        // create and dispatch actual KeyEvent objects
+        if (key == 'Arrow_Down' && _selectedRow < _source.rowCount - 1) {
+          setState(() => _selectedRow++);
+        } else if (key == 'Arrow_Up' && _selectedRow > 0) {
+          setState(() => _selectedRow--);
+        } else if (key == 'Arrow_Right' &&
+            _selectedCol < _source.columnCount - 1) {
+          setState(() => _selectedCol++);
+        } else if (key == 'Arrow_Left' && _selectedCol > 0) {
+          setState(() => _selectedCol--);
+        }
+      },
+    );
+
+    final result = api.handleCommand(commandJson);
+    // Send result back to Python via control property
+    widget.control.triggerEventWithoutSubscribers("test_result", result);
   }
 
   /// Set up bidirectional scroll sync between body and header (prototype pattern).
@@ -148,6 +197,9 @@ class _EpyxGridState extends State<EpyxGrid> {
             "${totalRows > 0 ? totalRows : _source.rowCount}"
         : "0 rows";
 
+    // -- Error message --
+    final errorMessage = widget.control.getString("error_message") ?? "";
+
     // -- Header bar --
     final headerBar = _buildHeaderBar(
         label, ctype, sortIndicator, filterActive, rowPositionText, context);
@@ -163,6 +215,23 @@ class _EpyxGridState extends State<EpyxGrid> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         headerBar,
+        // Error banner (R14)
+        if (errorMessage.isNotEmpty)
+          Container(
+            color: Colors.red.shade900,
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            child: Row(
+              children: [
+                const Icon(Icons.error_outline, color: Colors.white, size: 14),
+                const SizedBox(width: 4),
+                Expanded(
+                  child: Text(errorMessage,
+                      style:
+                          const TextStyle(color: Colors.white, fontSize: 12)),
+                ),
+              ],
+            ),
+          ),
         Expanded(child: gridBody),
       ],
     );
@@ -239,15 +308,23 @@ class _EpyxGridState extends State<EpyxGrid> {
         widget.control.getBool("show_row_numbers", false) ?? false;
     final rowNumWidth = showRowNumbers ? _rowNumberWidth() : 0.0;
 
-    return Column(
-      children: [
-        // Column headers
-        _buildColumnHeaders(context, showRowNumbers, rowNumWidth),
-        // Data rows
-        Expanded(
-          child: _buildDataArea(context, showRowNumbers, rowNumWidth),
-        ),
-      ],
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        // Set available width for last-column-fill calculation
+        final dataWidth = constraints.maxWidth - rowNumWidth;
+        _source.setAvailableWidth(dataWidth);
+
+        return Column(
+          children: [
+            // Column headers
+            _buildColumnHeaders(context, showRowNumbers, rowNumWidth),
+            // Data rows
+            Expanded(
+              child: _buildDataArea(context, showRowNumbers, rowNumWidth),
+            ),
+          ],
+        );
+      },
     );
   }
 
@@ -375,7 +452,7 @@ class _EpyxGridState extends State<EpyxGrid> {
                     ),
                   ),
                   child: Text(
-                    '${_firstVisibleRow + index + 1}',
+                    '${index + 1}',
                     style: TextStyle(
                         color: Colors.grey.shade500,
                         fontSize: _source.cellFontSize - 1),
