@@ -30,6 +30,7 @@ class _EpyxGridState extends State<EpyxGrid> {
   // -- Data parsed from control properties --
   late EpyxGridSource _source;
   bool _sourceNeedsRebuild = true;
+  bool _sourceInitialized = false;
 
   // -- Scroll controllers (prototype pattern: bidirectional sync) --
   final ScrollController _yController = ScrollController();
@@ -90,6 +91,7 @@ class _EpyxGridState extends State<EpyxGrid> {
 
   /// Track first visible row for header display + LOD page requests.
   void _onVerticalScroll() {
+    if (!_sourceInitialized) return;
     final rh = _source.rowHeight;
     final newFirst = (_yController.offset / rh).floor();
     if (newFirst != _firstVisibleRow) {
@@ -126,9 +128,10 @@ class _EpyxGridState extends State<EpyxGrid> {
 
   @override
   Widget build(BuildContext context) {
-    if (_sourceNeedsRebuild) {
+    if (_sourceNeedsRebuild || !_sourceInitialized) {
       _source = EpyxGridSource.fromControl(widget.control, context);
       _sourceNeedsRebuild = false;
+      _sourceInitialized = true;
     }
 
     final totalRows = widget.control.getInt("total_rows", 0) ?? 0;
