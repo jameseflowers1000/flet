@@ -211,4 +211,120 @@ void main() {
       expect(find.text('E'), findsOneWidget);
     });
   });
+
+  group('EpyxGrid updates on data change', () {
+    testWidgets('widget updates when control properties change', (tester) async {
+      final control = _mockControl(_gridProps(
+        rows: [['Rent', '1500.00']],
+      ));
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SizedBox(
+              width: 800,
+              height: 600,
+              child: EpyxGrid(control: control),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // Verify initial data renders
+      expect(find.text('Rent'), findsOneWidget);
+      expect(find.text('1500.00'), findsOneWidget);
+
+      // SIMULATE: Python pushes new data via _sync_to_control
+      // This is what happens during recalc — properties change, notify fires
+      control.properties['rows'] = jsonEncode([['Mortgage', '2500.00'], ['Insurance', '150.00']]);
+      control.properties['total_rows'] = 2;
+      control.notify();  // ChangeNotifier fires — widget MUST rebuild
+
+      await tester.pumpAndSettle();
+
+      // THE CRITICAL ASSERTION: widget must show NEW data
+      expect(find.text('Mortgage'), findsOneWidget,
+          reason: 'After control.notify(), widget must rebuild with new rows');
+      expect(find.text('2500.00'), findsOneWidget);
+      expect(find.text('Insurance'), findsOneWidget);
+      // Old data must be gone
+      expect(find.text('Rent'), findsNothing,
+          reason: 'Old row "Rent" must not appear after data update');
+    });
+
+    testWidgets('widget updates column count on change', (tester) async {
+      final control = _mockControl(_gridProps(
+        columns: [
+          {'name': 'x', 'label': 'X', 'dtype': 'int', 'format': '', 'read_only': false, 'alignment': 'centerRight'},
+        ],
+        rows: [['42']],
+      ));
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SizedBox(
+              width: 800,
+              height: 600,
+              child: EpyxGrid(control: control),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('X'), findsOneWidget);
+      expect(find.text('42'), findsOneWidget);
+
+      // Add a column
+      control.properties['columns'] = jsonEncode([
+        {'name': 'x', 'label': 'X', 'dtype': 'int', 'format': '', 'read_only': false, 'alignment': 'centerRight'},
+        {'name': 'y', 'label': 'Y', 'dtype': 'str', 'format': '', 'read_only': false, 'alignment': 'centerLeft'},
+      ]);
+      control.properties['rows'] = jsonEncode([['42', 'hello']]);
+      control.notify();
+
+      await tester.pumpAndSettle();
+
+      expect(find.text('Y'), findsOneWidget,
+          reason: 'New column header must appear after data change');
+      expect(find.text('hello'), findsOneWidget,
+          reason: 'New column cell data must appear');
+    });
+
+    testWidgets('widget updates total_rows display', (tester) async {
+      final control = _mockControl(_gridProps(
+        rows: [['A', '1']],
+        totalRows: 1,  // match actual row count (no LOD spinner)
+      ));
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SizedBox(
+              width: 800,
+              height: 600,
+              child: EpyxGrid(control: control),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('of 1'), findsOneWidget);
+
+      // Update total_rows and rows (set total = rows to avoid LOD spinner)
+      control.properties['total_rows'] = 2;
+      control.properties['rows'] = jsonEncode([['A', '1'], ['B', '2']]);
+      control.notify();
+
+      // Use pump() not pumpAndSettle() to avoid animation timeout
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+
+      expect(find.textContaining('of 2'), findsOneWidget,
+          reason: 'Row count display must update after notify');
+    });
+  });
 }
