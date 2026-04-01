@@ -3,8 +3,6 @@
 // These test the data layer WITHOUT rendering widgets.
 // Covers: P1 checklist items for data model parsing.
 
-import 'dart:convert';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
