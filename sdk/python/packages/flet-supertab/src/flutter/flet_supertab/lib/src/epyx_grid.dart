@@ -78,7 +78,6 @@ class _EpyxGridState extends State<EpyxGrid> {
       setState(() {
         _sourceNeedsRebuild = true;
       });
-      print('[EpyxGrid] Control changed — rebuilding source');
     }
   }
 
@@ -200,8 +199,6 @@ class _EpyxGridState extends State<EpyxGrid> {
       _sourceNeedsRebuild = false;
       _sourceInitialized = true;
     }
-    print('[EpyxGrid] build: ${_source.rowCount} rows, ${_source.columnCount} cols');
-
     final totalRows = widget.control.getInt("total_rows", 0) ?? 0;
     final label = widget.control.getString("label") ?? "";
     final ctype = widget.control.getString("ctype") ?? "";
