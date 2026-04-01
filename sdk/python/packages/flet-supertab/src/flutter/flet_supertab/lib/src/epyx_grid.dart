@@ -55,10 +55,15 @@ class _EpyxGridState extends State<EpyxGrid> {
     _focusNode = FocusNode();
     _setupScrollSync();
     _yController.addListener(_onVerticalScroll);
+    // Listen for Flet property changes — Control is a ChangeNotifier.
+    // When Python pushes new data via _sync_to_control(), the Control
+    // notifies listeners. We must rebuild the source to pick up new data.
+    widget.control.addListener(_onControlChanged);
   }
 
   @override
   void dispose() {
+    widget.control.removeListener(_onControlChanged);
     _yController.removeListener(_onVerticalScroll);
     _yController.dispose();
     _xController.dispose();
@@ -68,9 +73,19 @@ class _EpyxGridState extends State<EpyxGrid> {
     super.dispose();
   }
 
+  void _onControlChanged() {
+    setState(() {
+      _sourceNeedsRebuild = true;
+    });
+  }
+
   @override
   void didUpdateWidget(covariant EpyxGrid oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (oldWidget.control != widget.control) {
+      oldWidget.control.removeListener(_onControlChanged);
+      widget.control.addListener(_onControlChanged);
+    }
     _sourceNeedsRebuild = true;
 
     // Handle test commands if test mode is active
