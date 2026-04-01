@@ -35,6 +35,7 @@ class _EpyxGridState extends State<EpyxGrid> {
   final ScrollController _yController = ScrollController();
   final ScrollController _xController = ScrollController();
   final ScrollController _xHeaderController = ScrollController();
+  ScrollController? _yRowNumController;
 
   // -- Selection state --
   int _selectedRow = -1;
@@ -60,6 +61,7 @@ class _EpyxGridState extends State<EpyxGrid> {
     _yController.dispose();
     _xController.dispose();
     _xHeaderController.dispose();
+    _yRowNumController?.dispose();
     _focusNode.dispose();
     super.dispose();
   }
@@ -86,7 +88,7 @@ class _EpyxGridState extends State<EpyxGrid> {
     });
   }
 
-  /// Track first visible row for header display.
+  /// Track first visible row for header display + LOD page requests.
   void _onVerticalScroll() {
     final rh = _source.rowHeight;
     final newFirst = (_yController.offset / rh).floor();
@@ -94,6 +96,21 @@ class _EpyxGridState extends State<EpyxGrid> {
       setState(() {
         _firstVisibleRow = newFirst;
       });
+    }
+
+    // LOD: fire page_request at 70% of loaded data
+    final totalRows = widget.control.getInt("total_rows", 0) ?? 0;
+    if (totalRows > _source.rowCount && _yController.hasClients) {
+      final maxScroll = _yController.position.maxScrollExtent;
+      if (maxScroll > 0 &&
+          _yController.offset / maxScroll > 0.7) {
+        final eventData = jsonEncode({
+          "offset": _source.rowCount,
+          "limit": 100,
+        });
+        widget.control
+            .triggerEventWithoutSubscribers("page_request", eventData);
+      }
     }
   }
 
@@ -335,7 +352,7 @@ class _EpyxGridState extends State<EpyxGrid> {
     return SizedBox(
       width: width,
       child: CustomScrollView(
-        controller: _createSyncedVerticalController(),
+        controller: _getRowNumController(),
         physics: const NeverScrollableScrollPhysics(),
         slivers: [
           SliverList(
@@ -584,17 +601,18 @@ class _EpyxGridState extends State<EpyxGrid> {
     return (digits * 9.0 + 16).clamp(40.0, 100.0);
   }
 
-  /// Create a ScrollController synced to _yController for row numbers.
-  ScrollController _createSyncedVerticalController() {
-    final controller = ScrollController();
-    // Sync: when body scrolls, row numbers follow
-    _yController.addListener(() {
-      if (controller.hasClients &&
-          controller.offset != _yController.offset) {
-        controller.jumpTo(_yController.offset);
-      }
-    });
-    return controller;
+  /// Get or create a ScrollController synced to _yController for row numbers.
+  ScrollController _getRowNumController() {
+    if (_yRowNumController == null) {
+      _yRowNumController = ScrollController();
+      _yController.addListener(() {
+        if (_yRowNumController!.hasClients &&
+            _yRowNumController!.offset != _yController.offset) {
+          _yRowNumController!.jumpTo(_yController.offset);
+        }
+      });
+    }
+    return _yRowNumController!;
   }
 
   static Color? _parseHexColor(String hex) {
