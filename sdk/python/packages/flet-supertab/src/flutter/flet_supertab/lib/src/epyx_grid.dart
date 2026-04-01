@@ -468,7 +468,10 @@ class _EpyxGridState extends State<EpyxGrid> {
     );
   }
 
-  /// Main scrollable grid with SliverList.
+  /// Main scrollable grid.
+  /// Architecture: horizontal SingleChildScrollView wraps a vertical
+  /// ListView.builder. This is the proven prototype pattern — horizontal
+  /// scroll is shared, vertical scroll is virtualized.
   Widget _buildScrollableGrid(BuildContext context) {
     final totalRows = widget.control.getInt("total_rows", 0) ?? 0;
     final hasMore = totalRows > _source.rowCount;
@@ -484,31 +487,22 @@ class _EpyxGridState extends State<EpyxGrid> {
           physics: const ClampingScrollPhysics(),
           child: SizedBox(
             width: _source.totalColumnsWidth,
-            child: CustomScrollView(
+            child: ListView.builder(
               controller: _yController,
-              slivers: [
-                SliverList(
-                  delegate: SliverChildBuilderDelegate(
-                    (context, index) => _buildRow(index),
-                    childCount: _source.rowCount,
-                  ),
-                ),
-                // Loading indicator for LOD
-                if (hasMore)
-                  const SliverToBoxAdapter(
-                    child: Padding(
-                      padding: EdgeInsets.all(16),
-                      child: Center(
-                        child: SizedBox(
-                          width: 20,
-                          height: 20,
-                          child: CircularProgressIndicator(
-                              strokeWidth: 2),
-                        ),
-                      ),
+              itemCount: _source.rowCount + (hasMore ? 1 : 0),
+              itemExtent: _source.rowHeight,
+              itemBuilder: (context, index) {
+                if (index >= _source.rowCount) {
+                  return const Center(
+                    child: SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2),
                     ),
-                  ),
-              ],
+                  );
+                }
+                return _buildRow(index);
+              },
             ),
           ),
         ),
