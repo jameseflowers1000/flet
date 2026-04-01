@@ -469,6 +469,9 @@ class _EpyxGridState extends State<EpyxGrid> {
 
   /// Main scrollable grid with SliverList.
   Widget _buildScrollableGrid(BuildContext context) {
+    final totalRows = widget.control.getInt("total_rows", 0) ?? 0;
+    final hasMore = totalRows > _source.rowCount;
+
     return Focus(
       focusNode: _focusNode,
       onKeyEvent: _onKeyEvent,
@@ -489,6 +492,21 @@ class _EpyxGridState extends State<EpyxGrid> {
                     childCount: _source.rowCount,
                   ),
                 ),
+                // Loading indicator for LOD
+                if (hasMore)
+                  const SliverToBoxAdapter(
+                    child: Padding(
+                      padding: EdgeInsets.all(16),
+                      child: Center(
+                        child: SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(
+                              strokeWidth: 2),
+                        ),
+                      ),
+                    ),
+                  ),
               ],
             ),
           ),
