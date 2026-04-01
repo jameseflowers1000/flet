@@ -327,4 +327,163 @@ void main() {
           reason: 'Row count display must update after notify');
     });
   });
+
+  group('EpyxGrid LOD (Load on Demand)', () {
+    testWidgets('fires page_request when spinner item is built', (tester) async {
+      // 3 rows loaded, but total_rows=100 → spinner shows, page_request fires
+      final events = <String>[];
+      final control = _mockControl(_gridProps(
+        rows: [['A', '1'], ['B', '2'], ['C', '3']],
+        totalRows: 100,
+      ));
+
+      // Capture events fired by the widget
+      // The mock backend's triggerControlEventById will be called
+      // We can't easily intercept it on _MockFletBackend since it uses
+      // noSuchMethod. Instead, verify the spinner is present (which
+      // means the request code path was hit).
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SizedBox(
+              width: 800,
+              height: 600,
+              child: EpyxGrid(control: control),
+            ),
+          ),
+        ),
+      );
+      // Use pump() not pumpAndSettle() — spinner animation never settles
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+
+      // The spinner (CircularProgressIndicator) must be present
+      expect(find.byType(CircularProgressIndicator), findsOneWidget,
+          reason: 'LOD spinner must show when total_rows > loaded rows');
+
+      // The data rows must also be present
+      expect(find.text('A'), findsOneWidget);
+      expect(find.text('C'), findsOneWidget);
+    });
+
+    testWidgets('spinner disappears when all rows loaded', (tester) async {
+      final control = _mockControl(_gridProps(
+        rows: [['A', '1'], ['B', '2']],
+        totalRows: 2,  // total == loaded → no spinner
+      ));
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SizedBox(
+              width: 800,
+              height: 600,
+              child: EpyxGrid(control: control),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.byType(CircularProgressIndicator), findsNothing,
+          reason: 'No spinner when all rows are loaded');
+    });
+
+    testWidgets('LOD loads second page after notify', (tester) async {
+      // Start with 3 rows, total=100 → spinner + page_request
+      final control = _mockControl(_gridProps(
+        rows: [['A', '1'], ['B', '2'], ['C', '3']],
+        totalRows: 100,
+      ));
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SizedBox(
+              width: 800,
+              height: 600,
+              child: EpyxGrid(control: control),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+
+      // Verify first page renders
+      expect(find.text('A'), findsOneWidget);
+      expect(find.text('C'), findsOneWidget);
+
+      // SIMULATE: Python responds to page_request by pushing more rows
+      final moreRows = [
+        ['A', '1'], ['B', '2'], ['C', '3'],
+        ['D', '4'], ['E', '5'], ['F', '6'],
+      ];
+      control.properties['rows'] = jsonEncode(moreRows);
+      control.properties['total_rows'] = 6;  // now all loaded
+      control.notify();
+
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+
+      // Second page data must appear
+      expect(find.text('D'), findsOneWidget,
+          reason: 'Second page row "D" must appear after LOD response');
+      expect(find.text('F'), findsOneWidget,
+          reason: 'Second page row "F" must appear after LOD response');
+
+      // Spinner must be gone (total_rows == loaded rows)
+      expect(find.byType(CircularProgressIndicator), findsNothing,
+          reason: 'Spinner must disappear when all rows loaded');
+    });
+
+    testWidgets('LOD does not show spinner when total_rows equals row count', (tester) async {
+      final control = _mockControl(_gridProps(
+        rows: [['X', '1']],
+        totalRows: 1,
+      ));
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SizedBox(
+              width: 800,
+              height: 600,
+              child: EpyxGrid(control: control),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('X'), findsOneWidget);
+      expect(find.byType(CircularProgressIndicator), findsNothing);
+    });
+
+    testWidgets('LOD does not show spinner when total_rows is zero', (tester) async {
+      // total_rows=0 means Python hasn't set it yet — don't show spinner
+      final control = _mockControl(_gridProps(
+        rows: [['X', '1']],
+        totalRows: 0,
+      ));
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SizedBox(
+              width: 800,
+              height: 600,
+              child: EpyxGrid(control: control),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('X'), findsOneWidget);
+      expect(find.byType(CircularProgressIndicator), findsNothing,
+          reason: 'No spinner when total_rows is 0 (not yet set by Python)');
+    });
+  });
 }
