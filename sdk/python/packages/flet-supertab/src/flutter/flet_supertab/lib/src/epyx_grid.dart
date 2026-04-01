@@ -517,6 +517,8 @@ class _EpyxGridState extends State<EpyxGrid> {
                   itemExtent: _source.rowHeight,
                   itemBuilder: (context, index) {
                     if (index >= _source.rowCount) {
+                      // LOD: request next page when spinner is built
+                      _requestNextPage();
                       return const Center(
                         child: SizedBox(
                           width: 20,
@@ -534,6 +536,26 @@ class _EpyxGridState extends State<EpyxGrid> {
         ),
       ),
     );
+  }
+
+  // ────────────────────────────────────────────────────────────────
+  // LOD page request
+  // ────────────────────────────────────────────────────────────────
+
+  int _lastRequestedOffset = -1;
+
+  /// Request next page of data from Python. Debounced by offset to avoid
+  /// duplicate requests for the same page.
+  void _requestNextPage() {
+    final offset = _source.rowCount;
+    if (offset == _lastRequestedOffset) return; // already requested
+    _lastRequestedOffset = offset;
+
+    final eventData = jsonEncode({
+      "offset": offset,
+      "limit": 100,
+    });
+    widget.control.triggerEventWithoutSubscribers("page_request", eventData);
   }
 
   // ────────────────────────────────────────────────────────────────
