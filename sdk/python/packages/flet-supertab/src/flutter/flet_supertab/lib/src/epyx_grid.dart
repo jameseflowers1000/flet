@@ -74,9 +74,12 @@ class _EpyxGridState extends State<EpyxGrid> {
   }
 
   void _onControlChanged() {
-    setState(() {
-      _sourceNeedsRebuild = true;
-    });
+    if (mounted) {
+      setState(() {
+        _sourceNeedsRebuild = true;
+      });
+      print('[EpyxGrid] Control changed — rebuilding source');
+    }
   }
 
   @override
@@ -484,9 +487,10 @@ class _EpyxGridState extends State<EpyxGrid> {
   }
 
   /// Main scrollable grid.
-  /// Architecture: horizontal SingleChildScrollView wraps a vertical
-  /// ListView.builder. This is the proven prototype pattern — horizontal
-  /// scroll is shared, vertical scroll is virtualized.
+  /// Uses LayoutBuilder to detect bounded vs unbounded height constraints:
+  /// - Bounded (Gallery/Fit mode): ListView.builder with virtualization
+  /// - Unbounded (Natural mode): shrinkWrap ListView (no virtualization,
+  ///   but renders correctly without explicit height)
   Widget _buildScrollableGrid(BuildContext context) {
     final totalRows = widget.control.getInt("total_rows", 0) ?? 0;
     final hasMore = totalRows > _source.rowCount;
@@ -496,30 +500,40 @@ class _EpyxGridState extends State<EpyxGrid> {
       onKeyEvent: _onKeyEvent,
       child: GestureDetector(
         onTapDown: (details) => _onTapDown(details),
-        child: SingleChildScrollView(
-          controller: _xController,
-          scrollDirection: Axis.horizontal,
-          physics: const ClampingScrollPhysics(),
-          child: SizedBox(
-            width: _source.totalColumnsWidth,
-            child: ListView.builder(
-              controller: _yController,
-              itemCount: _source.rowCount + (hasMore ? 1 : 0),
-              itemExtent: _source.rowHeight,
-              itemBuilder: (context, index) {
-                if (index >= _source.rowCount) {
-                  return const Center(
-                    child: SizedBox(
-                      width: 20,
-                      height: 20,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    ),
-                  );
-                }
-                return _buildRow(index);
-              },
-            ),
-          ),
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final unboundedHeight = constraints.maxHeight == double.infinity;
+
+            return SingleChildScrollView(
+              controller: _xController,
+              scrollDirection: Axis.horizontal,
+              physics: const ClampingScrollPhysics(),
+              child: SizedBox(
+                width: _source.totalColumnsWidth,
+                child: ListView.builder(
+                  controller: unboundedHeight ? null : _yController,
+                  shrinkWrap: unboundedHeight,
+                  physics: unboundedHeight
+                      ? const NeverScrollableScrollPhysics()
+                      : null,
+                  itemCount: _source.rowCount + (hasMore ? 1 : 0),
+                  itemExtent: _source.rowHeight,
+                  itemBuilder: (context, index) {
+                    if (index >= _source.rowCount) {
+                      return const Center(
+                        child: SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
+                      );
+                    }
+                    return _buildRow(index);
+                  },
+                ),
+              ),
+            );
+          },
         ),
       ),
     );
