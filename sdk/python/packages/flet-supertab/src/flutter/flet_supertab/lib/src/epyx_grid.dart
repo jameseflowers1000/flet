@@ -237,32 +237,63 @@ class _EpyxGridState extends State<EpyxGrid> {
                 style: TextStyle(color: Colors.grey, fontSize: 14)))
         : _buildGridBody(context);
 
-    final result = Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        headerBar,
-        // Error banner (R14)
-        if (errorMessage.isNotEmpty)
-          Container(
-            color: Colors.red.shade900,
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-            child: Row(
-              children: [
-                const Icon(Icons.error_outline, color: Colors.white, size: 14),
-                const SizedBox(width: 4),
-                Expanded(
-                  child: Text(errorMessage,
-                      style:
-                          const TextStyle(color: Colors.white, fontSize: 12)),
-                ),
-              ],
-            ),
-          ),
-        Expanded(child: gridBody),
-      ],
-    );
+    // Use LayoutBuilder to handle unbounded height (Natural mode pane).
+    // Expanded requires bounded height — in Natural mode we calculate height.
+    return LayoutControl(
+      control: widget.control,
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final unbounded = constraints.maxHeight == double.infinity;
 
-    return LayoutControl(control: widget.control, child: result);
+          final errorBanner = errorMessage.isNotEmpty
+              ? Container(
+                  color: Colors.red.shade900,
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.error_outline,
+                          color: Colors.white, size: 14),
+                      const SizedBox(width: 4),
+                      Expanded(
+                        child: Text(errorMessage,
+                            style: const TextStyle(
+                                color: Colors.white, fontSize: 12)),
+                      ),
+                    ],
+                  ),
+                )
+              : null;
+
+          if (unbounded) {
+            // Natural mode: no Expanded, use calculated height
+            final headerRowH =
+                widget.control.getDouble("header_row_height", 40.0) ?? 40.0;
+            final gridHeight =
+                (_source.rowCount * _source.rowHeight) + headerRowH + 30;
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                headerBar,
+                if (errorBanner != null) errorBanner,
+                SizedBox(height: gridHeight, child: gridBody),
+              ],
+            );
+          }
+
+          // Bounded (Gallery/Fit): use Expanded
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              headerBar,
+              if (errorBanner != null) errorBanner,
+              Expanded(child: gridBody),
+            ],
+          );
+        },
+      ),
+    );
   }
 
   // ────────────────────────────────────────────────────────────────
@@ -772,8 +803,11 @@ class _EpyxGridState extends State<EpyxGrid> {
 
   void _onTapDown(TapDownDetails details) {
     // Convert local position to absolute (add scroll offset)
-    final absX = _xController.offset + details.localPosition.dx;
-    final absY = _yController.offset + details.localPosition.dy;
+    // In Natural mode (shrinkWrap), _yController may not be attached
+    final yOffset = _yController.hasClients ? _yController.offset : 0.0;
+    final xOffset = _xController.hasClients ? _xController.offset : 0.0;
+    final absX = xOffset + details.localPosition.dx;
+    final absY = yOffset + details.localPosition.dy;
 
     // Hit test: find column
     int col = 0;
@@ -901,6 +935,7 @@ class _EpyxGridState extends State<EpyxGrid> {
   }
 
   void _ensureRowVisible(int row) {
+    // In Natural mode, _yController has no clients (shrinkWrap ListView)
     if (!_yController.hasClients) return;
     final offset = row * _source.rowHeight;
     final viewportHeight = _yController.position.viewportDimension;
@@ -948,7 +983,8 @@ class _EpyxGridState extends State<EpyxGrid> {
     if (_yRowNumController == null) {
       _yRowNumController = ScrollController();
       _yController.addListener(() {
-        if (_yRowNumController!.hasClients &&
+        if (_yController.hasClients &&
+            _yRowNumController!.hasClients &&
             _yRowNumController!.offset != _yController.offset) {
           _yRowNumController!.jumpTo(_yController.offset);
         }

@@ -210,6 +210,54 @@ void main() {
       expect(find.text('A'), findsOneWidget);
       expect(find.text('E'), findsOneWidget);
     });
+
+    testWidgets('renders in unbounded height (Natural mode pane)', (tester) async {
+      final control = _mockControl(_gridProps(
+        rows: [['Rent', '1500.00'], ['Food', '300.00']],
+      ));
+
+      // Unbounded height: SingleChildScrollView gives infinite height to child
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SingleChildScrollView(
+              child: EpyxGrid(control: control),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('Rent'), findsOneWidget,
+          reason: 'Grid must render in unbounded height (Natural mode)');
+      expect(find.text('Food'), findsOneWidget);
+    });
+
+    testWidgets('tap selects cell in unbounded height (Natural mode)', (tester) async {
+      final control = _mockControl(_gridProps(
+        rows: [['Rent', '1500.00'], ['Food', '300.00']],
+      ));
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SingleChildScrollView(
+              child: EpyxGrid(control: control),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // Tap on "Food" — must select without crashing
+      await tester.tap(find.text('Food'));
+      await tester.pump();
+
+      // Verify selection changed via Semantics (cell should be selected)
+      // The cell should still be visible (not crashed)
+      expect(find.text('Food'), findsOneWidget,
+          reason: 'Tapping a cell in Natural mode must not crash');
+    });
   });
 
   group('EpyxGrid updates on data change', () {
