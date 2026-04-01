@@ -256,5 +256,79 @@ void main() {
       expect(find.byType(TextField), findsOneWidget,
           reason: '= key must open code editor overlay');
     });
+
+    testWidgets('Shift+Enter commits and moves selection up', (tester) async {
+      final backend = _MockFletBackend();
+      final control = _mockControl(_editableGridProps(), backend: backend);
+      await tester.pumpWidget(_buildGrid(control));
+      await tester.pumpAndSettle();
+
+      // Select cell (1, 0) — "Food" (row 1, so we can move up)
+      await tester.tap(find.text('Food'));
+      await tester.pump();
+      await tester.sendKeyEvent(LogicalKeyboardKey.f2);
+      await tester.pump();
+
+      await tester.enterText(find.byType(TextField), 'Groceries');
+      await tester.pump();
+
+      // Shift+Enter
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+      await tester.pump();
+
+      expect(find.byType(TextField), findsNothing,
+          reason: 'Shift+Enter must close editor');
+      final editEvents = backend.firedEvents
+          .where((e) => e['event'] == 'cell_edit')
+          .toList();
+      expect(editEvents, isNotEmpty,
+          reason: 'Shift+Enter must fire on_cell_edit');
+    });
+
+    testWidgets('Shift+Tab commits and moves selection left', (tester) async {
+      final backend = _MockFletBackend();
+      final control = _mockControl(_editableGridProps(), backend: backend);
+      await tester.pumpWidget(_buildGrid(control));
+      await tester.pumpAndSettle();
+
+      // Select cell (0, 1) — "1500.00" (col 1, so we can move left)
+      await tester.tap(find.text('1500.00'));
+      await tester.pump();
+      await tester.sendKeyEvent(LogicalKeyboardKey.f2);
+      await tester.pump();
+
+      await tester.enterText(find.byType(TextField), '2000');
+      await tester.pump();
+
+      // Shift+Tab
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+      await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+      await tester.pump();
+
+      expect(find.byType(TextField), findsNothing,
+          reason: 'Shift+Tab must close editor');
+      final editEvents = backend.firedEvents
+          .where((e) => e['event'] == 'cell_edit')
+          .toList();
+      expect(editEvents, isNotEmpty,
+          reason: 'Shift+Tab must fire on_cell_edit');
+    });
+
+    testWidgets('editing disabled table does not open editor', (tester) async {
+      final control = _mockControl(_editableGridProps(editable: false));
+      await tester.pumpWidget(_buildGrid(control));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Rent'));
+      await tester.pump();
+      await tester.sendKeyEvent(LogicalKeyboardKey.f2);
+      await tester.pump();
+
+      expect(find.byType(TextField), findsNothing,
+          reason: 'F2 must not open editor when editable=false');
+    });
   });
 }
