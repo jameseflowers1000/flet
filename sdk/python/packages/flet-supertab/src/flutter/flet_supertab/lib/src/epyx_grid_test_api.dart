@@ -21,6 +21,8 @@ class EpyxGridTestApi {
   // Callbacks into the grid widget state
   final String Function(int row, int col) getCellText;
   final Map<String, int> Function() getSelection;
+  final Map<String, int> Function() getSelectionRange;
+  final double Function(int col) getColumnWidth;
   final bool Function() getIsEditing;
   final int Function() getVisibleRowCount;
   final int Function() getFirstVisibleRow;
@@ -31,6 +33,8 @@ class EpyxGridTestApi {
     required this.control,
     required this.getCellText,
     required this.getSelection,
+    required this.getSelectionRange,
+    required this.getColumnWidth,
     required this.getIsEditing,
     required this.getVisibleRowCount,
     required this.getFirstVisibleRow,
@@ -62,6 +66,15 @@ class EpyxGridTestApi {
         case 'get_selection':
           final sel = getSelection();
           return jsonEncode({'result': sel});
+
+        case 'get_selection_range':
+          final range = getSelectionRange();
+          return jsonEncode({'result': range});
+
+        case 'get_column_width':
+          final col = cmd['col'] as int;
+          final width = getColumnWidth(col);
+          return jsonEncode({'result': width});
 
         case 'is_editing':
           return jsonEncode({'result': getIsEditing()});

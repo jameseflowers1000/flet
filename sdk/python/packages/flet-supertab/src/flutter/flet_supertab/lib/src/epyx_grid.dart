@@ -42,6 +42,7 @@ class _EpyxGridState extends State<EpyxGrid> {
   final ScrollController _xController = ScrollController(keepScrollOffset: false);
   final ScrollController _xHeaderController = ScrollController(keepScrollOffset: false);
   ScrollController? _yRowNumController;
+  ScrollController? _yFrozenController;
 
   // -- Selection state --
   // Anchor: where selection started. End: where it extends to.
@@ -72,6 +73,8 @@ class _EpyxGridState extends State<EpyxGrid> {
   int _lastTotalRows = 0;
   String _lastStylesJson = '';
   String _lastOverridesJson = '';
+  String _lastHiddenJson = '';
+  String _lastSummaryJson = '';
 
   // -- Focus node for keyboard handling --
   late FocusNode _focusNode;
@@ -82,6 +85,9 @@ class _EpyxGridState extends State<EpyxGrid> {
   // -- Column width overrides from drag resize --
   final Map<int, double> _columnWidthOverrides = {};
   int _resizingCol = -1; // column being resized (-1 = none)
+
+  // -- Checkbox column state --
+  final Set<int> _checkedRows = {};
 
 
   @override
@@ -104,6 +110,7 @@ class _EpyxGridState extends State<EpyxGrid> {
     _xController.dispose();
     _xHeaderController.dispose();
     _yRowNumController?.dispose();
+    _yFrozenController?.dispose();
     _editController.dispose();
     _editFocusNode.dispose();
     _focusNode.dispose();
@@ -121,8 +128,10 @@ class _EpyxGridState extends State<EpyxGrid> {
     final newTotalRows = widget.control.getInt("total_rows", 0) ?? 0;
     final newStyles = widget.control.getString("cell_styles") ?? '';
     final newOverrides = widget.control.getString("override_cells") ?? '';
-    final dataKey = '$newRows|$newCols|$newTotalRows|$newStyles|$newOverrides';
-    final oldKey = '$_lastRowsJson|$_lastColsJson|$_lastTotalRows|$_lastStylesJson|$_lastOverridesJson';
+    final newHidden = widget.control.getString("hidden_columns") ?? '';
+    final newSummary = widget.control.getString("summary_row") ?? '';
+    final dataKey = '$newRows|$newCols|$newTotalRows|$newStyles|$newOverrides|$newHidden|$newSummary';
+    final oldKey = '$_lastRowsJson|$_lastColsJson|$_lastTotalRows|$_lastStylesJson|$_lastOverridesJson|$_lastHiddenJson|$_lastSummaryJson';
     if (dataKey == oldKey) {
       // Data unchanged — just clear pending edits (Python confirmed)
       if (_pendingEdits.isNotEmpty) {
@@ -135,6 +144,8 @@ class _EpyxGridState extends State<EpyxGrid> {
     _lastTotalRows = newTotalRows;
     _lastStylesJson = newStyles;
     _lastOverridesJson = newOverrides;
+    _lastHiddenJson = newHidden;
+    _lastSummaryJson = newSummary;
 
     setState(() {
       _sourceNeedsRebuild = true;
@@ -166,7 +177,12 @@ class _EpyxGridState extends State<EpyxGrid> {
       control: widget.control,
       getCellText: (row, col) => _source.cellText(row, col),
       getSelection: () => {'row': _selectedRow, 'col': _selectedCol},
-      getIsEditing: () => false, // P1: no editing
+      getSelectionRange: () => {
+        'row': _selectedRow, 'col': _selectedCol,
+        'end_row': _selEndRow, 'end_col': _selEndCol,
+      },
+      getColumnWidth: (col) => _getColumnWidth(col),
+      getIsEditing: () => _isEditing,
       getVisibleRowCount: () {
         if (!_yController.hasClients) return 0;
         return (_yController.position.viewportDimension / _source.rowHeight)
@@ -265,6 +281,8 @@ class _EpyxGridState extends State<EpyxGrid> {
       _lastTotalRows = widget.control.getInt("total_rows", 0) ?? 0;
       _lastStylesJson = widget.control.getString("cell_styles") ?? '';
       _lastOverridesJson = widget.control.getString("override_cells") ?? '';
+      _lastHiddenJson = widget.control.getString("hidden_columns") ?? '';
+      _lastSummaryJson = widget.control.getString("summary_row") ?? '';
       _sourceInitialized = true;
     }
     final totalRows = widget.control.getInt("total_rows", 0) ?? 0;
@@ -288,12 +306,23 @@ class _EpyxGridState extends State<EpyxGrid> {
     final headerBar = _buildHeaderBar(
         label, ctype, sortIndicator, filterActive, rowPositionText, context);
 
+    // -- Summary row data --
+    final summaryJson = widget.control.getString("summary_row") ?? "";
+    List<String> summaryValues = [];
+    if (summaryJson.isNotEmpty) {
+      try {
+        summaryValues = (jsonDecode(summaryJson) as List)
+            .map<String>((e) => e?.toString() ?? '')
+            .toList();
+      } catch (_) {}
+    }
+
     // -- Grid body --
     final gridBody = _source.rowCount == 0
         ? const Center(
             child: Text("No data",
                 style: TextStyle(color: Colors.grey, fontSize: 14)))
-        : _buildGridBody(context);
+        : _buildGridBody(context, summaryValues: summaryValues);
 
     final errorBanner = errorMessage.isNotEmpty
         ? Container(
@@ -414,10 +443,12 @@ class _EpyxGridState extends State<EpyxGrid> {
   // Grid body: column headers + SliverList rows
   // ────────────────────────────────────────────────────────────────
 
-  Widget _buildGridBody(BuildContext context) {
+  Widget _buildGridBody(BuildContext context,
+      {List<String> summaryValues = const []}) {
     final showRowNumbers =
         widget.control.getBool("show_row_numbers", false) ?? false;
     final rowNumWidth = showRowNumbers ? _rowNumberWidth() : 0.0;
+    final frozenCount = widget.control.getInt("frozen_columns_count", 0) ?? 0;
 
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -430,13 +461,125 @@ class _EpyxGridState extends State<EpyxGrid> {
         final hasMore = totalRows > _source.rowCount;
         final itemCount = _source.rowCount + (hasMore ? 1 : 0);
 
-        // Single horizontal scroll wraps BOTH headers and data (prototype pattern).
-        // No header/body sync needed — one controller, one scroll position.
+        Widget lodSpinner() => const Center(
+              child: SizedBox(width: 20, height: 20,
+                child: CircularProgressIndicator(strokeWidth: 2)),
+            );
+
+        // When frozen columns are active, split into frozen + scrollable panels
+        if (frozenCount > 0 && frozenCount < _source.columnCount) {
+          final frozenWidth = _frozenColumnsWidth(frozenCount);
+          final scrollableWidth = _scrollableColumnsWidth(frozenCount);
+
+          return Focus(
+            focusNode: _focusNode,
+            onKeyEvent: _onKeyEvent,
+            child: GestureDetector(
+              onTapDown: (details) => _onTapDown(details),
+              onSecondaryTapDown: (details) => _onSecondaryTapDown(details),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Frozen panel (no horizontal scroll)
+                  SizedBox(
+                    width: frozenWidth,
+                    child: Column(
+                      mainAxisSize: unbounded ? MainAxisSize.min : MainAxisSize.max,
+                      children: [
+                        _buildColumnHeaderRow(context, showRowNumbers, rowNumWidth,
+                            colStart: 0, colEnd: frozenCount),
+                        if (unbounded)
+                          ListView.builder(
+                            shrinkWrap: true,
+                            physics: const NeverScrollableScrollPhysics(),
+                            itemCount: itemCount,
+                            itemExtent: _source.rowHeight,
+                            itemBuilder: (context, index) {
+                              if (index >= _source.rowCount) {
+                                _requestNextPage();
+                                return lodSpinner();
+                              }
+                              return _buildRow(index, colEnd: frozenCount);
+                            },
+                          )
+                        else
+                          Expanded(
+                            child: ListView.builder(
+                              controller: _getFrozenController(),
+                              itemCount: itemCount,
+                              itemExtent: _source.rowHeight,
+                              itemBuilder: (context, index) {
+                                if (index >= _source.rowCount) {
+                                  _requestNextPage();
+                                  return lodSpinner();
+                                }
+                                return _buildRow(index, colEnd: frozenCount);
+                              },
+                            ),
+                          ),
+                        if (summaryValues.isNotEmpty)
+                          _buildSummaryRow(summaryValues, colEnd: frozenCount),
+                      ],
+                    ),
+                  ),
+                  // Divider line between frozen and scrollable
+                  Container(width: 2, color: _source.gridLineColor),
+                  // Scrollable panel
+                  Expanded(
+                    child: SingleChildScrollView(
+                      controller: _xController,
+                      scrollDirection: Axis.horizontal,
+                      physics: const ClampingScrollPhysics(),
+                      child: SizedBox(
+                        width: scrollableWidth,
+                        child: Column(
+                          mainAxisSize: unbounded ? MainAxisSize.min : MainAxisSize.max,
+                          children: [
+                            _buildColumnHeaderRow(context, showRowNumbers, 0,
+                                colStart: frozenCount),
+                            if (unbounded)
+                              ListView.builder(
+                                shrinkWrap: true,
+                                physics: const NeverScrollableScrollPhysics(),
+                                itemCount: itemCount,
+                                itemExtent: _source.rowHeight,
+                                itemBuilder: (context, index) {
+                                  if (index >= _source.rowCount) return lodSpinner();
+                                  return _buildRow(index, colStart: frozenCount);
+                                },
+                              )
+                            else
+                              Expanded(
+                                child: ListView.builder(
+                                  controller: _yController,
+                                  itemCount: itemCount,
+                                  itemExtent: _source.rowHeight,
+                                  itemBuilder: (context, index) {
+                                    if (index >= _source.rowCount) return lodSpinner();
+                                    return _buildRow(index, colStart: frozenCount);
+                                  },
+                                ),
+                              ),
+                            if (summaryValues.isNotEmpty)
+                              _buildSummaryRow(summaryValues, colStart: frozenCount),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        }
+
+        // No frozen columns: single horizontal scroll wraps everything
         return Focus(
           focusNode: _focusNode,
           onKeyEvent: _onKeyEvent,
           child: GestureDetector(
             onTapDown: (details) => _onTapDown(details),
+            onSecondaryTapDown: (details) => _onSecondaryTapDown(details),
             child: SingleChildScrollView(
               controller: _xController,
               scrollDirection: Axis.horizontal,
@@ -446,11 +589,8 @@ class _EpyxGridState extends State<EpyxGrid> {
                 child: Column(
                   mainAxisSize: unbounded ? MainAxisSize.min : MainAxisSize.max,
                   children: [
-                    // Column headers (fixed height, scrolls with data)
                     _buildColumnHeaderRow(context, showRowNumbers, rowNumWidth),
-                    // Data rows
                     if (unbounded)
-                      // Natural mode: shrinkWrap, no vertical controller
                       ListView.builder(
                         shrinkWrap: true,
                         physics: const NeverScrollableScrollPhysics(),
@@ -459,16 +599,12 @@ class _EpyxGridState extends State<EpyxGrid> {
                         itemBuilder: (context, index) {
                           if (index >= _source.rowCount) {
                             _requestNextPage();
-                            return const Center(
-                              child: SizedBox(width: 20, height: 20,
-                                child: CircularProgressIndicator(strokeWidth: 2)),
-                            );
+                            return lodSpinner();
                           }
                           return _buildRow(index);
                         },
                       )
                     else
-                      // Bounded: virtualized with vertical controller
                       Expanded(
                         child: ListView.builder(
                           controller: _yController,
@@ -477,15 +613,14 @@ class _EpyxGridState extends State<EpyxGrid> {
                           itemBuilder: (context, index) {
                             if (index >= _source.rowCount) {
                               _requestNextPage();
-                              return const Center(
-                                child: SizedBox(width: 20, height: 20,
-                                  child: CircularProgressIndicator(strokeWidth: 2)),
-                              );
+                              return lodSpinner();
                             }
                             return _buildRow(index);
                           },
                         ),
                       ),
+                    if (summaryValues.isNotEmpty)
+                      _buildSummaryRow(summaryValues),
                   ],
                 ),
               ),
@@ -496,9 +631,63 @@ class _EpyxGridState extends State<EpyxGrid> {
     );
   }
 
+  /// Summary row — fixed footer with aggregated values.
+  Widget _buildSummaryRow(List<String> values,
+      {int colStart = 0, int? colEnd}) {
+    final endCol = colEnd ?? _source.columnCount;
+    final headerBg =
+        _color("header_bg_color", context, const Color(0xFF2D2D30));
+
+    return Container(
+      height: _source.rowHeight,
+      decoration: BoxDecoration(
+        color: headerBg,
+        border: Border(
+          top: BorderSide(
+              color: _source.gridLineColor, width: _source.gridLineWidth * 2),
+        ),
+      ),
+      child: Row(
+        children: [
+          for (int i = colStart; i < endCol; i++)
+            if (!_source.isColumnHidden(i))
+              Container(
+                width: _getColumnWidth(i),
+                height: _source.rowHeight,
+                padding: EdgeInsets.symmetric(
+                  horizontal: _source.cellPaddingH,
+                  vertical: _source.cellPaddingV,
+                ),
+                decoration: BoxDecoration(
+                  border: Border(
+                    right: BorderSide(
+                        color: _source.gridLineColor,
+                        width: _source.gridLineWidth),
+                  ),
+                ),
+                alignment: _source.isNumericColumn(i)
+                    ? Alignment.centerRight
+                  : Alignment.centerLeft,
+              child: Text(
+                i < values.length ? values[i] : '',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: _source.cellFontSize,
+                  fontFamily: _source.fontFamily,
+                  fontWeight: FontWeight.w600,
+                ),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
   /// Column header row — inside the shared horizontal SingleChildScrollView.
   Widget _buildColumnHeaderRow(
-      BuildContext context, bool showRowNumbers, double rowNumWidth) {
+      BuildContext context, bool showRowNumbers, double rowNumWidth,
+      {int colStart = 0, int? colEnd}) {
     final headerBg =
         _color("header_bg_color", context, const Color(0xFF2D2D30));
     final headerTextColor =
@@ -510,21 +699,44 @@ class _EpyxGridState extends State<EpyxGrid> {
     final headerPadH =
         widget.control.getDouble("header_padding_horizontal", 12.0) ?? 12.0;
 
+    final endCol = colEnd ?? _source.columnCount;
+    final showCheckbox =
+        widget.control.getBool("show_checkbox_column", false) ?? false;
+
     return Container(
       height: headerRowHeight,
       color: headerBg,
       child: Row(
         children: [
-          for (int i = 0; i < _source.columnCount; i++)
-            GestureDetector(
-              onTap: () => _onHeaderTap(i),
-              child: SizedBox(
-                width: _getColumnWidth(i),
-                height: headerRowHeight,
-                child: Stack(
-                  children: [
-                    Container(
-                      padding: EdgeInsets.symmetric(horizontal: headerPadH),
+          // Select-all checkbox in header (only in leftmost panel)
+          if (showCheckbox && colStart == 0)
+            SizedBox(
+              width: _checkboxColWidth,
+              height: headerRowHeight,
+              child: Center(
+                child: SizedBox(
+                  width: 18, height: 18,
+                  child: Checkbox(
+                    value: _checkedRows.length == _source.rowCount &&
+                        _source.rowCount > 0,
+                    tristate: true,
+                    onChanged: (v) => _toggleAllCheckboxes(v ?? false),
+                    materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
+                ),
+              ),
+            ),
+          for (int i = colStart; i < endCol; i++)
+            if (!_source.isColumnHidden(i))
+              GestureDetector(
+                onTap: () => _onHeaderTap(i),
+                child: SizedBox(
+                  width: _getColumnWidth(i),
+                  height: headerRowHeight,
+                  child: Stack(
+                    children: [
+                      Container(
+                        padding: EdgeInsets.symmetric(horizontal: headerPadH),
                       alignment: _source.isNumericColumn(i)
                           ? Alignment.centerRight
                           : Alignment.centerLeft,
@@ -623,11 +835,16 @@ class _EpyxGridState extends State<EpyxGrid> {
   // Row rendering
   // ────────────────────────────────────────────────────────────────
 
-  Widget _buildRow(int rowIndex) {
+  static const double _checkboxColWidth = 40.0;
+
+  Widget _buildRow(int rowIndex, {int colStart = 0, int? colEnd}) {
     final isSelected = rowIndex == _selectedRow;
+    final endCol = colEnd ?? _source.columnCount;
+    final showCheckbox =
+        widget.control.getBool("show_checkbox_column", false) ?? false;
 
     return Container(
-      key: isSelected ? _selectedRowKey : null,
+      key: (isSelected && colStart == 0) ? _selectedRowKey : null,
       height: _source.rowHeight,
       decoration: BoxDecoration(
         color: _source.rowBackground(rowIndex, isSelected),
@@ -638,8 +855,25 @@ class _EpyxGridState extends State<EpyxGrid> {
       ),
       child: Row(
         children: [
-          for (int colIndex = 0; colIndex < _source.columnCount; colIndex++)
-            _buildCell(rowIndex, colIndex),
+          // Checkbox column (only in leftmost panel)
+          if (showCheckbox && colStart == 0)
+            SizedBox(
+              width: _checkboxColWidth,
+              height: _source.rowHeight,
+              child: Center(
+                child: SizedBox(
+                  width: 18, height: 18,
+                  child: Checkbox(
+                    value: _checkedRows.contains(rowIndex),
+                    onChanged: (v) => _toggleCheckbox(rowIndex, v ?? false),
+                    materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
+                ),
+              ),
+            ),
+          for (int colIndex = colStart; colIndex < endCol; colIndex++)
+            if (!_source.isColumnHidden(colIndex))
+              _buildCell(rowIndex, colIndex),
         ],
       ),
     );
@@ -785,6 +1019,8 @@ class _EpyxGridState extends State<EpyxGrid> {
   /// Move anchor (and collapse range unless extending).
   /// Set scroll=false for tap events (cell already visible).
   void _moveTo(int row, int col, {bool extend = false, bool scroll = true}) {
+    final prevRow = _selectedRow;
+    final prevCol = _selectedCol;
     setState(() {
       if (extend) {
         _selEndRow = row;
@@ -797,6 +1033,27 @@ class _EpyxGridState extends State<EpyxGrid> {
       }
     });
     if (scroll) _scrollToAnchor();
+    // Fire selection_change if anchor moved
+    if (!extend && (row != prevRow || col != prevCol)) {
+      _fireSelectionChange();
+    }
+  }
+
+  void _fireSelectionChange() {
+    try {
+      final colName = _selectedCol >= 0 && _selectedCol < _source.columnCount
+          ? _source.columnName(_selectedCol) : '';
+      widget.control.triggerEventWithoutSubscribers('selection_change',
+          jsonEncode({
+            'row': _selectedRow,
+            'col': _selectedCol,
+            'column_name': colName,
+            'end_row': _selEndRow,
+            'end_col': _selEndCol,
+          }));
+    } catch (_) {
+      // Backend may be null in tests
+    }
   }
 
   /// Select entire row.
@@ -898,6 +1155,40 @@ class _EpyxGridState extends State<EpyxGrid> {
         widget.control.triggerEventWithoutSubscribers('cell_edit', eventData);
       }
     }
+  }
+
+  // ────────────────────────────────────────────────────────────────
+  // Checkbox column
+  // ────────────────────────────────────────────────────────────────
+
+  void _toggleCheckbox(int row, bool checked) {
+    setState(() {
+      if (checked) {
+        _checkedRows.add(row);
+      } else {
+        _checkedRows.remove(row);
+      }
+    });
+    _fireCheckboxSelection();
+  }
+
+  void _toggleAllCheckboxes(bool checked) {
+    setState(() {
+      if (checked) {
+        for (int i = 0; i < _source.rowCount; i++) _checkedRows.add(i);
+      } else {
+        _checkedRows.clear();
+      }
+    });
+    _fireCheckboxSelection();
+  }
+
+  void _fireCheckboxSelection() {
+    final eventData = jsonEncode({
+      'selected_rows': _checkedRows.toList()..sort(),
+    });
+    widget.control.triggerEventWithoutSubscribers(
+        'checkbox_selection', eventData);
   }
 
   // ────────────────────────────────────────────────────────────────
@@ -1059,15 +1350,36 @@ class _EpyxGridState extends State<EpyxGrid> {
     // Convert local position to absolute (add scroll offset)
     // In Natural mode (shrinkWrap), _yController may not be attached
     final yOffset = _yController.hasClients ? _yController.offset : 0.0;
-    final xOffset = _xController.hasClients ? _xController.offset : 0.0;
-    final absX = xOffset + details.localPosition.dx;
     // Subtract header height — GestureDetector wraps both header and data
     final headerH = _source.headerRowHeight;
     final dataY = details.localPosition.dy - headerH;
     if (dataY < 0) return; // tapped on header, not data
     final absY = yOffset + dataY;
 
-    // Hit test: find column
+    // Hit test: find column (frozen columns don't scroll horizontally)
+    final frozenCount = widget.control.getInt("frozen_columns_count", 0) ?? 0;
+    final showCheckbox =
+        widget.control.getBool("show_checkbox_column", false) ?? false;
+    final cbOffset = showCheckbox ? _checkboxColWidth : 0.0;
+    var localX = details.localPosition.dx;
+    // Skip checkbox column area — taps there handled by Checkbox widget
+    if (showCheckbox && localX < cbOffset) return;
+    localX -= cbOffset; // offset past checkbox for column hit test
+
+    double absX;
+    if (frozenCount > 0 && frozenCount < _source.columnCount) {
+      final frozenW = _frozenColumnsWidth(frozenCount) - cbOffset; // data cols only
+      if (localX <= frozenW) {
+        absX = localX;
+      } else {
+        final xOffset = _xController.hasClients ? _xController.offset : 0.0;
+        absX = frozenW + xOffset + (localX - frozenW - 2);
+      }
+    } else {
+      final xOffset = _xController.hasClients ? _xController.offset : 0.0;
+      absX = xOffset + localX;
+    }
+
     int col = 0;
     double cumX = 0;
     for (int i = 0; i < _source.columnCount; i++) {
@@ -1088,6 +1400,119 @@ class _EpyxGridState extends State<EpyxGrid> {
     _moveTo(row, col,
         extend: HardwareKeyboard.instance.isShiftPressed, scroll: false);
     _focusNode.requestFocus();
+  }
+
+  /// Right-click: select cell under cursor, then show context menu.
+  void _onSecondaryTapDown(TapDownDetails details) {
+    final yOffset = _yController.hasClients ? _yController.offset : 0.0;
+    final headerH = _source.headerRowHeight;
+    final dataY = details.localPosition.dy - headerH;
+    if (dataY < 0) return;
+    final absY = yOffset + dataY;
+
+    final frozenCount = widget.control.getInt("frozen_columns_count", 0) ?? 0;
+    final showCheckbox =
+        widget.control.getBool("show_checkbox_column", false) ?? false;
+    final cbOffset = showCheckbox ? _checkboxColWidth : 0.0;
+    var localX = details.localPosition.dx;
+    if (showCheckbox && localX < cbOffset) return;
+    localX -= cbOffset;
+
+    double absX;
+    if (frozenCount > 0 && frozenCount < _source.columnCount) {
+      final frozenW = _frozenColumnsWidth(frozenCount) - cbOffset;
+      if (localX <= frozenW) {
+        absX = localX;
+      } else {
+        final xOffset = _xController.hasClients ? _xController.offset : 0.0;
+        absX = frozenW + xOffset + (localX - frozenW - 2);
+      }
+    } else {
+      final xOffset = _xController.hasClients ? _xController.offset : 0.0;
+      absX = xOffset + localX;
+    }
+
+    int col = 0;
+    double cumX = 0;
+    for (int i = 0; i < _source.columnCount; i++) {
+      final w = _getColumnWidth(i);
+      if (absX >= cumX && absX < cumX + w) {
+        col = i;
+        break;
+      }
+      cumX += w;
+    }
+    int row = (absY / _source.rowHeight).floor();
+    row = row.clamp(0, _source.rowCount - 1);
+
+    if (!_isInSelection(row, col)) {
+      _moveTo(row, col, scroll: false);
+    }
+    _focusNode.requestFocus();
+
+    _showContextMenu(details.globalPosition, row, col);
+  }
+
+  /// Show right-click context menu (CM1-CM4).
+  void _showContextMenu(Offset globalPosition, int row, int col) {
+    final hasOverride = _source.hasOverride(row, col);
+    final editable = _canEdit;
+
+    showMenu<String>(
+      context: context,
+      position: RelativeRect.fromLTRB(
+        globalPosition.dx, globalPosition.dy,
+        globalPosition.dx, globalPosition.dy,
+      ),
+      items: [
+        const PopupMenuItem(value: 'copy', child: Text('Copy')),
+        if (editable)
+          const PopupMenuItem(value: 'cut', child: Text('Cut')),
+        if (editable)
+          const PopupMenuItem(value: 'paste', child: Text('Paste')),
+        if (editable)
+          const PopupMenuDivider(),
+        if (editable)
+          const PopupMenuItem(value: 'clear', child: Text('Clear')),
+        if (editable && hasOverride)
+          PopupMenuItem(
+            value: 'remove_override',
+            child: Row(
+              children: [
+                Icon(Icons.close, size: 14, color: Colors.orange.shade400),
+                const SizedBox(width: 6),
+                const Text('Remove Override'),
+              ],
+            ),
+          ),
+      ],
+    ).then((action) {
+      if (action == null) return;
+      switch (action) {
+        case 'copy':
+          _copySelection();
+          break;
+        case 'cut':
+          _cutSelection();
+          break;
+        case 'paste':
+          _pasteAtSelection();
+          break;
+        case 'clear':
+          _clearSelection();
+          break;
+        case 'remove_override':
+          final colName = _source.columnName(col);
+          final eventData = jsonEncode({
+            'action': 'remove_override',
+            'row_index': row,
+            'column_name': colName,
+          });
+          widget.control.triggerEventWithoutSubscribers(
+              'context_action', eventData);
+          break;
+      }
+    });
   }
 
   KeyEventResult _onKeyEvent(FocusNode node, KeyEvent event) {
@@ -1189,14 +1614,16 @@ class _EpyxGridState extends State<EpyxGrid> {
       final row = targetRow.clamp(0, _source.rowCount - 1);
       if (isShift) {
         setState(() => _selEndRow = row);
+      } else if (isCtrl) {
+        // Ctrl+Down: jump to last row
+        _moveTo(row, _selectedCol, scroll: false);
+        _scrollToEdge(bottom: true);
       } else {
-        // Only scroll if target row is not already visible
+        // Single step: delta scroll only if target not visible
         if (!_isRowVisible(row) && _yController.hasClients) {
-          if (row > _selectedRow) {
-            _yController.jumpTo(
-                (_yController.offset + _source.rowHeight)
-                    .clamp(0.0, _yController.position.maxScrollExtent));
-          }
+          _yController.jumpTo(
+              (_yController.offset + _source.rowHeight)
+                  .clamp(0.0, _yController.position.maxScrollExtent));
         }
         _moveTo(row, _selectedCol, scroll: false);
       }
@@ -1207,14 +1634,16 @@ class _EpyxGridState extends State<EpyxGrid> {
       final row = targetRow.clamp(0, _source.rowCount - 1);
       if (isShift) {
         setState(() => _selEndRow = row);
+      } else if (isCtrl) {
+        // Ctrl+Up: jump to first row
+        _moveTo(row, _selectedCol, scroll: false);
+        _scrollToEdge(bottom: false);
       } else {
-        // Only scroll if target row is not already visible
+        // Single step: delta scroll only if target not visible
         if (!_isRowVisible(row) && _yController.hasClients) {
-          if (row < _selectedRow) {
-            _yController.jumpTo(
-                (_yController.offset - _source.rowHeight)
-                    .clamp(0.0, _yController.position.maxScrollExtent));
-          }
+          _yController.jumpTo(
+              (_yController.offset - _source.rowHeight)
+                  .clamp(0.0, _yController.position.maxScrollExtent));
         }
         _moveTo(row, _selectedCol, scroll: false);
       }
@@ -1396,11 +1825,35 @@ class _EpyxGridState extends State<EpyxGrid> {
     return _columnWidthOverrides[i] ?? _source.columnWidth(i);
   }
 
-  /// Total width of all columns including drag overrides.
+  /// Total width of all columns including drag overrides, excluding hidden.
   double get _totalColumnsWidth {
     double total = 0;
+    final showCheckbox =
+        widget.control.getBool("show_checkbox_column", false) ?? false;
+    if (showCheckbox) total += _checkboxColWidth;
     for (int i = 0; i < _source.columnCount; i++) {
-      total += _getColumnWidth(i);
+      if (!_source.isColumnHidden(i)) total += _getColumnWidth(i);
+    }
+    return total;
+  }
+
+  /// Width of frozen columns (first N visible columns).
+  double _frozenColumnsWidth(int frozenCount) {
+    double total = 0;
+    final showCheckbox =
+        widget.control.getBool("show_checkbox_column", false) ?? false;
+    if (showCheckbox) total += _checkboxColWidth;
+    for (int i = 0; i < frozenCount && i < _source.columnCount; i++) {
+      if (!_source.isColumnHidden(i)) total += _getColumnWidth(i);
+    }
+    return total;
+  }
+
+  /// Width of scrollable columns (after frozen), excluding hidden.
+  double _scrollableColumnsWidth(int frozenCount) {
+    double total = 0;
+    for (int i = frozenCount; i < _source.columnCount; i++) {
+      if (!_source.isColumnHidden(i)) total += _getColumnWidth(i);
     }
     return total;
   }
@@ -1415,6 +1868,26 @@ class _EpyxGridState extends State<EpyxGrid> {
     } else if (offset + _source.rowHeight >
         _yController.offset + viewportHeight) {
       _yController.jumpTo(offset + _source.rowHeight - viewportHeight);
+    }
+  }
+
+  /// Scroll to top or bottom edge. Works in both bounded and Natural mode.
+  /// Bounded: uses _yController. Natural: uses parent Scrollable directly.
+  void _scrollToEdge({required bool bottom}) {
+    if (_yController.hasClients) {
+      // Bounded mode
+      _yController.jumpTo(
+          bottom ? _yController.position.maxScrollExtent : 0.0);
+    } else {
+      // Natural mode: row widget may not be built yet (off-screen).
+      // Scroll the parent scrollable directly to the edge.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        final position = Scrollable.maybeOf(context)?.position;
+        if (position != null) {
+          position.jumpTo(
+              bottom ? position.maxScrollExtent : 0.0);
+        }
+      });
     }
   }
 
@@ -1516,6 +1989,36 @@ class _EpyxGridState extends State<EpyxGrid> {
       });
     }
     return _yRowNumController!;
+  }
+
+  /// Get or create a ScrollController synced to _yController for frozen columns.
+  ScrollController _getFrozenController() {
+    if (_yFrozenController == null) {
+      _yFrozenController = ScrollController();
+      // Bidirectional sync: frozen ↔ main
+      bool syncing = false;
+      _yController.addListener(() {
+        if (syncing) return;
+        if (_yController.hasClients &&
+            _yFrozenController!.hasClients &&
+            _yFrozenController!.offset != _yController.offset) {
+          syncing = true;
+          _yFrozenController!.jumpTo(_yController.offset);
+          syncing = false;
+        }
+      });
+      _yFrozenController!.addListener(() {
+        if (syncing) return;
+        if (_yFrozenController!.hasClients &&
+            _yController.hasClients &&
+            _yController.offset != _yFrozenController!.offset) {
+          syncing = true;
+          _yController.jumpTo(_yFrozenController!.offset);
+          syncing = false;
+        }
+      });
+    }
+    return _yFrozenController!;
   }
 
   static Color? _parseHexColor(String hex) {

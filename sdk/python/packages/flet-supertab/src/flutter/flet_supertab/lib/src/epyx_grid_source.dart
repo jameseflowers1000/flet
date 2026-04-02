@@ -29,6 +29,9 @@ class EpyxGridSource {
   // -- Override cells (set of "row:colName" strings) --
   final Set<String> overrideCells;
 
+  // -- Hidden columns (set of column names) --
+  final Set<String> hiddenColumns;
+
   // -- Styling properties (ST1-ST18) --
   final Color headerBgColor;
   final Color headerTextColor;
@@ -59,6 +62,7 @@ class EpyxGridSource {
     required this.rows,
     this.cellStyles = const [],
     this.overrideCells = const {},
+    this.hiddenColumns = const {},
     this.headerBgColor = const Color(0xFF2D2D30),
     this.headerTextColor = Colors.white,
     this.gridLineColor = const Color(0xFF3E3E42),
@@ -135,6 +139,14 @@ class EpyxGridSource {
       overrides = parsed.map<String>((e) => e.toString()).toSet();
     }
 
+    // Hidden columns
+    final hiddenJson = control.getString("hidden_columns");
+    Set<String> hidden = {};
+    if (hiddenJson != null && hiddenJson.isNotEmpty) {
+      final parsed = jsonDecode(hiddenJson) as List;
+      hidden = parsed.map<String>((e) => e.toString()).toSet();
+    }
+
     // Color helper
     Color color(String prop, Color fallback) {
       return control.getColor(prop, ctx, fallback) ?? fallback;
@@ -151,6 +163,7 @@ class EpyxGridSource {
       rows: parsedRows,
       cellStyles: styles,
       overrideCells: overrides,
+      hiddenColumns: hidden,
       headerBgColor: color("header_bg_color", const Color(0xFF2D2D30)),
       headerTextColor: color("header_text_color", Colors.white),
       gridLineColor: color("grid_line_color", const Color(0xFF3E3E42)),
@@ -206,6 +219,12 @@ class EpyxGridSource {
     if (i >= columnDtypes.length) return false;
     final dt = columnDtypes[i];
     return dt == "int" || dt == "float";
+  }
+
+  /// Is this column hidden?
+  bool isColumnHidden(int i) {
+    if (i >= columnNames.length) return false;
+    return hiddenColumns.contains(columnNames[i]);
   }
 
   /// Estimate how many rows fit in the viewport.

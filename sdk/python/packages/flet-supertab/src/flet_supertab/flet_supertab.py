@@ -105,6 +105,13 @@ class SuperTab(ft.LayoutControl):
     # Event data (in e.data as JSON): {"column": str, "width": float}
     on_column_resize: Optional[ft.ControlEventHandler["SuperTab"]] = None
 
+    # Event: selection change — fired when the selected cell changes
+    # Event data (in e.data as JSON): {"row": int, "col": int, "column_name": str, "end_row": int, "end_col": int}
+    on_selection_change: Optional[ft.ControlEventHandler["SuperTab"]] = None
+
+    # JSON list of column names to hide (e.g., '["col_a", "col_b"]')
+    hidden_columns: Optional[str] = field(default=None, metadata={"data_field": "hidden_columns"})
+
     # Total row count for LOD (Dart uses this to size the scrollbar)
     total_rows: int = field(default=0, metadata={"data_field": "total_rows"})
 
