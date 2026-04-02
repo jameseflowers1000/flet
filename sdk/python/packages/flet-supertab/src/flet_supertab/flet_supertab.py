@@ -101,6 +101,10 @@ class SuperTab(ft.LayoutControl):
     # Event data (in e.data as JSON): {"column": str, "ascending": bool}
     on_sort_request: Optional[ft.ControlEventHandler["SuperTab"]] = None
 
+    # Event: column resize — fired when user drags a column border
+    # Event data (in e.data as JSON): {"column": str, "width": float}
+    on_column_resize: Optional[ft.ControlEventHandler["SuperTab"]] = None
+
     # Total row count for LOD (Dart uses this to size the scrollbar)
     total_rows: int = field(default=0, metadata={"data_field": "total_rows"})
 

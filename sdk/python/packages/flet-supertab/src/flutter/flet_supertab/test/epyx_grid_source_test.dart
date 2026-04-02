@@ -249,7 +249,7 @@ void main() {
       expect(source.columnWidth(0), 200.0);
     });
 
-    test('last column fills available width', () {
+    test('columns use exact widths (no lastColumnFill)', () {
       final source = EpyxGridSource(
         columns: [
           {'name': 'a'},
@@ -263,8 +263,8 @@ void main() {
       );
 
       source.setAvailableWidth(500);
-      expect(source.columnWidth(0), 100.0); // first column unchanged
-      expect(source.columnWidth(1), 400.0); // last column fills: 500 - 100
+      expect(source.columnWidth(0), 100.0);
+      expect(source.columnWidth(1), 100.0); // no fill — exact width
     });
   });
 }

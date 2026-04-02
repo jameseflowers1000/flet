@@ -107,9 +107,12 @@ class EpyxGridSource {
     final displayCodes =
         cols.map<String>((c) => (c["display_code"] as String?) ?? "").toList();
 
-    // Column widths: default 120px, last column fills
-    final widths = List<double>.generate(
-        cols.length, (i) => 120.0); // will be adjusted by lastColumnFill
+    // Column widths: use persisted width if set, else default 120px
+    final widths = List<double>.generate(cols.length, (i) {
+      final w = cols[i]["width"];
+      if (w != null && w is num && w > 0) return w.toDouble();
+      return 120.0;
+    });
 
     // Cell styles
     final cellStylesJson = control.getString("cell_styles");
@@ -188,29 +191,10 @@ class EpyxGridSource {
 
   double columnWidth(int i) {
     if (i >= _columnWidths.length) return 120.0;
-    // Last column fills remaining space (Syncfusion lastColumnFill behavior)
-    if (i == _columnWidths.length - 1 && _availableWidth > 0) {
-      double otherColumnsWidth = 0;
-      for (int j = 0; j < _columnWidths.length - 1; j++) {
-        otherColumnsWidth += _columnWidths[j];
-      }
-      final remaining = _availableWidth - otherColumnsWidth;
-      if (remaining > _columnWidths[i]) {
-        return remaining;
-      }
-    }
     return _columnWidths[i];
   }
 
   double get totalColumnsWidth {
-    if (_availableWidth > 0) {
-      double fixedWidth = 0;
-      for (int i = 0; i < _columnWidths.length - 1; i++) {
-        fixedWidth += _columnWidths[i];
-      }
-      final lastCol = columnWidth(_columnWidths.length - 1);
-      return fixedWidth + lastCol;
-    }
     double total = 0;
     for (final w in _columnWidths) {
       total += w;

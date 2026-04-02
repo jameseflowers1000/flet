@@ -36,9 +36,11 @@ class _EpyxGridState extends State<EpyxGrid> {
   bool _sourceInitialized = false;
 
   // -- Scroll controllers (prototype pattern: bidirectional sync) --
-  final ScrollController _yController = ScrollController();
-  final ScrollController _xController = ScrollController();
-  final ScrollController _xHeaderController = ScrollController();
+  // keepScrollOffset: false prevents PageStorage from restoring stale
+  // scroll positions after widget rebuild, which fights our jumpTo calls.
+  final ScrollController _yController = ScrollController(keepScrollOffset: false);
+  final ScrollController _xController = ScrollController(keepScrollOffset: false);
+  final ScrollController _xHeaderController = ScrollController(keepScrollOffset: false);
   ScrollController? _yRowNumController;
 
   // -- Selection state --
@@ -76,6 +78,11 @@ class _EpyxGridState extends State<EpyxGrid> {
 
   // -- Key for Natural mode auto-scroll (attached to selected row) --
   final GlobalKey _selectedRowKey = GlobalKey();
+
+  // -- Column width overrides from drag resize --
+  final Map<int, double> _columnWidthOverrides = {};
+  int _resizingCol = -1; // column being resized (-1 = none)
+
 
   @override
   void initState() {
@@ -324,7 +331,7 @@ class _EpyxGridState extends State<EpyxGrid> {
               children: [
                 headerBar,
                 if (errorBanner != null) errorBanner,
-                gridBody,  // No Expanded, no SizedBox — natural height
+                gridBody,
               ],
             );
           }
@@ -419,23 +426,78 @@ class _EpyxGridState extends State<EpyxGrid> {
         _source.setAvailableWidth(dataWidth);
 
         final unbounded = constraints.maxHeight == double.infinity;
-        final dataArea = _buildDataArea(context, showRowNumbers, rowNumWidth);
+        final totalRows = widget.control.getInt("total_rows", 0) ?? 0;
+        final hasMore = totalRows > _source.rowCount;
+        final itemCount = _source.rowCount + (hasMore ? 1 : 0);
 
-        return Column(
-          mainAxisSize: unbounded ? MainAxisSize.min : MainAxisSize.max,
-          children: [
-            // Column headers
-            _buildColumnHeaders(context, showRowNumbers, rowNumWidth),
-            // Data rows — Expanded only when height is bounded
-            if (unbounded) dataArea else Expanded(child: dataArea),
-          ],
+        // Single horizontal scroll wraps BOTH headers and data (prototype pattern).
+        // No header/body sync needed — one controller, one scroll position.
+        return Focus(
+          focusNode: _focusNode,
+          onKeyEvent: _onKeyEvent,
+          child: GestureDetector(
+            onTapDown: (details) => _onTapDown(details),
+            child: SingleChildScrollView(
+              controller: _xController,
+              scrollDirection: Axis.horizontal,
+              physics: const ClampingScrollPhysics(),
+              child: SizedBox(
+                width: _totalColumnsWidth,
+                child: Column(
+                  mainAxisSize: unbounded ? MainAxisSize.min : MainAxisSize.max,
+                  children: [
+                    // Column headers (fixed height, scrolls with data)
+                    _buildColumnHeaderRow(context, showRowNumbers, rowNumWidth),
+                    // Data rows
+                    if (unbounded)
+                      // Natural mode: shrinkWrap, no vertical controller
+                      ListView.builder(
+                        shrinkWrap: true,
+                        physics: const NeverScrollableScrollPhysics(),
+                        itemCount: itemCount,
+                        itemExtent: _source.rowHeight,
+                        itemBuilder: (context, index) {
+                          if (index >= _source.rowCount) {
+                            _requestNextPage();
+                            return const Center(
+                              child: SizedBox(width: 20, height: 20,
+                                child: CircularProgressIndicator(strokeWidth: 2)),
+                            );
+                          }
+                          return _buildRow(index);
+                        },
+                      )
+                    else
+                      // Bounded: virtualized with vertical controller
+                      Expanded(
+                        child: ListView.builder(
+                          controller: _yController,
+                          itemCount: itemCount,
+                          itemExtent: _source.rowHeight,
+                          itemBuilder: (context, index) {
+                            if (index >= _source.rowCount) {
+                              _requestNextPage();
+                              return const Center(
+                                child: SizedBox(width: 20, height: 20,
+                                  child: CircularProgressIndicator(strokeWidth: 2)),
+                              );
+                            }
+                            return _buildRow(index);
+                          },
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ),
+          ),
         );
       },
     );
   }
 
-  /// Column header row — synced horizontally with body.
-  Widget _buildColumnHeaders(
+  /// Column header row — inside the shared horizontal SingleChildScrollView.
+  Widget _buildColumnHeaderRow(
       BuildContext context, bool showRowNumbers, double rowNumWidth) {
     final headerBg =
         _color("header_bg_color", context, const Color(0xFF2D2D30));
@@ -453,180 +515,89 @@ class _EpyxGridState extends State<EpyxGrid> {
       color: headerBg,
       child: Row(
         children: [
-          // Row number header placeholder
-          if (showRowNumbers)
-            Container(
-              width: rowNumWidth,
-              height: headerRowHeight,
-              alignment: Alignment.center,
-              decoration: BoxDecoration(
-                border: Border(
-                  right: BorderSide(
-                      color: _source.gridLineColor,
-                      width: _source.gridLineWidth),
-                ),
-              ),
-              child: Text("#",
-                  style: TextStyle(
-                      color: headerTextColor.withValues(alpha: 0.6),
-                      fontSize: headerFontSize - 1)),
-            ),
-          // Column headers (scrollable, synced with body)
-          Expanded(
-            child: SingleChildScrollView(
-              controller: _xHeaderController,
-              scrollDirection: Axis.horizontal,
-              physics: const ClampingScrollPhysics(),
-              child: Row(
-                children: [
-                  for (int i = 0; i < _source.columnCount; i++)
-                    GestureDetector(
-                      onTap: () => _onHeaderTap(i),
-                      child: Container(
-                        width: _source.columnWidth(i),
-                        height: headerRowHeight,
-                        padding:
-                            EdgeInsets.symmetric(horizontal: headerPadH),
-                        alignment: _source.isNumericColumn(i)
-                            ? Alignment.centerRight
-                            : Alignment.centerLeft,
-                        decoration: BoxDecoration(
-                          border: Border(
-                            right: BorderSide(
-                                color: _source.gridLineColor,
-                                width: _source.gridLineWidth),
-                            bottom: BorderSide(
-                                color: _source.gridLineColor,
-                                width: _source.gridLineWidth),
-                          ),
+          for (int i = 0; i < _source.columnCount; i++)
+            GestureDetector(
+              onTap: () => _onHeaderTap(i),
+              child: SizedBox(
+                width: _getColumnWidth(i),
+                height: headerRowHeight,
+                child: Stack(
+                  children: [
+                    Container(
+                      padding: EdgeInsets.symmetric(horizontal: headerPadH),
+                      alignment: _source.isNumericColumn(i)
+                          ? Alignment.centerRight
+                          : Alignment.centerLeft,
+                      decoration: BoxDecoration(
+                        border: Border(
+                          right: BorderSide(
+                              color: _source.gridLineColor,
+                              width: _source.gridLineWidth),
+                          bottom: BorderSide(
+                              color: _source.gridLineColor,
+                              width: _source.gridLineWidth),
                         ),
-                        child: Text(
-                          _source.columnLabel(i),
-                          style: TextStyle(
-                            color: headerTextColor,
-                            fontSize: headerFontSize,
-                            fontWeight: FontWeight.w600,
-                          ),
-                          overflow: TextOverflow.ellipsis,
+                      ),
+                      child: Text(
+                        _source.columnLabel(i),
+                        style: TextStyle(
+                          color: headerTextColor,
+                          fontSize: headerFontSize,
+                          fontWeight: FontWeight.w600,
+                        ),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    // Resize handle
+                    Positioned(
+                      right: 0, top: 0, bottom: 0,
+                      child: MouseRegion(
+                        cursor: SystemMouseCursors.resizeColumn,
+                        child: GestureDetector(
+                          onHorizontalDragStart: (_) {
+                            setState(() => _resizingCol = i);
+                          },
+                          onHorizontalDragUpdate: (d) {
+                            setState(() {
+                              final current = _getColumnWidth(i);
+                              _columnWidthOverrides[i] =
+                                  (current + d.delta.dx).clamp(40.0, 4000.0);
+                            });
+                          },
+                          onHorizontalDragEnd: (_) {
+                            setState(() => _resizingCol = -1);
+                            _fireColumnResize(i);
+                          },
+                          onDoubleTap: () => _autoSizeColumn(i),
+                          behavior: HitTestBehavior.opaque,
+                          child: const SizedBox(width: 12),
                         ),
                       ),
                     ),
-                ],
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  /// Data area: row numbers + scrollable cells.
-  Widget _buildDataArea(
-      BuildContext context, bool showRowNumbers, double rowNumWidth) {
-    return Row(
-      children: [
-        // Row numbers column (fixed, scrolls vertically with body)
-        if (showRowNumbers) _buildRowNumberColumn(rowNumWidth),
-        // Main data grid
-        Expanded(child: _buildScrollableGrid(context)),
-      ],
-    );
-  }
-
-  /// Row number column — syncs vertically with data body.
-  Widget _buildRowNumberColumn(double width) {
-    return SizedBox(
-      width: width,
-      child: CustomScrollView(
-        controller: _getRowNumController(),
-        physics: const NeverScrollableScrollPhysics(),
-        slivers: [
-          SliverList(
-            delegate: SliverChildBuilderDelegate(
-              (context, index) {
-                return Container(
-                  height: _source.rowHeight,
-                  alignment: Alignment.center,
-                  decoration: BoxDecoration(
-                    border: Border(
-                      bottom: BorderSide(
-                          color: _source.gridLineColor,
-                          width: _source.gridLineWidth),
-                      right: BorderSide(
-                          color: _source.gridLineColor,
-                          width: _source.gridLineWidth),
-                    ),
-                  ),
-                  child: Text(
-                    '${index + 1}',
-                    style: TextStyle(
-                        color: Colors.grey.shade500,
-                        fontSize: _source.cellFontSize - 1),
-                  ),
-                );
-              },
-              childCount: _source.rowCount,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  /// Main scrollable grid.
-  /// Uses LayoutBuilder to detect bounded vs unbounded height constraints:
-  /// - Bounded (Gallery/Fit mode): ListView.builder with virtualization
-  /// - Unbounded (Natural mode): shrinkWrap ListView (no virtualization,
-  ///   but renders correctly without explicit height)
-  Widget _buildScrollableGrid(BuildContext context) {
-    final totalRows = widget.control.getInt("total_rows", 0) ?? 0;
-    final hasMore = totalRows > _source.rowCount;
-
-    return Focus(
-      focusNode: _focusNode,
-      onKeyEvent: _onKeyEvent,
-      child: GestureDetector(
-        onTapDown: (details) => _onTapDown(details),
-        child: LayoutBuilder(
-          builder: (context, constraints) {
-            final unboundedHeight = constraints.maxHeight == double.infinity;
-
-            return SingleChildScrollView(
-              controller: _xController,
-              scrollDirection: Axis.horizontal,
-              physics: const ClampingScrollPhysics(),
-              child: SizedBox(
-                width: _source.totalColumnsWidth,
-                child: ListView.builder(
-                  controller: unboundedHeight ? null : _yController,
-                  shrinkWrap: unboundedHeight,
-                  physics: unboundedHeight
-                      ? const NeverScrollableScrollPhysics()
-                      : null,
-                  itemCount: _source.rowCount + (hasMore ? 1 : 0),
-                  itemExtent: _source.rowHeight,
-                  itemBuilder: (context, index) {
-                    if (index >= _source.rowCount) {
-                      // LOD: request next page when spinner is built
-                      _requestNextPage();
-                      return const Center(
-                        child: SizedBox(
-                          width: 20,
-                          height: 20,
-                          child: CircularProgressIndicator(strokeWidth: 2),
+                    if (_resizingCol == i)
+                      Positioned(
+                        right: 8, top: 2,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                          decoration: BoxDecoration(
+                            color: Colors.black87,
+                            borderRadius: BorderRadius.circular(3),
+                          ),
+                          child: Text('${_getColumnWidth(i).round()}px',
+                              style: const TextStyle(color: Colors.white, fontSize: 10)),
                         ),
-                      );
-                    }
-                    return _buildRow(index);
-                  },
+                      ),
+                  ],
                 ),
               ),
-            );
-          },
-        ),
+            ),
+        ],
       ),
     );
   }
+
+  // Old _buildColumnHeaders, _buildDataArea, _buildRowNumberColumn,
+  // _buildScrollableGrid removed — replaced by unified scroll in _buildGridBody.
 
   // ────────────────────────────────────────────────────────────────
   // LOD page request
@@ -723,7 +694,7 @@ class _EpyxGridState extends State<EpyxGrid> {
     return Semantics(
       label: 'cell_${rowIndex}_${colIndex}_$cellText',
       child: Container(
-        width: _source.columnWidth(colIndex),
+        width: _getColumnWidth(colIndex),
         height: _source.rowHeight,
         padding: EdgeInsets.symmetric(
           horizontal: _source.cellPaddingH,
@@ -812,7 +783,8 @@ class _EpyxGridState extends State<EpyxGrid> {
       _selectedRow >= 0 && (_selectedRow != _selEndRow || _selectedCol != _selEndCol);
 
   /// Move anchor (and collapse range unless extending).
-  void _moveTo(int row, int col, {bool extend = false}) {
+  /// Set scroll=false for tap events (cell already visible).
+  void _moveTo(int row, int col, {bool extend = false, bool scroll = true}) {
     setState(() {
       if (extend) {
         _selEndRow = row;
@@ -824,7 +796,7 @@ class _EpyxGridState extends State<EpyxGrid> {
         _selEndCol = col;
       }
     });
-    _scrollToAnchor();
+    if (scroll) _scrollToAnchor();
   }
 
   /// Select entire row.
@@ -1062,18 +1034,18 @@ class _EpyxGridState extends State<EpyxGrid> {
       widget.control.triggerEventWithoutSubscribers('cell_edit', eventData);
     }
 
-    // Move selection (collapse range)
+    // Move selection (collapse range) — scroll: false, cell is adjacent and visible
     if (moveDown && _selectedRow < _source.rowCount - 1) {
-      _moveTo(_selectedRow + 1, _selectedCol);
+      _moveTo(_selectedRow + 1, _selectedCol, scroll: false);
     } else if (moveDown && _selectedRow == _source.rowCount - 1) {
       // Enter at last row: fire add_row event (comparison, list ctypes)
       widget.control.triggerEventWithoutSubscribers('add_row', '{}');
     } else if (moveUp && _selectedRow > 0) {
-      _moveTo(_selectedRow - 1, _selectedCol);
+      _moveTo(_selectedRow - 1, _selectedCol, scroll: false);
     } else if (moveRight && _selectedCol < _source.columnCount - 1) {
-      _moveTo(_selectedRow, _selectedCol + 1);
+      _moveTo(_selectedRow, _selectedCol + 1, scroll: false);
     } else if (moveLeft && _selectedCol > 0) {
-      _moveTo(_selectedRow, _selectedCol - 1);
+      _moveTo(_selectedRow, _selectedCol - 1, scroll: false);
     }
 
     _focusNode.requestFocus();
@@ -1089,13 +1061,17 @@ class _EpyxGridState extends State<EpyxGrid> {
     final yOffset = _yController.hasClients ? _yController.offset : 0.0;
     final xOffset = _xController.hasClients ? _xController.offset : 0.0;
     final absX = xOffset + details.localPosition.dx;
-    final absY = yOffset + details.localPosition.dy;
+    // Subtract header height — GestureDetector wraps both header and data
+    final headerH = _source.headerRowHeight;
+    final dataY = details.localPosition.dy - headerH;
+    if (dataY < 0) return; // tapped on header, not data
+    final absY = yOffset + dataY;
 
     // Hit test: find column
     int col = 0;
     double cumX = 0;
     for (int i = 0; i < _source.columnCount; i++) {
-      final w = _source.columnWidth(i);
+      final w = _getColumnWidth(i);
       if (absX >= cumX && absX < cumX + w) {
         col = i;
         break;
@@ -1107,8 +1083,10 @@ class _EpyxGridState extends State<EpyxGrid> {
     int row = (absY / _source.rowHeight).floor();
     row = row.clamp(0, _source.rowCount - 1);
 
-    // Shift+click extends selection, plain click moves anchor
-    _moveTo(row, col, extend: HardwareKeyboard.instance.isShiftPressed);
+    // Shift+click extends selection, plain click moves anchor.
+    // scroll: false — user tapped a visible cell, don't scroll.
+    _moveTo(row, col,
+        extend: HardwareKeyboard.instance.isShiftPressed, scroll: false);
     _focusNode.requestFocus();
   }
 
@@ -1211,9 +1189,16 @@ class _EpyxGridState extends State<EpyxGrid> {
       final row = targetRow.clamp(0, _source.rowCount - 1);
       if (isShift) {
         setState(() => _selEndRow = row);
-        _scrollToSelEnd();
       } else {
-        _moveTo(row, _selectedCol);
+        // Only scroll if target row is not already visible
+        if (!_isRowVisible(row) && _yController.hasClients) {
+          if (row > _selectedRow) {
+            _yController.jumpTo(
+                (_yController.offset + _source.rowHeight)
+                    .clamp(0.0, _yController.position.maxScrollExtent));
+          }
+        }
+        _moveTo(row, _selectedCol, scroll: false);
       }
       handled = true;
     } else if (key == LogicalKeyboardKey.arrowUp) {
@@ -1222,9 +1207,16 @@ class _EpyxGridState extends State<EpyxGrid> {
       final row = targetRow.clamp(0, _source.rowCount - 1);
       if (isShift) {
         setState(() => _selEndRow = row);
-        _scrollToSelEnd();
       } else {
-        _moveTo(row, _selectedCol);
+        // Only scroll if target row is not already visible
+        if (!_isRowVisible(row) && _yController.hasClients) {
+          if (row < _selectedRow) {
+            _yController.jumpTo(
+                (_yController.offset - _source.rowHeight)
+                    .clamp(0.0, _yController.position.maxScrollExtent));
+          }
+        }
+        _moveTo(row, _selectedCol, scroll: false);
       }
       handled = true;
     } else if (key == LogicalKeyboardKey.arrowRight) {
@@ -1233,9 +1225,20 @@ class _EpyxGridState extends State<EpyxGrid> {
       final col = targetCol.clamp(0, _source.columnCount - 1);
       if (isShift) {
         setState(() => _selEndCol = col);
-        _scrollToSelEnd();
       } else {
-        _moveTo(_selectedRow, col);
+        // Only scroll if target column is not already visible
+        if (!_isColumnVisible(col) && _xController.hasClients) {
+          if (col > _selectedCol) {
+            _xController.jumpTo(
+                (_xController.offset + _getColumnWidth(_selectedCol))
+                    .clamp(0.0, _xController.position.maxScrollExtent));
+          } else {
+            _xController.jumpTo(
+                (_xController.offset - _getColumnWidth(col))
+                    .clamp(0.0, _xController.position.maxScrollExtent));
+          }
+        }
+        _moveTo(_selectedRow, col, scroll: false);
       }
       handled = true;
     } else if (key == LogicalKeyboardKey.arrowLeft) {
@@ -1244,9 +1247,20 @@ class _EpyxGridState extends State<EpyxGrid> {
       final col = targetCol.clamp(0, _source.columnCount - 1);
       if (isShift) {
         setState(() => _selEndCol = col);
-        _scrollToSelEnd();
       } else {
-        _moveTo(_selectedRow, col);
+        // Only scroll if target column is not already visible
+        if (!_isColumnVisible(col) && _xController.hasClients) {
+          if (col < _selectedCol) {
+            _xController.jumpTo(
+                (_xController.offset - _getColumnWidth(col))
+                    .clamp(0.0, _xController.position.maxScrollExtent));
+          } else {
+            _xController.jumpTo(
+                (_xController.offset + _getColumnWidth(_selectedCol))
+                    .clamp(0.0, _xController.position.maxScrollExtent));
+          }
+        }
+        _moveTo(_selectedRow, col, scroll: false);
       }
       handled = true;
 
@@ -1325,6 +1339,72 @@ class _EpyxGridState extends State<EpyxGrid> {
     return handled ? KeyEventResult.handled : KeyEventResult.ignored;
   }
 
+  /// Fire column_resize event to Python for persistence.
+  void _fireColumnResize(int col) {
+    final colName = _source.columnName(col);
+    final w = _getColumnWidth(col);
+    widget.control.triggerEventWithoutSubscribers(
+        'column_resize', jsonEncode({'column': colName, 'width': w}));
+  }
+
+  /// Auto-size column to fit widest content (double-click on resize handle).
+  void _autoSizeColumn(int col) {
+    // Measure widest cell text in this column
+    final style = TextStyle(
+      fontSize: _source.cellFontSize,
+      fontFamily: _source.fontFamily,
+    );
+    double maxWidth = 60.0; // minimum
+    for (int r = 0; r < _source.rowCount; r++) {
+      final text = _source.cellText(r, col);
+      final tp = TextPainter(
+        text: TextSpan(text: text, style: style),
+        maxLines: 1,
+        textDirection: TextDirection.ltr,
+      )..layout();
+      if (tp.width > maxWidth) maxWidth = tp.width;
+    }
+    // Add padding
+    maxWidth += _source.cellPaddingH * 2 + 8;
+    setState(() => _columnWidthOverrides[col] = maxWidth.clamp(40.0, 4000.0));
+    _fireColumnResize(col);
+  }
+
+  /// Is column `col` fully visible in the horizontal viewport?
+  bool _isColumnVisible(int col) {
+    if (!_xController.hasClients) return true;
+    double colLeft = 0;
+    for (int i = 0; i < col; i++) colLeft += _getColumnWidth(i);
+    final colRight = colLeft + _getColumnWidth(col);
+    final offset = _xController.offset;
+    final vw = _xController.position.viewportDimension;
+    return colLeft >= offset && colRight <= offset + vw;
+  }
+
+  /// Is row `row` fully visible in the vertical viewport?
+  bool _isRowVisible(int row) {
+    if (!_yController.hasClients) return true;
+    final rowTop = row * _source.rowHeight;
+    final rowBottom = rowTop + _source.rowHeight;
+    final offset = _yController.offset;
+    final vh = _yController.position.viewportDimension;
+    return rowTop >= offset && rowBottom <= offset + vh;
+  }
+
+  /// Column width: use drag override if set, else source default.
+  double _getColumnWidth(int i) {
+    return _columnWidthOverrides[i] ?? _source.columnWidth(i);
+  }
+
+  /// Total width of all columns including drag overrides.
+  double get _totalColumnsWidth {
+    double total = 0;
+    for (int i = 0; i < _source.columnCount; i++) {
+      total += _getColumnWidth(i);
+    }
+    return total;
+  }
+
   void _ensureRowVisible(int row) {
     // In Natural mode, _yController has no clients (shrinkWrap ListView)
     if (!_yController.hasClients) return;
@@ -1343,13 +1423,14 @@ class _EpyxGridState extends State<EpyxGrid> {
     // Calculate column's left offset
     double colLeft = 0;
     for (int i = 0; i < col; i++) {
-      colLeft += _source.columnWidth(i);
+      colLeft += _getColumnWidth(i);
     }
-    final colRight = colLeft + _source.columnWidth(col);
+    final colRight = colLeft + _getColumnWidth(col);
     final viewportWidth = _xController.position.viewportDimension;
-    if (colLeft < _xController.offset) {
+    final offset = _xController.offset;
+    if (colLeft < offset) {
       _xController.jumpTo(colLeft);
-    } else if (colRight > _xController.offset + viewportWidth) {
+    } else if (colRight > offset + viewportWidth) {
       _xController.jumpTo(colRight - viewportWidth);
     }
   }
@@ -1468,3 +1549,4 @@ class _OverrideTrianglePainter extends CustomPainter {
   @override
   bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
+
