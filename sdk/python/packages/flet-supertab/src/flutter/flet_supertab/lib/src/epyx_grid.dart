@@ -372,18 +372,20 @@ class _EpyxGridState extends State<EpyxGrid> {
         builder: (context, constraints) {
           final unbounded = constraints.maxHeight == double.infinity;
           // Chrome bar should not extend past the last column.
-          // Use ClipRect+OverflowBox so the bar lays out at full width
-          // (no overflow errors) but is clipped to _totalColumnsWidth.
+          // CrossAxisAlignment.stretch gives children tight constraints so
+          // Align(widthFactor:) is ignored. OverflowBox explicitly overrides
+          // the parent's tight constraints to give the bar exactly barWidth,
+          // while OverflowBox itself stays at the full parent width so the
+          // Column layout is unaffected.
           final barWidth = math.min(_totalColumnsWidth, constraints.maxWidth);
 
           Widget constrainedBar(Widget bar) {
             if (barWidth >= constraints.maxWidth) return bar;
-            return ClipRect(
-              child: Align(
-                alignment: Alignment.centerLeft,
-                widthFactor: barWidth / constraints.maxWidth,
-                child: bar,
-              ),
+            return OverflowBox(
+              alignment: Alignment.centerLeft,
+              minWidth: barWidth,
+              maxWidth: barWidth,
+              child: bar,
             );
           }
 
