@@ -965,66 +965,56 @@ class _EpyxGridState extends State<EpyxGrid> {
       );
     }
 
+    final hasOverride = _source.hasOverride(rowIndex, colIndex);
     return Semantics(
       label: 'cell_${rowIndex}_${colIndex}_$cellText',
-      child: Container(
-        width: _getColumnWidth(colIndex),
-        height: _source.rowHeight,
-        padding: EdgeInsets.symmetric(
-          horizontal: _source.cellPaddingH,
-          vertical: _source.cellPaddingV,
-        ),
-        decoration: BoxDecoration(
-          color: bgColor,
-          border: cellBorder,
-        ),
-        child: Stack(
-          clipBehavior: Clip.none,
-          children: [
-            Positioned.fill(
-              child: Align(
-                alignment: _source.isNumericColumn(colIndex)
-                    ? Alignment.centerRight
-                    : Alignment.centerLeft,
-                child: isEditingThis
-                    ? TextField(
-                        controller: _editController,
-                        focusNode: _editFocusNode,
-                        autofocus: true,
-                        style: TextStyle(
-                          fontSize: _source.cellFontSize,
-                          fontFamily: _source.fontFamily,
-                        ),
-                        maxLines: _isCodeMode ? null : 1,
-                        decoration: const InputDecoration(
-                          isDense: true,
-                          contentPadding: EdgeInsets.zero,
-                          border: InputBorder.none,
-                        ),
-                        onSubmitted: (_) => _commitEdit(moveDown: true),
-                      )
-                    : Text(
-                        cellText,
-                        style: TextStyle(
-                          color: textColor == Colors.transparent ? null : textColor,
-                          fontSize: _source.cellFontSize,
-                          fontFamily: _source.fontFamily,
-                        ),
-                        overflow: TextOverflow.ellipsis,
-                      ),
-              ),
-            ),
-            // Orange triangle override indicator (top-left corner of cell)
-            if (_source.hasOverride(rowIndex, colIndex))
-              Positioned(
-                top: -_source.cellPaddingV,
-                left: -_source.cellPaddingH,
-                child: CustomPaint(
-                  size: const Size(6, 6),
-                  painter: _OverrideTrianglePainter(),
-                ),
-              ),
-          ],
+      child: CustomPaint(
+        // Override triangle: foregroundPainter draws ON TOP of the Container
+        // at the cell's (0,0) — the outer border corner.  This avoids the
+        // negative-offset Positioned that gets clipped by RepaintBoundary.
+        foregroundPainter: hasOverride ? _OverrideTrianglePainter() : null,
+        child: Container(
+          width: _getColumnWidth(colIndex),
+          height: _source.rowHeight,
+          padding: EdgeInsets.symmetric(
+            horizontal: _source.cellPaddingH,
+            vertical: _source.cellPaddingV,
+          ),
+          decoration: BoxDecoration(
+            color: bgColor,
+            border: cellBorder,
+          ),
+          child: Align(
+            alignment: _source.isNumericColumn(colIndex)
+                ? Alignment.centerRight
+                : Alignment.centerLeft,
+            child: isEditingThis
+                ? TextField(
+                    controller: _editController,
+                    focusNode: _editFocusNode,
+                    autofocus: true,
+                    style: TextStyle(
+                      fontSize: _source.cellFontSize,
+                      fontFamily: _source.fontFamily,
+                    ),
+                    maxLines: _isCodeMode ? null : 1,
+                    decoration: const InputDecoration(
+                      isDense: true,
+                      contentPadding: EdgeInsets.zero,
+                      border: InputBorder.none,
+                    ),
+                    onSubmitted: (_) => _commitEdit(moveDown: true),
+                  )
+                : Text(
+                    cellText,
+                    style: TextStyle(
+                      color: textColor == Colors.transparent ? null : textColor,
+                      fontSize: _source.cellFontSize,
+                      fontFamily: _source.fontFamily,
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+          ),
         ),
       ),
     );
