@@ -411,7 +411,7 @@ class _EpyxGridState extends State<EpyxGrid> {
     // still stretches to full width (Spacer pushes row-count text right);
     // constraining the Row is deferred — the background is the visual fix.
     return CustomPaint(
-      painter: _BarBgPainter(headerBg, _totalColumnsWidth),
+      painter: _BarBgPainter(headerBg, _totalColumnsWidth, rowPositionText),
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
         child: Row(
@@ -453,10 +453,6 @@ class _EpyxGridState extends State<EpyxGrid> {
               Text("filtered",
                   style: TextStyle(color: Colors.orange.shade400, fontSize: 10)),
             ],
-            const Spacer(),
-            // H3: Row position
-            Text(rowPositionText,
-                style: TextStyle(color: Colors.grey.shade400, fontSize: 11)),
           ],
         ),
       ),
@@ -2347,22 +2343,34 @@ class _OverrideTrianglePainter extends CustomPainter {
   bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
 
-/// Paints a solid background colour up to [maxBgWidth] pixels, leaving the
-/// rest transparent.  Used by the chrome bar and error banner so their
-/// background stops at the last column boundary without affecting layout.
+/// Paints a solid background colour up to [maxBgWidth] pixels and an optional
+/// right-aligned [rightText] label (row position) within that bar width.
 class _BarBgPainter extends CustomPainter {
   final Color color;
   final double maxBgWidth;
-  _BarBgPainter(this.color, this.maxBgWidth);
+  final String rightText;
+  _BarBgPainter(this.color, this.maxBgWidth, [this.rightText = '']);
 
   @override
   void paint(Canvas canvas, Size size) {
     final w = maxBgWidth > 0 ? math.min(maxBgWidth, size.width) : size.width;
     canvas.drawRect(Rect.fromLTWH(0, 0, w, size.height), Paint()..color = color);
+
+    if (rightText.isNotEmpty) {
+      final tp = TextPainter(
+        text: TextSpan(
+          text: rightText,
+          style: TextStyle(color: Colors.grey.shade400, fontSize: 11),
+        ),
+        textDirection: TextDirection.ltr,
+      )..layout();
+      tp.paint(canvas, Offset(w - tp.width - 8, (size.height - tp.height) / 2));
+    }
   }
 
   @override
   bool shouldRepaint(covariant _BarBgPainter old) =>
-      color != old.color || maxBgWidth != old.maxBgWidth;
+      color != old.color || maxBgWidth != old.maxBgWidth ||
+      rightText != old.rightText;
 }
 
