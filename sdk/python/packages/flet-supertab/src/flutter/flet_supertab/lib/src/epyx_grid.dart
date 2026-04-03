@@ -345,32 +345,49 @@ class _EpyxGridState extends State<EpyxGrid> {
         : _buildGridBody(context, summaryValues: summaryValues);
 
     final errorBanner = errorMessage.isNotEmpty
-        ? CustomPaint(
-            painter: _BarBgPainter(Colors.red.shade900, _totalColumnsWidth),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-              child: Row(
-                children: [
-                  const Icon(Icons.error_outline,
-                      color: Colors.white, size: 14),
-                  const SizedBox(width: 4),
-                  Expanded(
-                    child: Text(errorMessage,
-                        style:
-                            const TextStyle(color: Colors.white, fontSize: 12)),
+        ? LayoutBuilder(
+            builder: (ctx, cstr) {
+              final bw = _totalColumnsWidth > 0
+                  ? math.min(_totalColumnsWidth, cstr.maxWidth)
+                  : cstr.maxWidth;
+              return CustomPaint(
+                painter: _BarBgPainter(Colors.red.shade900, bw),
+                child: OverflowBox(
+                  alignment: Alignment.centerLeft,
+                  minWidth: bw,
+                  maxWidth: bw,
+                  child: Padding(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.error_outline,
+                            color: Colors.white, size: 14),
+                        const SizedBox(width: 4),
+                        Expanded(
+                          child: Text(errorMessage,
+                              style: const TextStyle(
+                                  color: Colors.white, fontSize: 12)),
+                        ),
+                      ],
+                    ),
                   ),
-                ],
-              ),
-            ),
+                ),
+              );
+            },
           )
         : null;
 
     // Use LayoutBuilder to handle bounded vs unbounded height.
     // Bounded (Gallery/Fit): Expanded fills available space.
     // Unbounded (Natural mode): grid body determines own height (no Expanded).
-    return LayoutControl(
-      control: widget.control,
-      child: LayoutBuilder(
+    // ExcludeSemantics: grid has custom hit testing; default Flutter semantics
+    // tree causes AccessibilityBridge crashes (vector-iterator invalidation in
+    // CreateRemoveReparentedNodesUpdate) when the widget tree restructures.
+    return ExcludeSemantics(
+      child: LayoutControl(
+        control: widget.control,
+        child: LayoutBuilder(
         builder: (context, constraints) {
           final unbounded = constraints.maxHeight == double.infinity;
           if (unbounded) {
@@ -394,6 +411,7 @@ class _EpyxGridState extends State<EpyxGrid> {
             ],
           );
         },
+        ),
       ),
     );
   }
@@ -407,59 +425,74 @@ class _EpyxGridState extends State<EpyxGrid> {
     final headerBg =
         _color("header_bg_color", context, const Color(0xFF2D2D30));
 
-    // CustomPaint paints background only to _totalColumnsWidth, so the
-    // chrome bar stops at the last column boundary.  No layout side-effects:
-    // the Padding+Row child sizes normally inside CrossAxisAlignment.stretch.
-    return CustomPaint(
-      painter: _BarBgPainter(headerBg, _totalColumnsWidth),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-        child: Row(
-        children: [
-          // H1: Table label
-          if (label.isNotEmpty)
-            Padding(
-              padding: const EdgeInsets.only(right: 8),
-              child: Text(label,
-                  style: const TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.bold,
-                      fontSize: 14)),
-            ),
-          // H2: Ctype badge
-          if (ctype.isNotEmpty)
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-              decoration: BoxDecoration(
-                color: Colors.blue.shade700,
-                borderRadius: BorderRadius.circular(4),
+    // LayoutBuilder provides constraints so we can cap the bar at the last
+    // column boundary.  CustomPaint paints background only to barWidth;
+    // OverflowBox overrides the tight width from CrossAxisAlignment.stretch
+    // so the Row (and its Spacer) lay out within barWidth, keeping the
+    // "rows x-y of z" text right-aligned to the column edge.
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final barWidth = _totalColumnsWidth > 0
+            ? math.min(_totalColumnsWidth, constraints.maxWidth)
+            : constraints.maxWidth;
+
+        return CustomPaint(
+          painter: _BarBgPainter(headerBg, barWidth),
+          child: OverflowBox(
+            alignment: Alignment.centerLeft,
+            minWidth: barWidth,
+            maxWidth: barWidth,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              child: Row(
+                children: [
+                  // H1: Table label
+                  if (label.isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.only(right: 8),
+                      child: Text(label,
+                          style: const TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 14)),
+                    ),
+                  // H2: Ctype badge
+                  if (ctype.isNotEmpty)
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: Colors.blue.shade700,
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      child: Text(ctype,
+                          style: const TextStyle(color: Colors.white, fontSize: 11)),
+                    ),
+                  // H4: Sort indicator
+                  if (sortIndicator.isNotEmpty) ...[
+                    const SizedBox(width: 8),
+                    Icon(Icons.sort, size: 14, color: Colors.grey.shade400),
+                    const SizedBox(width: 2),
+                    Text(sortIndicator,
+                        style: TextStyle(color: Colors.grey.shade400, fontSize: 10)),
+                  ],
+                  // H5: Filter indicator
+                  if (filterActive) ...[
+                    const SizedBox(width: 8),
+                    Icon(Icons.filter_alt, size: 14, color: Colors.orange.shade400),
+                    const SizedBox(width: 2),
+                    Text("filtered",
+                        style: TextStyle(color: Colors.orange.shade400, fontSize: 10)),
+                  ],
+                  const Spacer(),
+                  // H3: Row position
+                  Text(rowPositionText,
+                      style: TextStyle(color: Colors.grey.shade400, fontSize: 11)),
+                ],
               ),
-              child: Text(ctype,
-                  style: const TextStyle(color: Colors.white, fontSize: 11)),
             ),
-          // H4: Sort indicator
-          if (sortIndicator.isNotEmpty) ...[
-            const SizedBox(width: 8),
-            Icon(Icons.sort, size: 14, color: Colors.grey.shade400),
-            const SizedBox(width: 2),
-            Text(sortIndicator,
-                style: TextStyle(color: Colors.grey.shade400, fontSize: 10)),
-          ],
-          // H5: Filter indicator
-          if (filterActive) ...[
-            const SizedBox(width: 8),
-            Icon(Icons.filter_alt, size: 14, color: Colors.orange.shade400),
-            const SizedBox(width: 2),
-            Text("filtered",
-                style: TextStyle(color: Colors.orange.shade400, fontSize: 10)),
-          ],
-          const Spacer(),
-          // H3: Row position
-          Text(rowPositionText,
-              style: TextStyle(color: Colors.grey.shade400, fontSize: 11)),
-        ],
-        ),
-      ),
+          ),
+        );
+      },
     );
   }
 
