@@ -345,20 +345,22 @@ class _EpyxGridState extends State<EpyxGrid> {
         : _buildGridBody(context, summaryValues: summaryValues);
 
     final errorBanner = errorMessage.isNotEmpty
-        ? Container(
-            color: Colors.red.shade900,
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-            child: Row(
-              children: [
-                const Icon(Icons.error_outline,
-                    color: Colors.white, size: 14),
-                const SizedBox(width: 4),
-                Expanded(
-                  child: Text(errorMessage,
-                      style:
-                          const TextStyle(color: Colors.white, fontSize: 12)),
-                ),
-              ],
+        ? CustomPaint(
+            painter: _BarBgPainter(Colors.red.shade900, _totalColumnsWidth),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              child: Row(
+                children: [
+                  const Icon(Icons.error_outline,
+                      color: Colors.white, size: 14),
+                  const SizedBox(width: 4),
+                  Expanded(
+                    child: Text(errorMessage,
+                        style:
+                            const TextStyle(color: Colors.white, fontSize: 12)),
+                  ),
+                ],
+              ),
             ),
           )
         : null;
@@ -371,31 +373,13 @@ class _EpyxGridState extends State<EpyxGrid> {
       child: LayoutBuilder(
         builder: (context, constraints) {
           final unbounded = constraints.maxHeight == double.infinity;
-          // Chrome bar should not extend past the last column.
-          // CrossAxisAlignment.stretch gives children tight constraints so
-          // Align(widthFactor:) is ignored. OverflowBox explicitly overrides
-          // the parent's tight constraints to give the bar exactly barWidth,
-          // while OverflowBox itself stays at the full parent width so the
-          // Column layout is unaffected.
-          final barWidth = math.min(_totalColumnsWidth, constraints.maxWidth);
-
-          Widget constrainedBar(Widget bar) {
-            if (barWidth >= constraints.maxWidth) return bar;
-            return OverflowBox(
-              alignment: Alignment.centerLeft,
-              minWidth: barWidth,
-              maxWidth: barWidth,
-              child: bar,
-            );
-          }
-
           if (unbounded) {
             return Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               mainAxisSize: MainAxisSize.min,
               children: [
-                constrainedBar(headerBar),
-                if (errorBanner != null) constrainedBar(errorBanner),
+                headerBar,
+                if (errorBanner != null) errorBanner,
                 gridBody,
               ],
             );
@@ -404,8 +388,8 @@ class _EpyxGridState extends State<EpyxGrid> {
           return Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              constrainedBar(headerBar),
-              if (errorBanner != null) constrainedBar(errorBanner),
+              headerBar,
+              if (errorBanner != null) errorBanner,
               Expanded(child: gridBody),
             ],
           );
@@ -423,10 +407,14 @@ class _EpyxGridState extends State<EpyxGrid> {
     final headerBg =
         _color("header_bg_color", context, const Color(0xFF2D2D30));
 
-    return Container(
-      color: headerBg,
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-      child: Row(
+    // CustomPaint paints background only to _totalColumnsWidth, so the
+    // chrome bar stops at the last column boundary.  No layout side-effects:
+    // the Padding+Row child sizes normally inside CrossAxisAlignment.stretch.
+    return CustomPaint(
+      painter: _BarBgPainter(headerBg, _totalColumnsWidth),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        child: Row(
         children: [
           // H1: Table label
           if (label.isNotEmpty)
@@ -470,6 +458,7 @@ class _EpyxGridState extends State<EpyxGrid> {
           Text(rowPositionText,
               style: TextStyle(color: Colors.grey.shade400, fontSize: 11)),
         ],
+        ),
       ),
     );
   }
@@ -2356,5 +2345,24 @@ class _OverrideTrianglePainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+/// Paints a solid background colour up to [maxBgWidth] pixels, leaving the
+/// rest transparent.  Used by the chrome bar and error banner so their
+/// background stops at the last column boundary without affecting layout.
+class _BarBgPainter extends CustomPainter {
+  final Color color;
+  final double maxBgWidth;
+  _BarBgPainter(this.color, this.maxBgWidth);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final w = maxBgWidth > 0 ? math.min(maxBgWidth, size.width) : size.width;
+    canvas.drawRect(Rect.fromLTWH(0, 0, w, size.height), Paint()..color = color);
+  }
+
+  @override
+  bool shouldRepaint(covariant _BarBgPainter old) =>
+      color != old.color || maxBgWidth != old.maxBgWidth;
 }
 
