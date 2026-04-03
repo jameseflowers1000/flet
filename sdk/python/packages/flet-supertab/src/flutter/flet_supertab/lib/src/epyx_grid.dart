@@ -89,6 +89,17 @@ class _EpyxGridState extends State<EpyxGrid> {
   // -- Checkbox column state --
   final Set<int> _checkedRows = {};
 
+  // -- Hover tracking for render_code --
+  int _hoveredRow = -1;
+  int _hoveredCol = -1;
+
+  // -- Render code cache: (row,col) → {bg, fg} or null --
+  // Invalidated on: scroll (new visible rows), selection change, hover change, data change.
+  Map<int, Map<String, String>?> _rowRenderCache = {};
+  Map<String, Map<String, String>?> _cellRenderCache = {};
+  String _lastRenderCode = '';
+  String _lastRowRenderCode = '';
+
 
   @override
   void initState() {
@@ -120,9 +131,18 @@ class _EpyxGridState extends State<EpyxGrid> {
   void _onControlChanged() {
     if (!mounted) return;
 
+    // Check render script changes FIRST (before data version early-return).
+    // render_code can change independently of data.
+    final newRenderCode = widget.control.getString("render_code") ?? '';
+    final newRowRenderCode = widget.control.getString("row_render_code") ?? '';
+    if (newRenderCode != _lastRenderCode || newRowRenderCode != _lastRowRenderCode) {
+      _lastRenderCode = newRenderCode;
+      _lastRowRenderCode = newRowRenderCode;
+      _invalidateRenderCaches();
+      setState(() {}); // force rebuild with new scripts
+    }
+
     // Skip full rebuild if data hasn't changed.
-    // This avoids expensive JSON re-parse + widget tree rebuild when Python
-    // pushes the same data (common after single-cell edit with no formulas).
     final newRows = widget.control.getString("rows") ?? '';
     final newCols = widget.control.getString("columns") ?? '';
     final newTotalRows = widget.control.getInt("total_rows", 0) ?? 0;
@@ -133,7 +153,6 @@ class _EpyxGridState extends State<EpyxGrid> {
     final dataKey = '$newRows|$newCols|$newTotalRows|$newStyles|$newOverrides|$newHidden|$newSummary';
     final oldKey = '$_lastRowsJson|$_lastColsJson|$_lastTotalRows|$_lastStylesJson|$_lastOverridesJson|$_lastHiddenJson|$_lastSummaryJson';
     if (dataKey == oldKey) {
-      // Data unchanged — just clear pending edits (Python confirmed)
       if (_pendingEdits.isNotEmpty) {
         setState(() => _pendingEdits.clear());
       }
@@ -151,6 +170,7 @@ class _EpyxGridState extends State<EpyxGrid> {
       _sourceNeedsRebuild = true;
       _lastRequestedOffset = -1; // reset LOD dedup — data changed
       _pendingEdits.clear(); // Python has authoritative data now
+      _invalidateRenderCaches(); // data changed → re-evaluate styles
     });
   }
 
@@ -351,26 +371,39 @@ class _EpyxGridState extends State<EpyxGrid> {
       child: LayoutBuilder(
         builder: (context, constraints) {
           final unbounded = constraints.maxHeight == double.infinity;
+          // Chrome bar should not extend past the last column.
+          // Use ClipRect+OverflowBox so the bar lays out at full width
+          // (no overflow errors) but is clipped to _totalColumnsWidth.
+          final barWidth = math.min(_totalColumnsWidth, constraints.maxWidth);
+
+          Widget constrainedBar(Widget bar) {
+            if (barWidth >= constraints.maxWidth) return bar;
+            return ClipRect(
+              child: Align(
+                alignment: Alignment.centerLeft,
+                widthFactor: barWidth / constraints.maxWidth,
+                child: bar,
+              ),
+            );
+          }
 
           if (unbounded) {
-            // Natural mode: Column with min size, grid body uses shrinkWrap
             return Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               mainAxisSize: MainAxisSize.min,
               children: [
-                headerBar,
-                if (errorBanner != null) errorBanner,
+                constrainedBar(headerBar),
+                if (errorBanner != null) constrainedBar(errorBanner),
                 gridBody,
               ],
             );
           }
 
-          // Bounded (Gallery/Fit): Expanded fills space
           return Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              headerBar,
-              if (errorBanner != null) errorBanner,
+              constrainedBar(headerBar),
+              if (errorBanner != null) constrainedBar(errorBanner),
               Expanded(child: gridBody),
             ],
           );
@@ -574,13 +607,16 @@ class _EpyxGridState extends State<EpyxGrid> {
         }
 
         // No frozen columns: single horizontal scroll wraps everything
-        return Focus(
-          focusNode: _focusNode,
-          onKeyEvent: _onKeyEvent,
-          child: GestureDetector(
-            onTapDown: (details) => _onTapDown(details),
-            onSecondaryTapDown: (details) => _onSecondaryTapDown(details),
-            child: SingleChildScrollView(
+        return MouseRegion(
+          onHover: (event) => _onHover(event.localPosition),
+          onExit: (_) => _onHoverExit(),
+          child: Focus(
+            focusNode: _focusNode,
+            onKeyEvent: _onKeyEvent,
+            child: GestureDetector(
+              onTapDown: (details) => _onTapDown(details),
+              onSecondaryTapDown: (details) => _onSecondaryTapDown(details),
+              child: SingleChildScrollView(
               controller: _xController,
               scrollDirection: Axis.horizontal,
               physics: const ClampingScrollPhysics(),
@@ -626,6 +662,7 @@ class _EpyxGridState extends State<EpyxGrid> {
               ),
             ),
           ),
+        ),
         );
       },
     );
@@ -730,6 +767,8 @@ class _EpyxGridState extends State<EpyxGrid> {
             if (!_source.isColumnHidden(i))
               GestureDetector(
                 onTap: () => _onHeaderTap(i),
+                onSecondaryTapDown: (d) =>
+                    _showHeaderContextMenu(d.globalPosition, i),
                 child: SizedBox(
                   width: _getColumnWidth(i),
                   height: headerRowHeight,
@@ -843,11 +882,18 @@ class _EpyxGridState extends State<EpyxGrid> {
     final showCheckbox =
         widget.control.getBool("show_checkbox_column", false) ?? false;
 
+    // Apply row_render_code (§6A Layer 5)
+    Color? rowBg = _source.rowBackground(rowIndex, isSelected);
+    final rowRender = _evalRowRender(rowIndex);
+    if (rowRender != null && rowRender['bg'] != null) {
+      rowBg = _parseHexColor(rowRender['bg']!) ?? rowBg;
+    }
+
     return Container(
       key: (isSelected && colStart == 0) ? _selectedRowKey : null,
       height: _source.rowHeight,
       decoration: BoxDecoration(
-        color: _source.rowBackground(rowIndex, isSelected),
+        color: rowBg,
         border: Border(
           bottom: BorderSide(
               color: _source.gridLineColor, width: _source.gridLineWidth),
@@ -894,6 +940,13 @@ class _EpyxGridState extends State<EpyxGrid> {
     Color? bg = cellStyle?['bg'] != null
         ? _parseHexColor(cellStyle!['bg']!)
         : null;
+
+    // Apply render_code (§6A Layer 5 — overrides Python Layers 1-4)
+    final cellRender = _evalCellRender(rowIndex, colIndex);
+    if (cellRender != null) {
+      if (cellRender['bg'] != null) bg = _parseHexColor(cellRender['bg']!) ?? bg;
+      if (cellRender['fg'] != null) fg = _parseHexColor(cellRender['fg']!) ?? fg;
+    }
 
     final textColor = fg ?? _source.cellTextColor;
     // Range highlight: light blue tint for non-anchor cells in selection
@@ -1021,6 +1074,11 @@ class _EpyxGridState extends State<EpyxGrid> {
   void _moveTo(int row, int col, {bool extend = false, bool scroll = true}) {
     final prevRow = _selectedRow;
     final prevCol = _selectedCol;
+    // Invalidate render caches for old and new selected rows
+    _rowRenderCache.remove(prevRow);
+    _rowRenderCache.remove(row);
+    _cellRenderCache.removeWhere((k, _) =>
+        k.startsWith('$prevRow:') || k.startsWith('$row:'));
     setState(() {
       if (extend) {
         _selEndRow = row;
@@ -1453,10 +1511,16 @@ class _EpyxGridState extends State<EpyxGrid> {
     _showContextMenu(details.globalPosition, row, col);
   }
 
-  /// Show right-click context menu (CM1-CM4).
+  /// Show right-click context menu (CM1-CM6, ctype-aware).
   void _showContextMenu(Offset globalPosition, int row, int col) {
     final hasOverride = _source.hasOverride(row, col);
     final editable = _canEdit;
+    final allowDeleteRow =
+        widget.control.getBool("allow_delete_row", true) ?? true;
+    final allowInsertRow =
+        widget.control.getBool("allow_insert_row", true) ?? true;
+    final allowOverride =
+        widget.control.getBool("allow_override", true) ?? true;
 
     showMenu<String>(
       context: context,
@@ -1470,14 +1534,22 @@ class _EpyxGridState extends State<EpyxGrid> {
           const PopupMenuItem(value: 'cut', child: Text('Cut')),
         if (editable)
           const PopupMenuItem(value: 'paste', child: Text('Paste')),
-        if (editable)
-          const PopupMenuDivider(),
+        if (editable) const PopupMenuDivider(),
         if (editable)
           const PopupMenuItem(value: 'clear', child: Text('Clear')),
-        if (editable && hasOverride)
+        if (editable && allowInsertRow)
+          PopupMenuItem(value: 'insert_row',
+              child: Text('Insert Row Above')),
+        if (editable && allowDeleteRow)
+          PopupMenuItem(value: 'delete_row',
+              child: Text('Delete Row')),
+        if (editable && allowOverride && hasOverride)
+          const PopupMenuDivider(),
+        if (editable && allowOverride && hasOverride)
           PopupMenuItem(
             value: 'remove_override',
             child: Row(
+              mainAxisSize: MainAxisSize.min,
               children: [
                 Icon(Icons.close, size: 14, color: Colors.orange.shade400),
                 const SizedBox(width: 6),
@@ -1501,15 +1573,72 @@ class _EpyxGridState extends State<EpyxGrid> {
         case 'clear':
           _clearSelection();
           break;
+        case 'insert_row':
+        case 'delete_row':
         case 'remove_override':
           final colName = _source.columnName(col);
           final eventData = jsonEncode({
-            'action': 'remove_override',
+            'action': action,
             'row_index': row,
             'column_name': colName,
           });
           widget.control.triggerEventWithoutSubscribers(
               'context_action', eventData);
+          break;
+      }
+    });
+  }
+
+  /// Show right-click context menu on column header (CM5).
+  void _showHeaderContextMenu(Offset globalPosition, int col) {
+    final allowSorting =
+        widget.control.getBool("allow_sorting", false) ?? false;
+    final colName = _source.columnName(col);
+
+    showMenu<String>(
+      context: context,
+      position: RelativeRect.fromLTRB(
+        globalPosition.dx, globalPosition.dy,
+        globalPosition.dx, globalPosition.dy,
+      ),
+      items: [
+        if (allowSorting)
+          PopupMenuItem(value: 'sort_asc',
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                const Icon(Icons.arrow_upward, size: 14),
+                const SizedBox(width: 6),
+                const Text('Sort Ascending'),
+              ])),
+        if (allowSorting)
+          PopupMenuItem(value: 'sort_desc',
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                const Icon(Icons.arrow_downward, size: 14),
+                const SizedBox(width: 6),
+                const Text('Sort Descending'),
+              ])),
+        if (allowSorting) const PopupMenuDivider(),
+        PopupMenuItem(value: 'auto_fit',
+            child: Text('Auto-Fit Width')),
+        PopupMenuItem(value: 'hide_column',
+            child: Text('Hide Column')),
+      ],
+    ).then((action) {
+      if (action == null) return;
+      switch (action) {
+        case 'sort_asc':
+          widget.control.triggerEventWithoutSubscribers(
+              'sort_request', jsonEncode({'column': colName, 'ascending': true}));
+          break;
+        case 'sort_desc':
+          widget.control.triggerEventWithoutSubscribers(
+              'sort_request', jsonEncode({'column': colName, 'ascending': false}));
+          break;
+        case 'auto_fit':
+          _autoSizeColumn(col);
+          break;
+        case 'hide_column':
+          widget.control.triggerEventWithoutSubscribers(
+              'context_action', jsonEncode({'action': 'hide_column', 'column_name': colName}));
           break;
       }
     });
@@ -1889,6 +2018,180 @@ class _EpyxGridState extends State<EpyxGrid> {
         }
       });
     }
+  }
+
+  // ────────────────────────────────────────────────────────────────
+  // Hover tracking + scriptable cell painting (§6A render_code)
+  // ────────────────────────────────────────────────────────────────
+
+  void _onHover(Offset localPosition) {
+    final headerH = _source.headerRowHeight;
+    final dataY = localPosition.dy - headerH;
+    if (dataY < 0) {
+      if (_hoveredRow != -1) {
+        final old = _hoveredRow;
+        setState(() {
+          _hoveredRow = -1;
+          _hoveredCol = -1;
+          _rowRenderCache.remove(old);
+          _cellRenderCache.removeWhere((k, _) => k.startsWith('$old:'));
+        });
+      }
+      return;
+    }
+    final yOffset = _yController.hasClients ? _yController.offset : 0.0;
+    final xOffset = _xController.hasClients ? _xController.offset : 0.0;
+    final row = ((yOffset + dataY) / _source.rowHeight).floor().clamp(0, _source.rowCount - 1);
+
+    // Hit-test column (-1 if past last column)
+    final absX = xOffset + localPosition.dx;
+    int col = -1;
+    double cumX = 0;
+    for (int i = 0; i < _source.columnCount; i++) {
+      final w = _getColumnWidth(i);
+      if (absX >= cumX && absX < cumX + w) { col = i; break; }
+      cumX += w;
+    }
+
+    // If past last column (empty space), treat as no-hover
+    if (col == -1) {
+      if (_hoveredRow != -1) {
+        final old = _hoveredRow;
+        setState(() {
+          _hoveredRow = -1;
+          _hoveredCol = -1;
+          _rowRenderCache.remove(old);
+          _cellRenderCache.removeWhere((k, _) => k.startsWith('$old:'));
+        });
+      }
+      return;
+    }
+
+    if (row != _hoveredRow || col != _hoveredCol) {
+      final oldRow = _hoveredRow;
+      setState(() {
+        _hoveredRow = row;
+        _hoveredCol = col;
+        _rowRenderCache.remove(oldRow);
+        _rowRenderCache.remove(row);
+        _cellRenderCache.removeWhere(
+            (k, _) => k.startsWith('$oldRow:') || k.startsWith('$row:'));
+      });
+    }
+  }
+
+  void _onHoverExit() {
+    if (_hoveredRow != -1) {
+      final oldHover = _hoveredRow;
+      setState(() {
+        _hoveredRow = -1;
+        _rowRenderCache.remove(oldHover);
+        _cellRenderCache.removeWhere(
+            (k, _) => k.startsWith('$oldHover:'));
+      });
+    }
+  }
+
+  /// Evaluate row_render_code for a row via MicroPython.
+  /// Returns {bg} dict or null. Cached per-row.
+  Map<String, String>? _evalRowRender(int rowIndex) {
+    final code = widget.control.getString("row_render_code") ?? '';
+    if (code.isEmpty || !MicroPythonService.isReady) return null;
+
+    // Cache check
+    if (_rowRenderCache.containsKey(rowIndex)) {
+      return _rowRenderCache[rowIndex];
+    }
+
+    final visibleRows = _yController.hasClients
+        ? (_yController.position.viewportDimension / _source.rowHeight).floor()
+        : _source.visibleRowEstimate;
+    final vpPos = _yController.hasClients
+        ? rowIndex - (_yController.offset / _source.rowHeight).floor()
+        : rowIndex;
+
+    final ctx = <String, dynamic>{
+      'viewport_pos': vpPos,
+      'viewport_count': visibleRows,
+      'row_index': rowIndex,
+      'is_selected': rowIndex == _selectedRow,
+      'is_hovered': rowIndex == _hoveredRow,
+      'existing_bg': _source.rowBackground(rowIndex, rowIndex == _selectedRow)
+          ?.toString(),
+    };
+
+    try {
+      final lines = code.trim().split('\n');
+      lines[lines.length - 1] = '_r = ${lines.last.trim()}';
+      final fullCode = lines.join('\n');
+      final result = MicroPythonService.execEval(fullCode, '_r', ctx);
+      if (result is Map) {
+        final style = <String, String>{};
+        if (result['bg'] != null) style['bg'] = result['bg'].toString();
+        if (result['fg'] != null) style['fg'] = result['fg'].toString();
+        _rowRenderCache[rowIndex] = style.isEmpty ? null : style;
+        return _rowRenderCache[rowIndex];
+      }
+    } catch (_) {}
+    _rowRenderCache[rowIndex] = null;
+    return null;
+  }
+
+  /// Evaluate render_code for a cell via MicroPython.
+  /// Returns {bg, fg} dict or null. Cached per-cell.
+  Map<String, String>? _evalCellRender(int rowIndex, int colIndex) {
+    final code = widget.control.getString("render_code") ?? '';
+    if (code.isEmpty || !MicroPythonService.isReady) return null;
+
+    final key = '$rowIndex:$colIndex';
+    if (_cellRenderCache.containsKey(key)) {
+      return _cellRenderCache[key];
+    }
+
+    final visibleRows = _yController.hasClients
+        ? (_yController.position.viewportDimension / _source.rowHeight).floor()
+        : _source.visibleRowEstimate;
+    final vpPos = _yController.hasClients
+        ? rowIndex - (_yController.offset / _source.rowHeight).floor()
+        : rowIndex;
+
+    final cellStyle = _source.cellStyle(rowIndex, colIndex);
+    final ctx = <String, dynamic>{
+      'viewport_pos': vpPos,
+      'viewport_count': visibleRows,
+      'row_index': rowIndex,
+      'col_index': colIndex,
+      'col_name': colIndex < _source.columnCount
+          ? _source.columnName(colIndex) : '',
+      'is_selected': _isInSelection(rowIndex, colIndex),
+      'is_hovered': rowIndex == _hoveredRow,
+      'is_hovered_cell': rowIndex == _hoveredRow && colIndex == _hoveredCol,
+      'hovered_col': _hoveredCol,
+      'existing_bg': cellStyle?['bg'],
+      'existing_fg': cellStyle?['fg'],
+    };
+
+    try {
+      final lines = code.trim().split('\n');
+      lines[lines.length - 1] = '_r = ${lines.last.trim()}';
+      final fullCode = lines.join('\n');
+      final result = MicroPythonService.execEval(fullCode, '_r', ctx);
+      if (result is Map) {
+        final style = <String, String>{};
+        if (result['bg'] != null) style['bg'] = result['bg'].toString();
+        if (result['fg'] != null) style['fg'] = result['fg'].toString();
+        _cellRenderCache[key] = style.isEmpty ? null : style;
+        return _cellRenderCache[key];
+      }
+    } catch (_) {}
+    _cellRenderCache[key] = null;
+    return null;
+  }
+
+  /// Invalidate all render caches (on data change, script change).
+  void _invalidateRenderCaches() {
+    _rowRenderCache.clear();
+    _cellRenderCache.clear();
   }
 
   void _ensureColumnVisible(int col) {

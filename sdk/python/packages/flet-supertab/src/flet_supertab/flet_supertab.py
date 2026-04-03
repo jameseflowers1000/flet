@@ -28,6 +28,10 @@ class SuperTab(ft.LayoutControl):
     # Interaction
     allow_sorting: bool = field(default=False, metadata={"data_field": "allow_sorting"})
     allow_column_resize: bool = field(default=False, metadata={"data_field": "allow_column_resize"})
+    allow_add_row: bool = field(default=True, metadata={"data_field": "allow_add_row"})
+    allow_delete_row: bool = field(default=True, metadata={"data_field": "allow_delete_row"})
+    allow_insert_row: bool = field(default=True, metadata={"data_field": "allow_insert_row"})
+    allow_override: bool = field(default=True, metadata={"data_field": "allow_override"})
 
     # Config properties (synced from ETab)
     show_row_numbers: bool = field(default=False, metadata={"data_field": "show_row_numbers"})
@@ -76,6 +80,10 @@ class SuperTab(ft.LayoutControl):
     # JSON-encoded cell styles for conditional formatting (§9.5)
     # Structure: [[{"bg": "#color", "fg": "#color"} | null, ...], ...]
     cell_styles: Optional[str] = field(default=None, metadata={"data_field": "cell_styles"})
+
+    # Dart-side MicroPython render scripts (§6A)
+    render_code: str = field(default="", metadata={"data_field": "render_code"})
+    row_render_code: str = field(default="", metadata={"data_field": "row_render_code"})
 
     # JSON-encoded summary row values (list of strings in column order) for footer display
     summary_row: str = field(default="", metadata={"data_field": "summary_row"})
