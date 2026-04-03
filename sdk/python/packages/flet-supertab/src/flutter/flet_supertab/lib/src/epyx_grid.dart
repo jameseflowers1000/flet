@@ -407,10 +407,10 @@ class _EpyxGridState extends State<EpyxGrid> {
         _color("header_bg_color", context, const Color(0xFF2D2D30));
 
     // CustomPaint paints background only to _totalColumnsWidth so the
-    // chrome bar colour stops at the last column boundary.  The Row content
-    // still stretches to full width (Spacer pushes row-count text right);
-    // constraining the Row is deferred — the background is the visual fix.
-    return CustomPaint(
+    // chrome bar colour stops at the last column boundary.
+    return GestureDetector(
+      onSecondaryTapDown: (d) => _showChromeContextMenu(d.globalPosition),
+      child: CustomPaint(
       painter: _BarBgPainter(headerBg, _totalColumnsWidth, rowPositionText),
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
@@ -456,7 +456,77 @@ class _EpyxGridState extends State<EpyxGrid> {
           ],
         ),
       ),
+      ),
     );
+  }
+
+  /// Chrome bar right-click context menu — table-level actions.
+  void _showChromeContextMenu(Offset globalPosition) {
+    final allowAddRow =
+        widget.control.getBool("allow_add_row", true) ?? true;
+    if (!allowAddRow) return;
+
+    showMenu<String>(
+      context: context,
+      position: RelativeRect.fromLTRB(
+        globalPosition.dx, globalPosition.dy,
+        globalPosition.dx, globalPosition.dy,
+      ),
+      items: [
+        const PopupMenuItem(value: 'add_1',
+            child: Text('Add Row')),
+        const PopupMenuItem(value: 'add_n',
+            child: Text('Add Rows…')),
+      ],
+    ).then((action) {
+      if (action == null) return;
+      if (action == 'add_1') {
+        widget.control.triggerEventWithoutSubscribers(
+            'context_action', jsonEncode({
+              'action': 'add_rows', 'count': 1,
+            }));
+      } else if (action == 'add_n') {
+        _showAddRowsDialog();
+      }
+    });
+  }
+
+  void _showAddRowsDialog() {
+    final controller = TextEditingController(text: '5');
+    showDialog<int>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Add Rows'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          keyboardType: TextInputType.number,
+          decoration: const InputDecoration(labelText: 'Number of rows'),
+          onSubmitted: (_) {
+            final n = int.tryParse(controller.text) ?? 0;
+            Navigator.of(ctx).pop(n);
+          },
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.of(ctx).pop(null),
+              child: const Text('Cancel')),
+          TextButton(
+              onPressed: () {
+                final n = int.tryParse(controller.text) ?? 0;
+                Navigator.of(ctx).pop(n);
+              },
+              child: const Text('Add')),
+        ],
+      ),
+    ).then((count) {
+      if (count != null && count > 0) {
+        widget.control.triggerEventWithoutSubscribers(
+            'context_action', jsonEncode({
+              'action': 'add_rows', 'count': count,
+            }));
+      }
+    });
   }
 
   // ────────────────────────────────────────────────────────────────
