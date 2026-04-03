@@ -2321,10 +2321,11 @@ class _OverrideTrianglePainter extends CustomPainter {
     final paint = Paint()
       ..color = Colors.orange
       ..style = PaintingStyle.fill;
+    const double s = 6;
     final path = Path()
       ..moveTo(0, 0)
-      ..lineTo(size.width, 0)
-      ..lineTo(0, size.height)
+      ..lineTo(s, 0)
+      ..lineTo(0, s)
       ..close();
     canvas.drawPath(path, paint);
   }
