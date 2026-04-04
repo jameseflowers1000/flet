@@ -106,6 +106,26 @@ class _EpyxGridState extends State<EpyxGrid> {
   String _lastRowHeightsJson = '';
   double _lastRowHeight = 36.0;
 
+  // ── LOD event-queue state ──────────────────────────────────────
+  // Buffer: rows cached by ABSOLUTE row index.
+  // Key = absolute row index, value = row data (list of cell values).
+  final Map<int, List<Object?>> _rowBuffer = {};
+
+  // Cell styles buffer: absolute row index → list of per-cell style maps.
+  final Map<int, List<Map<String, String>?>> _cellStyleBuffer = {};
+
+  // Override cells buffer: set of "absRow:colName" strings.
+  final Set<String> _overrideBuffer = {};
+
+  // Row height overrides buffer: absolute row index → height.
+  final Map<int, double> _rowHeightBuffer = {};
+
+  // Event queue: pending display events that may need data not yet in buffer.
+  final List<_DisplayEvent> _displayQueue = [];
+
+  // Track in-flight page requests to avoid duplicates.
+  final Set<int> _pendingPageRequests = {};
+
 
   @override
   void initState() {
@@ -185,6 +205,15 @@ class _EpyxGridState extends State<EpyxGrid> {
       }
       return;
     }
+    // If columns or totalRows changed, clear the entire buffer — row data
+    // structure may have changed or a full reload was triggered (sort, filter).
+    final colsChanged = newCols != _lastColsJson;
+    final totalChanged = newTotalRows != _lastTotalRows;
+    if (colsChanged || totalChanged) {
+      _clearBuffer();
+      _displayQueue.clear();
+    }
+
     _lastRowsJson = newRows;
     _lastColsJson = newCols;
     _lastTotalRows = newTotalRows;
@@ -196,12 +225,73 @@ class _EpyxGridState extends State<EpyxGrid> {
     _lastRowHeightsJson = newRowHeights;
     _lastRowHeight = newRowHeight;
 
+    // Merge incoming rows into the buffer before source rebuild.
+    final incomingBufferStart = newBufferStart;
+    if (newRows.isNotEmpty) {
+      try {
+        final parsedRows = (jsonDecode(newRows) as List)
+            .map<List<Object?>>((r) => (r as List).cast<Object?>())
+            .toList();
+        for (int i = 0; i < parsedRows.length; i++) {
+          _rowBuffer[incomingBufferStart + i] = parsedRows[i];
+        }
+      } catch (_) {}
+    }
+
+    // Merge cell styles into buffer
+    if (newStyles.isNotEmpty) {
+      try {
+        final parsed = jsonDecode(newStyles) as List;
+        for (int i = 0; i < parsed.length; i++) {
+          final row = parsed[i] as List;
+          _cellStyleBuffer[incomingBufferStart + i] =
+              row.map<Map<String, String>?>((cell) {
+            if (cell == null) return null;
+            return Map<String, String>.from(cell as Map);
+          }).toList();
+        }
+      } catch (_) {}
+    }
+
+    // Merge override cells into buffer
+    if (newOverrides.isNotEmpty) {
+      try {
+        final parsed = jsonDecode(newOverrides) as List;
+        // Remove old overrides in this page range first
+        final pageEnd = incomingBufferStart + (newRows.isNotEmpty
+            ? (jsonDecode(newRows) as List).length : 0);
+        _overrideBuffer.removeWhere((key) {
+          final row = int.tryParse(key.split(':').first) ?? -1;
+          return row >= incomingBufferStart && row < pageEnd;
+        });
+        for (final e in parsed) {
+          _overrideBuffer.add(e.toString());
+        }
+      } catch (_) {}
+    }
+
+    // Merge row height overrides into buffer
+    if (newRowHeights.isNotEmpty) {
+      try {
+        final parsed = jsonDecode(newRowHeights) as Map<String, dynamic>;
+        for (final entry in parsed.entries) {
+          _rowHeightBuffer[int.parse(entry.key)] =
+              (entry.value as num).toDouble();
+        }
+      } catch (_) {}
+    }
+
+    // Clear in-flight tracking for this page offset
+    _pendingPageRequests.remove(incomingBufferStart);
+
     setState(() {
       _sourceNeedsRebuild = true;
-      _lastRequestedOffset = -1; // reset LOD dedup — data changed
       _pendingEdits.clear(); // Python has authoritative data now
       _invalidateRenderCaches(); // data changed → re-evaluate styles
     });
+
+    // Retry pending display events now that new data has arrived
+    _tryProcessQueue();
   }
 
   @override
@@ -379,44 +469,46 @@ class _EpyxGridState extends State<EpyxGrid> {
     });
   }
 
-  /// Track first visible row for header display + LOD page requests.
-  /// Sliding-window LOD: when viewport center is within 100 rows of the
-  /// buffer edge, request the next abutting page.
+  /// Track first visible row for header display + LOD prefetch.
+  /// Simple prefetch: request next page when within 50 rows of buffer edge.
   void _onVerticalScroll() {
     if (!_sourceInitialized) return;
-    // _firstVisibleRow is buffer-relative for the ListView, but we
-    // convert to absolute for display and LOD calculations.
-    final bufferRelFirst = _hitTestRow(_yController.offset);
-    final absFirst = _source.toAbsoluteRow(bufferRelFirst);
+    final totalRows = widget.control.getInt("total_rows", 0) ?? 0;
+    final effectiveTotal = totalRows > 0 ? totalRows : _source.rowCount;
+
+    // Compute first visible row as absolute index
+    int absFirst;
+    if (_yController.hasClients && _source.rowCount > 0) {
+      final scrollOffset = _yController.offset;
+      absFirst = _hitTestRow(scrollOffset);
+    } else {
+      absFirst = _firstVisibleRow;
+    }
     if (absFirst != _firstVisibleRow) {
       setState(() {
         _firstVisibleRow = absFirst;
       });
     }
 
-    // Sliding-window LOD: request next page when within prefetch threshold
-    final totalRows = widget.control.getInt("total_rows", 0) ?? 0;
-    if (totalRows <= _source.rowCount && _source.bufferStart == 0) return;
+    // No LOD needed if all rows fit in one page
+    if (effectiveTotal <= _source.rowCount && _source.bufferStart == 0) return;
     if (!_yController.hasClients) return;
 
-    const prefetchThreshold = 100; // rows from buffer edge to trigger fetch
+    const prefetchThreshold = 50; // rows from buffer edge to trigger fetch
     final viewportRows = (_yController.position.viewportDimension / _source.rowHeight).ceil();
     final absLastVisible = absFirst + viewportRows;
 
-    // Approaching bottom of buffer — request next page.
-    // Only when user has scrolled past the first screenful (avoid
-    // prefetching on first paint when buffer is small).
-    if (absFirst > 0 &&
-        absLastVisible + prefetchThreshold >= _source.bufferEnd &&
-        _source.bufferEnd < totalRows) {
-      _requestPage(_source.bufferEnd, 300);
+    // Prefetch forward: approaching bottom of buffered data
+    if (absLastVisible + prefetchThreshold > _bufferMaxRow &&
+        _bufferMaxRow < effectiveTotal) {
+      final fetchStart = _bufferMaxRow;
+      _requestPage(fetchStart, 300);
     }
-    // Approaching top of buffer — request page above
-    if (absFirst > _source.bufferStart &&
-        absFirst - prefetchThreshold <= _source.bufferStart &&
-        _source.bufferStart > 0) {
-      final offset = math.max(0, _source.bufferStart - 300);
-      _requestPage(offset, 300);
+    // Prefetch backward: approaching top of buffered data
+    if (absFirst - prefetchThreshold < _bufferMinRow &&
+        _bufferMinRow > 0) {
+      final fetchStart = math.max(0, _bufferMinRow - 300);
+      _requestPage(fetchStart, 300);
     }
   }
 
@@ -424,6 +516,138 @@ class _EpyxGridState extends State<EpyxGrid> {
 
   Color _color(String prop, BuildContext? ctx, Color fallback) {
     return widget.control.getColor(prop, ctx, fallback) ?? fallback;
+  }
+
+  // ────────────────────────────────────────────────────────────────
+  // LOD event queue
+  // ────────────────────────────────────────────────────────────────
+
+  /// Lowest absolute row index in the buffer.
+  int get _bufferMinRow => _rowBuffer.isEmpty ? 0 : _rowBuffer.keys.reduce(math.min);
+
+  /// Highest absolute row index + 1 in the buffer (exclusive upper bound).
+  int get _bufferMaxRow => _rowBuffer.isEmpty ? 0 : _rowBuffer.keys.reduce(math.max) + 1;
+
+  /// Is the given absolute row in the buffer?
+  bool _isRowInBuffer(int absRow) => _rowBuffer.containsKey(absRow);
+
+  /// Get row data from the buffer (or null if not buffered).
+  List<Object?>? _bufferedRow(int absRow) => _rowBuffer[absRow];
+
+  /// Get cell style from the buffer (or null).
+  Map<String, String>? _bufferedCellStyle(int absRow, int col) {
+    final styles = _cellStyleBuffer[absRow];
+    if (styles == null || col >= styles.length) return null;
+    return styles[col];
+  }
+
+  /// Is this absolute row:colName an override?
+  bool _bufferedHasOverride(int absRow, int colIndex) {
+    if (colIndex >= _source.columnCount) return false;
+    return _overrideBuffer.contains('$absRow:${_source.columnName(colIndex)}');
+  }
+
+  /// Get per-row height override from buffer (or default).
+  double _bufferedRowHeight(int absRow) {
+    return _rowHeightBuffer[absRow] ?? _source.rowHeight;
+  }
+
+  /// Push a display event onto the queue and try to process immediately.
+  void _enqueueDisplay(_DisplayEvent event) {
+    _displayQueue.add(event);
+    _tryProcessQueue();
+  }
+
+  /// Can we satisfy this display event with data currently in the buffer?
+  /// Checks that the target row AND enough surrounding rows for a screenful
+  /// are in the buffer.
+  bool _canSatisfy(_DisplayEvent event) {
+    final totalRows = widget.control.getInt("total_rows", 0) ?? 0;
+    final effectiveTotal = totalRows > 0 ? totalRows : _source.rowCount;
+    if (effectiveTotal == 0) return true; // no data to display
+
+    final viewportRows = _yController.hasClients
+        ? (_yController.position.viewportDimension / _source.rowHeight).ceil()
+        : _source.visibleRowEstimate;
+
+    int rangeStart, rangeEnd;
+    switch (event.position) {
+      case _DisplayPosition.top:
+        rangeStart = event.targetRow;
+        rangeEnd = math.min(event.targetRow + viewportRows, effectiveTotal);
+        break;
+      case _DisplayPosition.bottom:
+        rangeStart = math.max(0, event.targetRow - viewportRows + 1);
+        rangeEnd = math.min(event.targetRow + 1, effectiveTotal);
+        break;
+      case _DisplayPosition.center:
+        final half = viewportRows ~/ 2;
+        rangeStart = math.max(0, event.targetRow - half);
+        rangeEnd = math.min(event.targetRow + half + 1, effectiveTotal);
+        break;
+    }
+
+    for (int r = rangeStart; r < rangeEnd; r++) {
+      if (!_isRowInBuffer(r)) return false;
+    }
+    return true;
+  }
+
+  /// Execute a display event: scroll to the target row and trigger rebuild.
+  void _executeEvent(_DisplayEvent event) {
+    if (!_yController.hasClients) return;
+    final totalRows = widget.control.getInt("total_rows", 0) ?? 0;
+    final effectiveTotal = totalRows > 0 ? totalRows : _source.rowCount;
+    if (effectiveTotal == 0) return;
+
+    switch (event.position) {
+      case _DisplayPosition.top:
+        // Scroll so targetRow is at the top of the viewport
+        final offset = event.targetRow * _source.rowHeight;
+        _yController.jumpTo(offset.clamp(
+            0.0, _yController.position.maxScrollExtent));
+        break;
+      case _DisplayPosition.bottom:
+        // Scroll so targetRow is at the bottom of the viewport
+        final viewportH = _yController.position.viewportDimension;
+        final offset = (event.targetRow + 1) * _source.rowHeight - viewportH;
+        _yController.jumpTo(offset.clamp(
+            0.0, _yController.position.maxScrollExtent));
+        break;
+      case _DisplayPosition.center:
+        final viewportH = _yController.position.viewportDimension;
+        final offset = event.targetRow * _source.rowHeight - viewportH / 2;
+        _yController.jumpTo(offset.clamp(
+            0.0, _yController.position.maxScrollExtent));
+        break;
+    }
+  }
+
+  /// Try to process pending display events.
+  /// Processes events in order; stops at the first event that can't be
+  /// satisfied and requests the needed data.
+  void _tryProcessQueue() {
+    while (_displayQueue.isNotEmpty) {
+      final event = _displayQueue.first;
+      if (_canSatisfy(event)) {
+        _displayQueue.removeAt(0);
+        _executeEvent(event);
+      } else {
+        // Request the page centered on the target row
+        final pageStart = math.max(0, event.targetRow - 150);
+        _requestPage(pageStart, 300);
+        break; // wait for data arrival
+      }
+    }
+  }
+
+  /// Clear the buffer (e.g., on full data reload from Python).
+  void _clearBuffer() {
+    _rowBuffer.clear();
+    _cellStyleBuffer.clear();
+    _overrideBuffer.clear();
+    _rowHeightBuffer.clear();
+    _pendingPageRequests.clear();
   }
 
   // ────────────────────────────────────────────────────────────────
@@ -446,18 +670,23 @@ class _EpyxGridState extends State<EpyxGrid> {
       _lastSummaryJson = widget.control.getString("summary_row") ?? '';
       _sourceInitialized = true;
 
-      // After source rebuild: if selection is outside buffer, re-request.
-      // If selection IS in buffer, scroll to show it (deferred page arrival).
-      if (_selectedRow > 0) {
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (!mounted) return;
-          if (!_source.isInBuffer(_selectedRow)) {
-            _requestPage(math.max(0, _selectedRow - 150), 300);
-          } else {
-            _ensureRowVisible(_selectedRow);
-          }
-        });
+      // Populate the row buffer from the source's parsed rows.
+      // This ensures the buffer has data on both initial build and
+      // subsequent rebuilds (data pushes from Python).
+      final bufStart = _source.bufferStart;
+      for (int i = 0; i < _source.rowCount; i++) {
+        _rowBuffer[bufStart + i] = _source.rows[i];
       }
+      // Populate cell style buffer from source
+      for (int i = 0; i < _source.cellStyles.length; i++) {
+        _cellStyleBuffer[bufStart + i] = _source.cellStyles[i];
+      }
+      // Populate override buffer from source
+      // Source stores overrides relative to bufferStart
+      _overrideBuffer.addAll(_source.overrideCells);
+      // Populate row height overrides from source
+      _rowHeightBuffer.addAll(
+          _source.perRowHeights.map((k, v) => MapEntry(k, v)));
     }
     final totalRows = widget.control.getInt("total_rows", 0) ?? 0;
     final label = widget.control.getString("label") ?? "";
@@ -702,13 +931,29 @@ class _EpyxGridState extends State<EpyxGrid> {
 
         final unbounded = constraints.maxHeight == double.infinity;
         final totalRows = widget.control.getInt("total_rows", 0) ?? 0;
-        final hasMore = _source.bufferEnd < totalRows;
-        final itemCount = _source.rowCount + (hasMore ? 1 : 0);
+        // Full itemCount = totalRows for proper scrollbar sizing.
+        // Falls back to source rowCount when totalRows is 0 (no LOD).
+        final itemCount = totalRows > 0 ? totalRows : _source.rowCount;
 
-        Widget lodSpinner() => const Center(
-              child: SizedBox(width: 20, height: 20,
-                child: CircularProgressIndicator(strokeWidth: 2)),
-            );
+        /// Build a row for absolute index [absRow].
+        /// Returns real content if row is in buffer, otherwise an empty placeholder.
+        Widget buildAbsRow(int absRow, {int colStart = 0, int? colEnd}) {
+          if (_isRowInBuffer(absRow)) {
+            // Buffer-relative index for _source (which still holds the most recent page).
+            final bufIdx = _source.toBufferIndex(absRow);
+            if (bufIdx >= 0) {
+              return _buildRow(bufIdx, colStart: colStart, colEnd: colEnd);
+            }
+            // Row is in our Map buffer but not in the source's linear page.
+            // Build from the Map buffer directly.
+            return _buildBufferedRow(absRow, colStart: colStart, colEnd: colEnd);
+          }
+          // Not in buffer — return empty placeholder at the correct height.
+          // Request the page containing this row (centered for better coverage).
+          final pageStart = math.max(0, absRow - 150);
+          _requestPage(pageStart, 300);
+          return SizedBox(height: _source.rowHeight);
+        }
 
         // When frozen columns are active, split into frozen + scrollable panels
         if (frozenCount > 0 && frozenCount < _source.columnCount) {
@@ -739,11 +984,7 @@ class _EpyxGridState extends State<EpyxGrid> {
                             itemCount: itemCount,
                             itemExtent: _source.hasVariableRowHeights ? null : _source.rowHeight,
                             itemBuilder: (context, index) {
-                              if (index >= _source.rowCount) {
-                                _requestNextPage();
-                                return lodSpinner();
-                              }
-                              return _buildRow(index, colEnd: frozenCount);
+                              return buildAbsRow(index, colEnd: frozenCount);
                             },
                           )
                         else
@@ -753,11 +994,7 @@ class _EpyxGridState extends State<EpyxGrid> {
                               itemCount: itemCount,
                               itemExtent: _source.hasVariableRowHeights ? null : _source.rowHeight,
                               itemBuilder: (context, index) {
-                                if (index >= _source.rowCount) {
-                                  _requestNextPage();
-                                  return lodSpinner();
-                                }
-                                return _buildRow(index, colEnd: frozenCount);
+                                return buildAbsRow(index, colEnd: frozenCount);
                               },
                             ),
                           ),
@@ -788,8 +1025,7 @@ class _EpyxGridState extends State<EpyxGrid> {
                                 itemCount: itemCount,
                                 itemExtent: _source.hasVariableRowHeights ? null : _source.rowHeight,
                                 itemBuilder: (context, index) {
-                                  if (index >= _source.rowCount) return lodSpinner();
-                                  return _buildRow(index, colStart: frozenCount);
+                                  return buildAbsRow(index, colStart: frozenCount);
                                 },
                               )
                             else
@@ -799,8 +1035,7 @@ class _EpyxGridState extends State<EpyxGrid> {
                                   itemCount: itemCount,
                                   itemExtent: _source.hasVariableRowHeights ? null : _source.rowHeight,
                                   itemBuilder: (context, index) {
-                                    if (index >= _source.rowCount) return lodSpinner();
-                                    return _buildRow(index, colStart: frozenCount);
+                                    return buildAbsRow(index, colStart: frozenCount);
                                   },
                                 ),
                               ),
@@ -842,8 +1077,8 @@ class _EpyxGridState extends State<EpyxGrid> {
                     _buildColumnHeaderRow(context, showRowNumbers, rowNumWidth),
                     // Frozen rows: pinned above scrollable body
                     if (frozenRows > 0)
-                      for (int i = 0; i < frozenRows && i < _source.rowCount; i++)
-                        _buildRow(i),
+                      for (int i = 0; i < frozenRows && i < itemCount; i++)
+                        buildAbsRow(i),
                     if (unbounded)
                       ListView.builder(
                         shrinkWrap: true,
@@ -854,12 +1089,8 @@ class _EpyxGridState extends State<EpyxGrid> {
                         itemExtent: _source.hasVariableRowHeights
                             ? null : _source.rowHeight,
                         itemBuilder: (context, index) {
-                          final actualRow = index + frozenRows;
-                          if (actualRow >= _source.rowCount) {
-                            _requestNextPage();
-                            return lodSpinner();
-                          }
-                          return _buildRow(actualRow);
+                          final absRow = index + frozenRows;
+                          return buildAbsRow(absRow);
                         },
                       )
                     else
@@ -870,12 +1101,8 @@ class _EpyxGridState extends State<EpyxGrid> {
                           itemExtent: _source.hasVariableRowHeights
                               ? null : _source.rowHeight,
                           itemBuilder: (context, index) {
-                            final actualRow = index + frozenRows;
-                            if (actualRow >= _source.rowCount) {
-                              _requestNextPage();
-                              return lodSpinner();
-                            }
-                            return _buildRow(actualRow);
+                            final absRow = index + frozenRows;
+                            return buildAbsRow(absRow);
                           },
                         ),
                       ),
@@ -1107,24 +1334,17 @@ class _EpyxGridState extends State<EpyxGrid> {
   // LOD page request
   // ────────────────────────────────────────────────────────────────
 
-  int _lastRequestedOffset = -1;
-
   /// Request a page of data from Python at the given absolute offset.
-  /// Debounced by offset to avoid duplicate requests.
+  /// Deduped: won't re-request an offset that's already in-flight.
   void _requestPage(int offset, int limit) {
-    if (offset == _lastRequestedOffset) return; // already requested
-    _lastRequestedOffset = offset;
+    if (_pendingPageRequests.contains(offset)) return;
+    _pendingPageRequests.add(offset);
 
     final eventData = jsonEncode({
       "offset": offset,
       "limit": limit,
     });
     widget.control.triggerEventWithoutSubscribers("page_request", eventData);
-  }
-
-  /// Request the next page beyond the current buffer (used by spinner sentinel).
-  void _requestNextPage() {
-    _requestPage(_source.bufferEnd, 300);
   }
 
   // ────────────────────────────────────────────────────────────────
@@ -1180,6 +1400,105 @@ class _EpyxGridState extends State<EpyxGrid> {
             if (!_source.isColumnHidden(colIndex))
               _buildCell(bufRowIndex, absRow, colIndex),
         ],
+      ),
+    );
+  }
+
+  /// Build a row directly from the Map buffer (for rows not in the source's
+  /// linear page array but present in _rowBuffer).
+  Widget _buildBufferedRow(int absRow, {int colStart = 0, int? colEnd}) {
+    final isSelected = absRow == _selectedRow;
+    final endCol = colEnd ?? _source.columnCount;
+    final rowData = _rowBuffer[absRow];
+    if (rowData == null) return SizedBox(height: _source.rowHeight);
+
+    final rowHeight = _bufferedRowHeight(absRow);
+    Color? rowBg = _source.rowBackground(0, isSelected); // use index 0 for even/odd
+
+    return Container(
+      key: isSelected && colStart == 0 ? _selectedRowKey : null,
+      height: rowHeight,
+      decoration: BoxDecoration(
+        color: rowBg,
+        border: Border(
+          bottom: BorderSide(
+              color: _source.gridLineColor, width: _source.gridLineWidth),
+        ),
+      ),
+      child: Row(
+        children: [
+          for (int colIndex = colStart; colIndex < endCol; colIndex++)
+            if (!_source.isColumnHidden(colIndex))
+              _buildBufferedCell(absRow, colIndex, rowData),
+        ],
+      ),
+    );
+  }
+
+  /// Build a cell from the Map buffer.
+  Widget _buildBufferedCell(int absRow, int colIndex, List<Object?> rowData) {
+    final isAnchor = _isAnchor(absRow, colIndex);
+    final inRange = _isInSelection(absRow, colIndex);
+    final pendingKey = '$absRow:$colIndex';
+    final cellText = _pendingEdits[pendingKey] ??
+        (colIndex < rowData.length ? rowData[colIndex]?.toString() ?? '' : '');
+    final cellStyle = _bufferedCellStyle(absRow, colIndex);
+
+    Color? fg = cellStyle?['fg'] != null
+        ? _parseHexColor(cellStyle!['fg']!) : null;
+    Color? bg = cellStyle?['bg'] != null
+        ? _parseHexColor(cellStyle!['bg']!) : null;
+
+    final textColor = fg ?? _source.cellTextColor;
+    final bgColor = isAnchor ? bg
+        : inRange ? (bg ?? const Color(0xFF1E1E1E)).withValues(alpha: 0.8)
+        : bg;
+
+    final hasOverride = _bufferedHasOverride(absRow, colIndex);
+    BoxBorder cellBorder;
+    if (isAnchor) {
+      cellBorder = Border.all(
+        color: _source.currentCellBorderColor,
+        width: _source.currentCellBorderWidth,
+      );
+    } else if (inRange) {
+      cellBorder = Border.all(
+        color: _source.currentCellBorderColor.withValues(alpha: 0.4),
+        width: 1.0,
+      );
+    } else {
+      cellBorder = Border(
+        right: BorderSide(
+            color: _source.gridLineColor, width: _source.gridLineWidth),
+      );
+    }
+
+    return Semantics(
+      label: 'cell_${absRow}_${colIndex}_$cellText',
+      child: CustomPaint(
+        foregroundPainter: hasOverride ? _OverrideTrianglePainter() : null,
+        child: Container(
+          width: _getColumnWidth(colIndex),
+          height: _bufferedRowHeight(absRow),
+          padding: EdgeInsets.symmetric(
+            horizontal: _source.cellPaddingH,
+            vertical: _source.cellPaddingV,
+          ),
+          decoration: BoxDecoration(color: bgColor, border: cellBorder),
+          child: Align(
+            alignment: _source.isNumericColumn(colIndex)
+                ? Alignment.centerRight : Alignment.centerLeft,
+            child: Text(
+              cellText,
+              style: TextStyle(
+                color: textColor == Colors.transparent ? null : textColor,
+                fontSize: _source.cellFontSize,
+                fontFamily: _source.fontFamily,
+              ),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ),
       ),
     );
   }
@@ -1731,9 +2050,8 @@ class _EpyxGridState extends State<EpyxGrid> {
       cumX += w;
     }
 
-    // Hit test: find row (buffer-relative), convert to absolute
-    final bufRow = _hitTestRow(absY);
-    final absRow = _source.toAbsoluteRow(bufRow);
+    // Hit test: find row (now returns absolute index directly)
+    final absRow = _hitTestRow(absY);
 
     // Shift+click extends selection, plain click moves anchor.
     // scroll: false — user tapped a visible cell, don't scroll.
@@ -1782,9 +2100,8 @@ class _EpyxGridState extends State<EpyxGrid> {
       }
       cumX += w;
     }
-    // Hit test: buffer-relative → absolute
-    final bufRow = _hitTestRow(absY);
-    final absRow = _source.toAbsoluteRow(bufRow);
+    // Hit test: returns absolute row index directly
+    final absRow = _hitTestRow(absY);
 
     if (!_isInSelection(absRow, col)) {
       _moveTo(absRow, col, scroll: false);
@@ -2021,6 +2338,7 @@ class _EpyxGridState extends State<EpyxGrid> {
 
     // -- Arrow keys (with Ctrl+Shift, Ctrl, Shift, plain) --
     // All selection state uses ABSOLUTE row indices.
+    // Navigation uses the event queue to defer scroll until data arrives.
     } else if (key == LogicalKeyboardKey.arrowDown) {
       final totalRows = widget.control.getInt("total_rows", 0) ?? 0;
       final maxAbsRow = (totalRows > 0 ? totalRows : _source.rowCount) - 1;
@@ -2030,27 +2348,25 @@ class _EpyxGridState extends State<EpyxGrid> {
       if (isShift) {
         setState(() => _selEndRow = row);
       } else if (isCtrl) {
-        // Ctrl+Down: jump to last row — request page if needed
+        // Cmd+Down: jump to last row — enqueue display event
         _moveTo(row, _selectedCol, scroll: false);
-        if (!_source.isInBuffer(row)) {
-          _requestPage(math.max(0, row - 150), 300);
-          // Don't scroll now — page hasn't arrived.
-          // Post-frame callback after rebuild will scroll to selection.
-        } else {
-          _scrollToEdge(bottom: true);
-        }
+        _enqueueDisplay(_DisplayEvent(
+          type: _DisplayEventType.cmdDown,
+          targetRow: row,
+          position: _DisplayPosition.bottom,
+        ));
       } else {
-        // Single step: request page if target not in buffer
-        if (!_source.isInBuffer(row)) {
-          _requestPage(math.max(0, row - 150), 300);
-        }
-        final bufRow = _source.toBufferIndex(_selectedRow);
-        if (bufRow >= 0 && !_isRowVisible(row) && _yController.hasClients) {
-          _yController.jumpTo(
-              (_yController.offset + _source.getRowHeight(bufRow))
-                  .clamp(0.0, _yController.position.maxScrollExtent));
-        }
+        // Single step down
         _moveTo(row, _selectedCol, scroll: false);
+        if (_isRowInBuffer(row)) {
+          _ensureRowVisible(row);
+        } else {
+          _enqueueDisplay(_DisplayEvent(
+            type: _DisplayEventType.arrowStep,
+            targetRow: row,
+            position: _DisplayPosition.bottom,
+          ));
+        }
       }
       handled = true;
     } else if (key == LogicalKeyboardKey.arrowUp) {
@@ -2062,25 +2378,25 @@ class _EpyxGridState extends State<EpyxGrid> {
       if (isShift) {
         setState(() => _selEndRow = row);
       } else if (isCtrl) {
-        // Ctrl+Up: jump to first row — request page if needed
+        // Cmd+Up: jump to first row — enqueue display event
         _moveTo(row, _selectedCol, scroll: false);
-        if (!_source.isInBuffer(row)) {
-          _requestPage(0, 300);
-        } else {
-          _scrollToEdge(bottom: false);
-        }
+        _enqueueDisplay(_DisplayEvent(
+          type: _DisplayEventType.cmdUp,
+          targetRow: row,
+          position: _DisplayPosition.top,
+        ));
       } else {
-        // Single step: request page if target not in buffer
-        if (!_source.isInBuffer(row)) {
-          _requestPage(math.max(0, row - 150), 300);
-        }
-        final bufRow = _source.toBufferIndex(row);
-        if (bufRow >= 0 && !_isRowVisible(row) && _yController.hasClients) {
-          _yController.jumpTo(
-              (_yController.offset - _source.getRowHeight(bufRow))
-                  .clamp(0.0, _yController.position.maxScrollExtent));
-        }
+        // Single step up
         _moveTo(row, _selectedCol, scroll: false);
+        if (_isRowInBuffer(row)) {
+          _ensureRowVisible(row);
+        } else {
+          _enqueueDisplay(_DisplayEvent(
+            type: _DisplayEventType.arrowStep,
+            targetRow: row,
+            position: _DisplayPosition.top,
+          ));
+        }
       }
       handled = true;
     } else if (key == LogicalKeyboardKey.arrowRight) {
@@ -2131,16 +2447,22 @@ class _EpyxGridState extends State<EpyxGrid> {
     // -- Home/End --
     } else if (key == LogicalKeyboardKey.home && isCtrl) {
       _moveTo(0, 0, extend: isShift);
-      if (!_source.isInBuffer(0)) _requestPage(0, 300);
+      _enqueueDisplay(_DisplayEvent(
+        type: _DisplayEventType.goToRow,
+        targetRow: 0,
+        position: _DisplayPosition.top,
+      ));
       handled = true;
     } else if (key == LogicalKeyboardKey.end && isCtrl) {
       final totalRows = widget.control.getInt("total_rows", 0) ?? 0;
       final lastRow = (totalRows > 0 ? totalRows : _source.rowCount) - 1;
       final lastCol = _source.columnCount - 1;
       _moveTo(lastRow, lastCol, extend: isShift);
-      if (!_source.isInBuffer(lastRow)) {
-        _requestPage(math.max(0, lastRow - 150), 300);
-      }
+      _enqueueDisplay(_DisplayEvent(
+        type: _DisplayEventType.goToRow,
+        targetRow: lastRow,
+        position: _DisplayPosition.bottom,
+      ));
       handled = true;
     } else if (key == LogicalKeyboardKey.home) {
       if (isShift) {
@@ -2166,10 +2488,12 @@ class _EpyxGridState extends State<EpyxGrid> {
           ? (_yController.position.viewportDimension / _source.rowHeight).floor()
           : 10;
       final row = (_selectedRow + visibleRows).clamp(0, maxAbsRow);
-      if (!_source.isInBuffer(row)) {
-        _requestPage(math.max(0, row - 150), 300);
-      }
-      _moveTo(row, _selectedCol);
+      _moveTo(row, _selectedCol, scroll: false);
+      _enqueueDisplay(_DisplayEvent(
+        type: _DisplayEventType.pageDown,
+        targetRow: row,
+        position: _DisplayPosition.top,
+      ));
       handled = true;
     } else if (key == LogicalKeyboardKey.pageUp) {
       final totalRows = widget.control.getInt("total_rows", 0) ?? 0;
@@ -2178,10 +2502,12 @@ class _EpyxGridState extends State<EpyxGrid> {
           ? (_yController.position.viewportDimension / _source.rowHeight).floor()
           : 10;
       final row = (_selectedRow - visibleRows).clamp(0, maxAbsRow);
-      if (!_source.isInBuffer(row)) {
-        _requestPage(math.max(0, row - 150), 300);
-      }
-      _moveTo(row, _selectedCol);
+      _moveTo(row, _selectedCol, scroll: false);
+      _enqueueDisplay(_DisplayEvent(
+        type: _DisplayEventType.pageUp,
+        targetRow: row,
+        position: _DisplayPosition.top,
+      ));
       handled = true;
     } else if (key == LogicalKeyboardKey.delete || key == LogicalKeyboardKey.backspace) {
       // Delete/Backspace: clear selection
@@ -2263,24 +2589,36 @@ class _EpyxGridState extends State<EpyxGrid> {
   /// Is row `absRow` (absolute) fully visible in the vertical viewport?
   bool _isRowVisible(int absRow) {
     if (!_yController.hasClients) return true;
-    final bufRow = _source.toBufferIndex(absRow);
-    if (bufRow < 0) return false; // not in buffer
-    final rowTop = _bufRowTopOffset(bufRow);
-    final rowBottom = rowTop + _source.getRowHeight(bufRow);
+    // With full-extent ListView (itemCount = totalRows), absolute row index
+    // maps directly to scroll offset.
+    final rowTop = _absRowTopOffset(absRow);
+    final rowH = _bufferedRowHeight(absRow);
     final offset = _yController.offset;
     final vh = _yController.position.viewportDimension;
-    return rowTop >= offset && rowBottom <= offset + vh;
+    return rowTop >= offset && rowTop + rowH <= offset + vh;
   }
 
-  /// Y offset of the top of a BUFFER-RELATIVE row, computed relative to
-  /// the visible region to avoid O(n) scans and LOD issues.
-  ///
-  /// For uniform heights: bufRow * rowHeight (O(1)).
-  /// For variable heights: walks from the first visible buffer row
-  /// (whose offset is the scroll position) to the target — O(visible_rows).
+  /// Y offset of the top of an ABSOLUTE row.
+  /// For uniform heights: absRow * rowHeight (O(1)).
+  /// For variable heights: walks from the current scroll anchor.
+  double _absRowTopOffset(int absRow) {
+    if (!_source.hasVariableRowHeights) return absRow * _source.rowHeight;
+    // Walk from the current anchor (first visible row) which we know the offset of
+    final anchor = _firstVisibleRow;
+    final anchorY = _yController.hasClients ? _yController.offset : 0.0;
+    double y = anchorY;
+    if (absRow >= anchor) {
+      for (int i = anchor; i < absRow; i++) y += _bufferedRowHeight(i);
+    } else {
+      for (int i = anchor - 1; i >= absRow; i--) y -= _bufferedRowHeight(i);
+    }
+    return y;
+  }
+
+  /// Legacy compatibility: buffer-relative row top offset.
+  /// Still used by _hitTestRow.
   double _bufRowTopOffset(int bufRow) {
     if (!_source.hasVariableRowHeights) return bufRow * _source.rowHeight;
-    // _firstVisibleRow is ABSOLUTE; convert to buffer-relative anchor
     final bufAnchor = _source.toBufferIndex(_firstVisibleRow);
     final anchor = bufAnchor >= 0 ? bufAnchor : 0;
     final anchorY = _yController.hasClients ? _yController.offset : 0.0;
@@ -2293,30 +2631,31 @@ class _EpyxGridState extends State<EpyxGrid> {
     return y;
   }
 
-  /// Hit-test: convert a Y pixel offset (within the buffer's scroll area)
-  /// to a BUFFER-RELATIVE row index.
+  /// Hit-test: convert a Y pixel offset to an ABSOLUTE row index.
+  /// With full-extent ListView (itemCount = totalRows), Y offset maps
+  /// directly to absolute row indices.
   int _hitTestRow(double absY) {
+    final totalRows = widget.control.getInt("total_rows", 0) ?? 0;
+    final effectiveTotal = totalRows > 0 ? totalRows : _source.rowCount;
+    final maxRow = effectiveTotal > 0 ? effectiveTotal - 1 : 0;
     if (!_source.hasVariableRowHeights) {
-      return (absY / _source.rowHeight).floor().clamp(0, _source.rowCount - 1);
+      return (absY / _source.rowHeight).floor().clamp(0, maxRow);
     }
-    // _firstVisibleRow is ABSOLUTE; convert to buffer-relative
-    final bufAnchor = _source.toBufferIndex(_firstVisibleRow);
-    final anchor = bufAnchor >= 0 ? bufAnchor : 0;
+    // Variable heights: walk from the visible anchor
+    final anchor = _firstVisibleRow;
     final anchorY = _yController.hasClients ? _yController.offset : 0.0;
     if (absY >= anchorY) {
-      // Scan forward from anchor
       double cumY = anchorY;
-      for (int i = anchor; i < _source.rowCount; i++) {
-        final rh = _source.getRowHeight(i);
+      for (int i = anchor; i <= maxRow; i++) {
+        final rh = _bufferedRowHeight(i);
         if (absY < cumY + rh) return i;
         cumY += rh;
       }
-      return _source.rowCount - 1;
+      return maxRow;
     } else {
-      // Scan backward from anchor
       double cumY = anchorY;
       for (int i = anchor - 1; i >= 0; i--) {
-        cumY -= _source.getRowHeight(i);
+        cumY -= _bufferedRowHeight(i);
         if (absY >= cumY) return i;
       }
       return 0;
@@ -2364,15 +2703,15 @@ class _EpyxGridState extends State<EpyxGrid> {
   void _ensureRowVisible(int absRow) {
     // In Natural mode, _yController has no clients (shrinkWrap ListView)
     if (!_yController.hasClients) return;
-    final bufRow = _source.toBufferIndex(absRow);
-    if (bufRow < 0) return; // not in buffer — will arrive via page request
-    final rowTop = _bufRowTopOffset(bufRow);
-    final rowH = _source.getRowHeight(bufRow);
+    // With full-extent ListView, use absolute row offset directly
+    final rowTop = _absRowTopOffset(absRow);
+    final rowH = _bufferedRowHeight(absRow);
     final viewportHeight = _yController.position.viewportDimension;
     if (rowTop < _yController.offset) {
-      _yController.jumpTo(rowTop);
+      _yController.jumpTo(rowTop.clamp(0.0, _yController.position.maxScrollExtent));
     } else if (rowTop + rowH > _yController.offset + viewportHeight) {
-      _yController.jumpTo(rowTop + rowH - viewportHeight);
+      _yController.jumpTo(
+          (rowTop + rowH - viewportHeight).clamp(0.0, _yController.position.maxScrollExtent));
     }
   }
 
@@ -2417,8 +2756,7 @@ class _EpyxGridState extends State<EpyxGrid> {
     }
     final yOffset = _yController.hasClients ? _yController.offset : 0.0;
     final xOffset = _xController.hasClients ? _xController.offset : 0.0;
-    final bufRow = _hitTestRow(yOffset + dataY);
-    final row = _source.toAbsoluteRow(bufRow);
+    final row = _hitTestRow(yOffset + dataY);
 
     // Hit-test column (-1 if past last column)
     final absX = xOffset + localPosition.dx;
@@ -2767,3 +3105,37 @@ class _BarBgPainter extends CustomPainter {
       rightText != old.rightText;
 }
 
+// ────────────────────────────────────────────────────────────────
+// LOD display event types
+// ────────────────────────────────────────────────────────────────
+
+enum _DisplayEventType {
+  initialDisplay,
+  cmdDown,
+  cmdUp,
+  pageDown,
+  pageUp,
+  goToRow,
+  arrowStep,
+}
+
+enum _DisplayPosition {
+  top,
+  bottom,
+  center,
+}
+
+class _DisplayEvent {
+  final _DisplayEventType type;
+  final int targetRow;
+  final _DisplayPosition position;
+
+  const _DisplayEvent({
+    required this.type,
+    required this.targetRow,
+    required this.position,
+  });
+
+  @override
+  String toString() => '_DisplayEvent($type, row=$targetRow, pos=$position)';
+}
