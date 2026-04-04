@@ -211,11 +211,14 @@ class _EpyxGridState extends State<EpyxGrid> {
         _pendingEdits.clear();
         _invalidateRenderCaches();
       });
-      // Re-request the page we're currently viewing
+      // Re-request the page we're currently viewing.
+      // Estimate current row from scroll offset and default height.
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) {
-          final firstRow = _firstVisibleRow;
-          _requestPage(math.max(0, firstRow - 150), 300);
+          final currentRow = _yController.hasClients
+              ? (_yController.offset / _source.rowHeight).floor()
+              : 0;
+          _requestPage(math.max(0, currentRow - 150), 300);
         }
       });
       return;
@@ -504,18 +507,15 @@ class _EpyxGridState extends State<EpyxGrid> {
     final totalRows = widget.control.getInt("total_rows", 0) ?? 0;
     final effectiveTotal = totalRows > 0 ? totalRows : _source.rowCount;
 
-    // Compute first visible row as absolute index
-    int absFirst;
-    if (_yController.hasClients && _source.rowCount > 0) {
-      final scrollOffset = _yController.offset;
-      absFirst = _hitTestRow(scrollOffset);
-    } else {
-      absFirst = _firstVisibleRow;
-    }
-    if (absFirst != _firstVisibleRow) {
-      setState(() {
-        _firstVisibleRow = absFirst;
-      });
+    // Compute first visible row from scroll offset
+    if (_yController.hasClients) {
+      final absFirst = (_yController.offset / _source.rowHeight).floor()
+          .clamp(0, math.max(0, effectiveTotal - 1)) as int;
+      if (absFirst != _firstVisibleRow) {
+        setState(() {
+          _firstVisibleRow = absFirst;
+        });
+      }
     }
 
     // No LOD needed if all rows fit in one page
@@ -524,7 +524,7 @@ class _EpyxGridState extends State<EpyxGrid> {
 
     const prefetchThreshold = 50; // rows from buffer edge to trigger fetch
     final viewportRows = (_yController.position.viewportDimension / _source.rowHeight).ceil();
-    final absLastVisible = absFirst + viewportRows;
+    final absLastVisible = _firstVisibleRow + viewportRows;
 
     // Prefetch forward: approaching bottom of buffered data
     if (absLastVisible + prefetchThreshold > _bufferMaxRow &&
@@ -533,7 +533,7 @@ class _EpyxGridState extends State<EpyxGrid> {
       _requestPage(fetchStart, 300);
     }
     // Prefetch backward: approaching top of buffered data
-    if (absFirst - prefetchThreshold < _bufferMinRow &&
+    if (_firstVisibleRow - prefetchThreshold < _bufferMinRow &&
         _bufferMinRow > 0) {
       final fetchStart = math.max(0, _bufferMinRow - 300);
       _requestPage(fetchStart, 300);
@@ -683,20 +683,18 @@ class _EpyxGridState extends State<EpyxGrid> {
   /// Scroll so that the given absolute row is at the top of the viewport.
   /// Computes pixel offset by summing heights of all rows before it.
   /// With itemExtentBuilder, Flutter's layout matches this calculation.
+  /// Scroll so absRow is at the top of the viewport.
+  /// Walks forward from 0, accumulating row heights — same pattern
+  /// as _walkEvent walks backward.
   void _scrollToItemTop(int absRow) {
     if (!_yController.hasClients) return;
     if (absRow <= 0) {
       _yController.jumpTo(0);
       return;
     }
-    // Compute pixel offset: defaultHeight * row + sum of override deltas.
-    // O(overrides), not O(rows).
-    final defaultH = _source.rowHeight;
-    double offset = absRow * defaultH;
-    for (final entry in _rowHeightBuffer.entries) {
-      if (entry.key < absRow) {
-        offset += entry.value - defaultH;
-      }
+    double offset = 0;
+    for (int r = 0; r < absRow; r++) {
+      offset += _bufferedRowHeight(r);
     }
     _yController.jumpTo(
         offset.clamp(0.0, _yController.position.maxScrollExtent));
@@ -2697,34 +2695,19 @@ class _EpyxGridState extends State<EpyxGrid> {
   }
 
   /// Hit-test: convert a Y pixel offset to an ABSOLUTE row index.
-  /// With full-extent ListView (itemCount = totalRows), Y offset maps
-  /// directly to absolute row indices.
+  /// Walks forward accumulating heights — same pattern as _walkEvent
+  /// and _scrollToItemTop.
   int _hitTestRow(double absY) {
     final totalRows = widget.control.getInt("total_rows", 0) ?? 0;
     final effectiveTotal = totalRows > 0 ? totalRows : _source.rowCount;
     final maxRow = effectiveTotal > 0 ? effectiveTotal - 1 : 0;
-    if (!_source.hasVariableRowHeights) {
-      return (absY / _source.rowHeight).floor().clamp(0, maxRow);
+    double cumY = 0;
+    for (int r = 0; r <= maxRow; r++) {
+      final rh = _bufferedRowHeight(r);
+      if (absY < cumY + rh) return r;
+      cumY += rh;
     }
-    // Variable heights: walk from the visible anchor
-    final anchor = _firstVisibleRow;
-    final anchorY = _yController.hasClients ? _yController.offset : 0.0;
-    if (absY >= anchorY) {
-      double cumY = anchorY;
-      for (int i = anchor; i <= maxRow; i++) {
-        final rh = _bufferedRowHeight(i);
-        if (absY < cumY + rh) return i;
-        cumY += rh;
-      }
-      return maxRow;
-    } else {
-      double cumY = anchorY;
-      for (int i = anchor - 1; i >= 0; i--) {
-        cumY -= _bufferedRowHeight(i);
-        if (absY >= cumY) return i;
-      }
-      return 0;
-    }
+    return maxRow;
   }
 
   /// Column width: use drag override if set, else source default.
