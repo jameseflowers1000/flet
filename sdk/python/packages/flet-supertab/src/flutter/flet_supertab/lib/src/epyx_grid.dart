@@ -143,8 +143,8 @@ class _EpyxGridState extends State<EpyxGrid> {
         final errors = jsonDecode(valErrors) as List;
         final keys = errors.map<String>((e) => '${e["row"]}:${e["col"]}').toSet();
         setState(() => _validationErrorCells = keys);
-        // Auto-clear after 3 seconds
-        Future.delayed(const Duration(seconds: 3), () {
+        // Auto-clear after 10 seconds
+        Future.delayed(const Duration(seconds: 10), () {
           if (mounted) {
             setState(() => _validationErrorCells.clear());
           }
@@ -363,8 +363,7 @@ class _EpyxGridState extends State<EpyxGrid> {
   /// Track first visible row for header display + LOD page requests.
   void _onVerticalScroll() {
     if (!_sourceInitialized) return;
-    final rh = _source.rowHeight;
-    final newFirst = (_yController.offset / rh).floor();
+    final newFirst = _hitTestRow(_yController.offset);
     if (newFirst != _firstVisibleRow) {
       setState(() {
         _firstVisibleRow = newFirst;
@@ -1654,8 +1653,7 @@ class _EpyxGridState extends State<EpyxGrid> {
     }
 
     // Hit test: find row
-    int row = (absY / _source.rowHeight).floor();
-    row = row.clamp(0, _source.rowCount - 1);
+    int row = _hitTestRow(absY);
 
     // Shift+click extends selection, plain click moves anchor.
     // scroll: false — user tapped a visible cell, don't scroll.
@@ -1704,8 +1702,7 @@ class _EpyxGridState extends State<EpyxGrid> {
       }
       cumX += w;
     }
-    int row = (absY / _source.rowHeight).floor();
-    row = row.clamp(0, _source.rowCount - 1);
+    int row = _hitTestRow(absY);
 
     if (!_isInSelection(row, col)) {
       _moveTo(row, col, scroll: false);
@@ -1955,7 +1952,7 @@ class _EpyxGridState extends State<EpyxGrid> {
         // Single step: delta scroll only if target not visible
         if (!_isRowVisible(row) && _yController.hasClients) {
           _yController.jumpTo(
-              (_yController.offset + _source.rowHeight)
+              (_yController.offset + _source.getRowHeight(_selectedRow))
                   .clamp(0.0, _yController.position.maxScrollExtent));
         }
         _moveTo(row, _selectedCol, scroll: false);
@@ -1975,7 +1972,7 @@ class _EpyxGridState extends State<EpyxGrid> {
         // Single step: delta scroll only if target not visible
         if (!_isRowVisible(row) && _yController.hasClients) {
           _yController.jumpTo(
-              (_yController.offset - _source.rowHeight)
+              (_yController.offset - _source.getRowHeight(row))
                   .clamp(0.0, _yController.position.maxScrollExtent));
         }
         _moveTo(row, _selectedCol, scroll: false);
@@ -2146,11 +2143,36 @@ class _EpyxGridState extends State<EpyxGrid> {
   /// Is row `row` fully visible in the vertical viewport?
   bool _isRowVisible(int row) {
     if (!_yController.hasClients) return true;
-    final rowTop = row * _source.rowHeight;
-    final rowBottom = rowTop + _source.rowHeight;
+    final rowTop = _rowTopOffset(row);
+    final rowBottom = rowTop + _source.getRowHeight(row);
     final offset = _yController.offset;
     final vh = _yController.position.viewportDimension;
     return rowTop >= offset && rowBottom <= offset + vh;
+  }
+
+  /// Y offset of the top of a row (cumulative with variable heights).
+  double _rowTopOffset(int row) {
+    if (!_source.hasVariableRowHeights) return row * _source.rowHeight;
+    double y = 0;
+    for (int i = 0; i < row && i < _source.rowCount; i++) {
+      y += _source.getRowHeight(i);
+    }
+    return y;
+  }
+
+  /// Hit-test: convert a Y pixel offset (relative to data area top,
+  /// accounting for scroll) to a row index.
+  int _hitTestRow(double absY) {
+    if (!_source.hasVariableRowHeights) {
+      return (absY / _source.rowHeight).floor().clamp(0, _source.rowCount - 1);
+    }
+    double cumY = 0;
+    for (int i = 0; i < _source.rowCount; i++) {
+      final rh = _source.getRowHeight(i);
+      if (absY < cumY + rh) return i;
+      cumY += rh;
+    }
+    return _source.rowCount - 1;
   }
 
   /// Column width: use drag override if set, else source default.
@@ -2194,13 +2216,13 @@ class _EpyxGridState extends State<EpyxGrid> {
   void _ensureRowVisible(int row) {
     // In Natural mode, _yController has no clients (shrinkWrap ListView)
     if (!_yController.hasClients) return;
-    final offset = row * _source.rowHeight;
+    final rowTop = _rowTopOffset(row);
+    final rowH = _source.getRowHeight(row);
     final viewportHeight = _yController.position.viewportDimension;
-    if (offset < _yController.offset) {
-      _yController.jumpTo(offset);
-    } else if (offset + _source.rowHeight >
-        _yController.offset + viewportHeight) {
-      _yController.jumpTo(offset + _source.rowHeight - viewportHeight);
+    if (rowTop < _yController.offset) {
+      _yController.jumpTo(rowTop);
+    } else if (rowTop + rowH > _yController.offset + viewportHeight) {
+      _yController.jumpTo(rowTop + rowH - viewportHeight);
     }
   }
 
@@ -2245,7 +2267,7 @@ class _EpyxGridState extends State<EpyxGrid> {
     }
     final yOffset = _yController.hasClients ? _yController.offset : 0.0;
     final xOffset = _xController.hasClients ? _xController.offset : 0.0;
-    final row = ((yOffset + dataY) / _source.rowHeight).floor().clamp(0, _source.rowCount - 1);
+    final row = _hitTestRow(yOffset + dataY);
 
     // Hit-test column (-1 if past last column)
     final absX = xOffset + localPosition.dx;
