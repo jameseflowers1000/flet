@@ -657,12 +657,14 @@ class _EpyxGridState extends State<EpyxGrid> {
   /// With itemExtentBuilder, Flutter's layout matches this calculation.
   void _scrollToItemTop(int absRow) {
     if (!_yController.hasClients) return;
-    // Sum heights of rows 0..absRow-1 to get pixel offset.
-    // For mostly-uniform heights with sparse overrides, this is
-    // absRow * defaultHeight + sum(overrides before absRow).
+    if (absRow <= 0) {
+      _yController.jumpTo(0);
+      return;
+    }
+    // Compute pixel offset: defaultHeight * row + sum of override deltas.
+    // O(overrides), not O(rows).
     final defaultH = _source.rowHeight;
     double offset = absRow * defaultH;
-    // Adjust for any overrides before absRow — O(overrides)
     for (final entry in _rowHeightBuffer.entries) {
       if (entry.key < absRow) {
         offset += entry.value - defaultH;
