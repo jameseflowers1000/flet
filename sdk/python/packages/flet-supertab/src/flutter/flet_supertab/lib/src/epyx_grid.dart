@@ -562,91 +562,114 @@ class _EpyxGridState extends State<EpyxGrid> {
   /// Checks that the target row AND enough surrounding rows for a screenful
   /// are in the buffer.
   /// Try to process pending display events.
-  ///
-  /// For each event, walks from the target row collecting rows and heights.
-  /// If a row is missing (PageFault), requests the page and stops — the
-  /// event stays on the queue and is retried when the page arrives.
   void _tryProcessQueue() {
     while (_displayQueue.isNotEmpty) {
       final event = _displayQueue.first;
-      final faultRow = _walkForEvent(event);
-      if (faultRow == null) {
-        // All needed rows are in buffer — execute and remove
-        _displayQueue.removeAt(0);
-        _executeEvent(event);
-      } else {
-        // PageFault: request the page containing the missing row
-        _requestPage(math.max(0, faultRow - 150), 300);
-        break; // wait for data arrival
+      final firstRow = _walkEvent(event);
+      if (firstRow == null) {
+        break; // PageFault — waiting for data
       }
+      _displayQueue.removeAt(0);
+      // Scroll so firstRow is at the top of the viewport
+      _scrollToItemTop(firstRow);
     }
   }
 
-  /// Walk rows for a display event.  Returns null if all rows needed
-  /// are in the buffer.  Returns the first missing row index (PageFault)
-  /// if any are missing.
-  int? _walkForEvent(_DisplayEvent event) {
+  /// Walk from the target row to find which row should be at the top
+  /// of the viewport.  Returns null on PageFault (data requested).
+  ///
+  /// For bottom: walk backward from targetRow, accumulating heights
+  /// until the viewport is filled.  The row where we stop = first visible.
+  /// For top: targetRow IS the first visible.
+  /// If any row is not in cache → PageFault.
+  int? _walkEvent(_DisplayEvent event) {
+    final viewportH = _yController.hasClients
+        ? _yController.position.viewportDimension
+        : _source.rowHeight * _source.visibleRowEstimate;
     final totalRows = widget.control.getInt("total_rows", 0) ?? 0;
     final effectiveTotal = totalRows > 0 ? totalRows : _source.rowCount;
-    if (effectiveTotal == 0) return null;
 
-    final viewportRows = _yController.hasClients
-        ? (_yController.position.viewportDimension / _source.rowHeight).ceil()
-        : _source.visibleRowEstimate;
-
-    // Check the target row first
-    if (!_isRowInBuffer(event.targetRow)) return event.targetRow;
-
-    // Walk in the direction needed to fill a screenful
     switch (event.position) {
-      case _DisplayPosition.bottom:
-        // Walk backward from targetRow to fill viewport
-        for (int r = event.targetRow; r >= math.max(0, event.targetRow - viewportRows + 1); r--) {
-          if (!_isRowInBuffer(r)) return r;
-        }
-        break;
       case _DisplayPosition.top:
-        // Walk forward from targetRow to fill viewport
-        for (int r = event.targetRow; r < math.min(effectiveTotal, event.targetRow + viewportRows); r++) {
-          if (!_isRowInBuffer(r)) return r;
+        // Target row at top — just check it's in cache
+        if (!_isRowInBuffer(event.targetRow)) {
+          _requestPage(math.max(0, event.targetRow - 150), 300);
+          return null;
         }
-        break;
+        // Walk forward to verify a screenful is cached
+        double acc = 0;
+        for (int r = event.targetRow; r < effectiveTotal; r++) {
+          if (!_isRowInBuffer(r)) {
+            _requestPage(math.max(0, r - 150), 300);
+            return null;
+          }
+          acc += _bufferedRowHeight(r);
+          if (acc >= viewportH) break;
+        }
+        return event.targetRow;
+
+      case _DisplayPosition.bottom:
+        // Walk backward from target, accumulating heights
+        double acc = 0;
+        for (int r = event.targetRow; r >= 0; r--) {
+          if (!_isRowInBuffer(r)) {
+            _requestPage(math.max(0, r - 150), 300);
+            return null; // PageFault
+          }
+          acc += _bufferedRowHeight(r);
+          if (acc >= viewportH) return r;
+        }
+        return 0; // not enough rows to fill viewport — start at top
+
       case _DisplayPosition.center:
-        final half = viewportRows ~/ 2;
-        for (int r = event.targetRow; r >= math.max(0, event.targetRow - half); r--) {
-          if (!_isRowInBuffer(r)) return r;
+        // Walk both directions from target
+        if (!_isRowInBuffer(event.targetRow)) {
+          _requestPage(math.max(0, event.targetRow - 150), 300);
+          return null;
         }
-        for (int r = event.targetRow; r < math.min(effectiveTotal, event.targetRow + half + 1); r++) {
-          if (!_isRowInBuffer(r)) return r;
+        double halfH = viewportH / 2;
+        int firstRow = event.targetRow;
+        double acc = _bufferedRowHeight(event.targetRow) / 2;
+        // Walk backward for top half
+        for (int r = event.targetRow - 1; r >= 0 && acc < halfH; r--) {
+          if (!_isRowInBuffer(r)) {
+            _requestPage(math.max(0, r - 150), 300);
+            return null;
+          }
+          acc += _bufferedRowHeight(r);
+          firstRow = r;
         }
-        break;
+        // Walk forward to verify bottom half is cached
+        acc = _bufferedRowHeight(event.targetRow) / 2;
+        for (int r = event.targetRow + 1; r < effectiveTotal && acc < halfH; r++) {
+          if (!_isRowInBuffer(r)) {
+            _requestPage(math.max(0, r - 150), 300);
+            return null;
+          }
+          acc += _bufferedRowHeight(r);
+        }
+        return firstRow;
     }
-    return null; // all rows present
   }
 
-  /// Execute a display event: scroll to show the target row.
-  void _executeEvent(_DisplayEvent event) {
+  /// Scroll so that the given absolute row is at the top of the viewport.
+  /// Computes pixel offset by summing heights of all rows before it.
+  /// With itemExtentBuilder, Flutter's layout matches this calculation.
+  void _scrollToItemTop(int absRow) {
     if (!_yController.hasClients) return;
-
-    final offset = event.targetRow * _source.rowHeight;
-    switch (event.position) {
-      case _DisplayPosition.top:
-        _yController.jumpTo(offset.clamp(
-            0.0, _yController.position.maxScrollExtent));
-        break;
-      case _DisplayPosition.bottom:
-        final viewportH = _yController.position.viewportDimension;
-        _yController.jumpTo(
-            ((event.targetRow + 1) * _source.rowHeight - viewportH).clamp(
-                0.0, _yController.position.maxScrollExtent));
-        break;
-      case _DisplayPosition.center:
-        final viewportH = _yController.position.viewportDimension;
-        _yController.jumpTo(
-            (offset - viewportH / 2).clamp(
-                0.0, _yController.position.maxScrollExtent));
-        break;
+    // Sum heights of rows 0..absRow-1 to get pixel offset.
+    // For mostly-uniform heights with sparse overrides, this is
+    // absRow * defaultHeight + sum(overrides before absRow).
+    final defaultH = _source.rowHeight;
+    double offset = absRow * defaultH;
+    // Adjust for any overrides before absRow — O(overrides)
+    for (final entry in _rowHeightBuffer.entries) {
+      if (entry.key < absRow) {
+        offset += entry.value - defaultH;
+      }
     }
+    _yController.jumpTo(
+        offset.clamp(0.0, _yController.position.maxScrollExtent));
   }
 
   /// Clear the buffer (e.g., on full data reload from Python).
