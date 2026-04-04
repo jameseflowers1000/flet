@@ -561,83 +561,91 @@ class _EpyxGridState extends State<EpyxGrid> {
   /// Can we satisfy this display event with data currently in the buffer?
   /// Checks that the target row AND enough surrounding rows for a screenful
   /// are in the buffer.
-  bool _canSatisfy(_DisplayEvent event) {
+  /// Try to process pending display events.
+  ///
+  /// For each event, walks from the target row collecting rows and heights.
+  /// If a row is missing (PageFault), requests the page and stops — the
+  /// event stays on the queue and is retried when the page arrives.
+  void _tryProcessQueue() {
+    while (_displayQueue.isNotEmpty) {
+      final event = _displayQueue.first;
+      final faultRow = _walkForEvent(event);
+      if (faultRow == null) {
+        // All needed rows are in buffer — execute and remove
+        _displayQueue.removeAt(0);
+        _executeEvent(event);
+      } else {
+        // PageFault: request the page containing the missing row
+        _requestPage(math.max(0, faultRow - 150), 300);
+        break; // wait for data arrival
+      }
+    }
+  }
+
+  /// Walk rows for a display event.  Returns null if all rows needed
+  /// are in the buffer.  Returns the first missing row index (PageFault)
+  /// if any are missing.
+  int? _walkForEvent(_DisplayEvent event) {
     final totalRows = widget.control.getInt("total_rows", 0) ?? 0;
     final effectiveTotal = totalRows > 0 ? totalRows : _source.rowCount;
-    if (effectiveTotal == 0) return true; // no data to display
+    if (effectiveTotal == 0) return null;
 
     final viewportRows = _yController.hasClients
         ? (_yController.position.viewportDimension / _source.rowHeight).ceil()
         : _source.visibleRowEstimate;
 
-    int rangeStart, rangeEnd;
+    // Check the target row first
+    if (!_isRowInBuffer(event.targetRow)) return event.targetRow;
+
+    // Walk in the direction needed to fill a screenful
     switch (event.position) {
-      case _DisplayPosition.top:
-        rangeStart = event.targetRow;
-        rangeEnd = math.min(event.targetRow + viewportRows, effectiveTotal);
-        break;
       case _DisplayPosition.bottom:
-        rangeStart = math.max(0, event.targetRow - viewportRows + 1);
-        rangeEnd = math.min(event.targetRow + 1, effectiveTotal);
+        // Walk backward from targetRow to fill viewport
+        for (int r = event.targetRow; r >= math.max(0, event.targetRow - viewportRows + 1); r--) {
+          if (!_isRowInBuffer(r)) return r;
+        }
+        break;
+      case _DisplayPosition.top:
+        // Walk forward from targetRow to fill viewport
+        for (int r = event.targetRow; r < math.min(effectiveTotal, event.targetRow + viewportRows); r++) {
+          if (!_isRowInBuffer(r)) return r;
+        }
         break;
       case _DisplayPosition.center:
         final half = viewportRows ~/ 2;
-        rangeStart = math.max(0, event.targetRow - half);
-        rangeEnd = math.min(event.targetRow + half + 1, effectiveTotal);
+        for (int r = event.targetRow; r >= math.max(0, event.targetRow - half); r--) {
+          if (!_isRowInBuffer(r)) return r;
+        }
+        for (int r = event.targetRow; r < math.min(effectiveTotal, event.targetRow + half + 1); r++) {
+          if (!_isRowInBuffer(r)) return r;
+        }
         break;
     }
-
-    for (int r = rangeStart; r < rangeEnd; r++) {
-      if (!_isRowInBuffer(r)) return false;
-    }
-    return true;
+    return null; // all rows present
   }
 
-  /// Execute a display event: scroll to the target row and trigger rebuild.
+  /// Execute a display event: scroll to show the target row.
   void _executeEvent(_DisplayEvent event) {
     if (!_yController.hasClients) return;
-    final totalRows = widget.control.getInt("total_rows", 0) ?? 0;
-    final effectiveTotal = totalRows > 0 ? totalRows : _source.rowCount;
-    if (effectiveTotal == 0) return;
 
+    final offset = event.targetRow * _source.rowHeight;
     switch (event.position) {
       case _DisplayPosition.top:
-        // Scroll so targetRow is at the top of the viewport
-        final offset = event.targetRow * _source.rowHeight;
         _yController.jumpTo(offset.clamp(
             0.0, _yController.position.maxScrollExtent));
         break;
       case _DisplayPosition.bottom:
-        // Scroll so targetRow is at the bottom of the viewport
         final viewportH = _yController.position.viewportDimension;
-        final offset = (event.targetRow + 1) * _source.rowHeight - viewportH;
-        _yController.jumpTo(offset.clamp(
-            0.0, _yController.position.maxScrollExtent));
+        _yController.jumpTo(
+            ((event.targetRow + 1) * _source.rowHeight - viewportH).clamp(
+                0.0, _yController.position.maxScrollExtent));
         break;
       case _DisplayPosition.center:
         final viewportH = _yController.position.viewportDimension;
-        final offset = event.targetRow * _source.rowHeight - viewportH / 2;
-        _yController.jumpTo(offset.clamp(
-            0.0, _yController.position.maxScrollExtent));
+        _yController.jumpTo(
+            (offset - viewportH / 2).clamp(
+                0.0, _yController.position.maxScrollExtent));
         break;
-    }
-  }
-
-  /// Try to process pending display events.
-  /// Processes events in order; stops at the first event that can't be
-  /// satisfied and requests the needed data.
-  void _tryProcessQueue() {
-    while (_displayQueue.isNotEmpty) {
-      final event = _displayQueue.first;
-      if (_canSatisfy(event)) {
-        _displayQueue.removeAt(0);
-        _executeEvent(event);
-      } else {
-        // Request the page centered on the target row
-        final pageStart = math.max(0, event.targetRow - 150);
-        _requestPage(pageStart, 300);
-        break; // wait for data arrival
-      }
     }
   }
 
