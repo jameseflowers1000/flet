@@ -950,6 +950,7 @@ class _EpyxGridState extends State<EpyxGrid> {
                   width: _getColumnWidth(i),
                   height: headerRowHeight,
                   child: Stack(
+                    clipBehavior: Clip.none,
                     children: [
                       Container(
                         padding: EdgeInsets.symmetric(horizontal: headerPadH),
@@ -976,9 +977,10 @@ class _EpyxGridState extends State<EpyxGrid> {
                         overflow: TextOverflow.ellipsis,
                       ),
                     ),
-                    // Resize handle
+                    // Resize handle — centered on the divider line so
+                    // it's grabbable from both sides (6px left + 6px right)
                     Positioned(
-                      right: 0, top: 0, bottom: 0,
+                      right: -6, top: 0, bottom: 0,
                       child: MouseRegion(
                         cursor: SystemMouseCursors.resizeColumn,
                         child: GestureDetector(
