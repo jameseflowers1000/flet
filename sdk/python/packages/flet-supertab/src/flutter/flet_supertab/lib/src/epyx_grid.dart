@@ -2150,29 +2150,53 @@ class _EpyxGridState extends State<EpyxGrid> {
     return rowTop >= offset && rowBottom <= offset + vh;
   }
 
-  /// Y offset of the top of a row (cumulative with variable heights).
+  /// Y offset of the top of a row, computed relative to the visible
+  /// region to avoid O(n) scans and LOD issues.
+  ///
+  /// For uniform heights: row * rowHeight (O(1)).
+  /// For variable heights: walks from _firstVisibleRow (whose offset
+  /// is the scroll position) to the target row — O(visible_rows).
   double _rowTopOffset(int row) {
     if (!_source.hasVariableRowHeights) return row * _source.rowHeight;
-    double y = 0;
-    for (int i = 0; i < row && i < _source.rowCount; i++) {
-      y += _source.getRowHeight(i);
+    // Start from the known anchor: _firstVisibleRow is at scrollOffset
+    final anchor = _firstVisibleRow;
+    final anchorY = _yController.hasClients ? _yController.offset : 0.0;
+    double y = anchorY;
+    if (row >= anchor) {
+      for (int i = anchor; i < row; i++) y += _source.getRowHeight(i);
+    } else {
+      for (int i = anchor - 1; i >= row; i--) y -= _source.getRowHeight(i);
     }
     return y;
   }
 
-  /// Hit-test: convert a Y pixel offset (relative to data area top,
-  /// accounting for scroll) to a row index.
+  /// Hit-test: convert a Y pixel offset (absolute, including scroll)
+  /// to a row index.  Walks from the visible anchor — O(visible_rows).
   int _hitTestRow(double absY) {
     if (!_source.hasVariableRowHeights) {
       return (absY / _source.rowHeight).floor().clamp(0, _source.rowCount - 1);
     }
-    double cumY = 0;
-    for (int i = 0; i < _source.rowCount; i++) {
-      final rh = _source.getRowHeight(i);
-      if (absY < cumY + rh) return i;
-      cumY += rh;
+    // Start from the visible anchor
+    final anchor = _firstVisibleRow;
+    final anchorY = _yController.hasClients ? _yController.offset : 0.0;
+    if (absY >= anchorY) {
+      // Scan forward from anchor
+      double cumY = anchorY;
+      for (int i = anchor; i < _source.rowCount; i++) {
+        final rh = _source.getRowHeight(i);
+        if (absY < cumY + rh) return i;
+        cumY += rh;
+      }
+      return _source.rowCount - 1;
+    } else {
+      // Scan backward from anchor
+      double cumY = anchorY;
+      for (int i = anchor - 1; i >= 0; i--) {
+        cumY -= _source.getRowHeight(i);
+        if (absY >= cumY) return i;
+      }
+      return 0;
     }
-    return _source.rowCount - 1;
   }
 
   /// Column width: use drag override if set, else source default.
