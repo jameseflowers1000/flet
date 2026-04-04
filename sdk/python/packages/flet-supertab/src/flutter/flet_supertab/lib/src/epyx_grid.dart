@@ -684,7 +684,7 @@ class _EpyxGridState extends State<EpyxGrid> {
                             shrinkWrap: true,
                             physics: const NeverScrollableScrollPhysics(),
                             itemCount: itemCount,
-                            itemExtent: _source.rowHeight,
+                            itemExtent: _source.hasVariableRowHeights ? null : _source.rowHeight,
                             itemBuilder: (context, index) {
                               if (index >= _source.rowCount) {
                                 _requestNextPage();
@@ -698,7 +698,7 @@ class _EpyxGridState extends State<EpyxGrid> {
                             child: ListView.builder(
                               controller: _getFrozenController(),
                               itemCount: itemCount,
-                              itemExtent: _source.rowHeight,
+                              itemExtent: _source.hasVariableRowHeights ? null : _source.rowHeight,
                               itemBuilder: (context, index) {
                                 if (index >= _source.rowCount) {
                                   _requestNextPage();
@@ -733,7 +733,7 @@ class _EpyxGridState extends State<EpyxGrid> {
                                 shrinkWrap: true,
                                 physics: const NeverScrollableScrollPhysics(),
                                 itemCount: itemCount,
-                                itemExtent: _source.rowHeight,
+                                itemExtent: _source.hasVariableRowHeights ? null : _source.rowHeight,
                                 itemBuilder: (context, index) {
                                   if (index >= _source.rowCount) return lodSpinner();
                                   return _buildRow(index, colStart: frozenCount);
@@ -744,7 +744,7 @@ class _EpyxGridState extends State<EpyxGrid> {
                                 child: ListView.builder(
                                   controller: _yController,
                                   itemCount: itemCount,
-                                  itemExtent: _source.rowHeight,
+                                  itemExtent: _source.hasVariableRowHeights ? null : _source.rowHeight,
                                   itemBuilder: (context, index) {
                                     if (index >= _source.rowCount) return lodSpinner();
                                     return _buildRow(index, colStart: frozenCount);
@@ -796,7 +796,10 @@ class _EpyxGridState extends State<EpyxGrid> {
                         shrinkWrap: true,
                         physics: const NeverScrollableScrollPhysics(),
                         itemCount: scrollableRowCount.clamp(0, itemCount),
-                        itemExtent: _source.rowHeight,
+                        // itemExtent only when uniform — variable heights
+                        // need the builder to size each row independently
+                        itemExtent: _source.hasVariableRowHeights
+                            ? null : _source.rowHeight,
                         itemBuilder: (context, index) {
                           final actualRow = index + frozenRows;
                           if (actualRow >= _source.rowCount) {
@@ -811,7 +814,8 @@ class _EpyxGridState extends State<EpyxGrid> {
                         child: ListView.builder(
                           controller: _yController,
                           itemCount: scrollableRowCount.clamp(0, itemCount),
-                          itemExtent: _source.rowHeight,
+                          itemExtent: _source.hasVariableRowHeights
+                              ? null : _source.rowHeight,
                           itemBuilder: (context, index) {
                             final actualRow = index + frozenRows;
                             if (actualRow >= _source.rowCount) {
@@ -1058,7 +1062,7 @@ class _EpyxGridState extends State<EpyxGrid> {
 
     return Container(
       key: (isSelected && colStart == 0) ? _selectedRowKey : null,
-      height: _source.rowHeight,
+      height: _source.getRowHeight(rowIndex),
       decoration: BoxDecoration(
         color: rowBg,
         border: Border(
@@ -1072,7 +1076,7 @@ class _EpyxGridState extends State<EpyxGrid> {
           if (showCheckbox && colStart == 0)
             SizedBox(
               width: _checkboxColWidth,
-              height: _source.rowHeight,
+              height: _source.getRowHeight(rowIndex),
               child: Center(
                 child: SizedBox(
                   width: 18, height: 18,
@@ -1163,7 +1167,7 @@ class _EpyxGridState extends State<EpyxGrid> {
         foregroundPainter: hasOverride ? _OverrideTrianglePainter() : null,
         child: Container(
           width: _getColumnWidth(colIndex),
-          height: _source.rowHeight,
+          height: _source.getRowHeight(rowIndex),
           padding: EdgeInsets.symmetric(
             horizontal: _source.cellPaddingH,
             vertical: _source.cellPaddingV,

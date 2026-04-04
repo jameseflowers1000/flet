@@ -49,6 +49,7 @@ class EpyxGridSource {
   final double gridLineWidth;
   final double currentCellBorderWidth;
   final double rowHeight;
+  final List<double> perRowHeights;  // per-row heights (empty = use uniform rowHeight)
   final double headerRowHeight;
 
   EpyxGridSource({
@@ -79,6 +80,7 @@ class EpyxGridSource {
     this.gridLineWidth = 1.0,
     this.currentCellBorderWidth = 2.0,
     this.rowHeight = 36.0,
+    this.perRowHeights = const [],
     this.headerRowHeight = 40.0,
   }) : _columnWidths = columnWidths;
 
@@ -182,10 +184,31 @@ class EpyxGridSource {
       currentCellBorderWidth:
           control.getDouble("current_cell_border_width", 2.0) ?? 2.0,
       rowHeight: control.getDouble("row_height", 36.0) ?? 36.0,
+      perRowHeights: _parseRowHeights(control.getString("row_heights")),
       headerRowHeight:
           control.getDouble("header_row_height", 40.0) ?? 40.0,
     );
   }
+
+  /// Parse row_heights JSON string → list of doubles.
+  static List<double> _parseRowHeights(String? json) {
+    if (json == null || json.isEmpty) return const [];
+    try {
+      final parsed = jsonDecode(json) as List;
+      return parsed.map<double>((e) => (e as num).toDouble()).toList();
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  /// Height of a specific row (per-row if set, else uniform).
+  double getRowHeight(int row) {
+    if (row < perRowHeights.length) return perRowHeights[row];
+    return rowHeight;
+  }
+
+  /// Whether per-row heights are active.
+  bool get hasVariableRowHeights => perRowHeights.isNotEmpty;
 
   // ── Accessors ──────────────────────────────────────────────────
 

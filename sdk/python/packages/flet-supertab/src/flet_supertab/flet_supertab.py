@@ -39,6 +39,8 @@ class SuperTab(ft.LayoutControl):
     frozen_columns_count: int = field(default=0, metadata={"data_field": "frozen_columns_count"})
     frozen_rows_count: int = field(default=0, metadata={"data_field": "frozen_rows_count"})
     row_height: float = field(default=36.0, metadata={"data_field": "row_height"})
+    # JSON array of per-row heights (overrides row_height when set)
+    row_heights: Optional[str] = field(default=None, metadata={"data_field": "row_heights"})
     header_row_height: float = field(default=40.0, metadata={"data_field": "header_row_height"})
 
     # Styling — colors
