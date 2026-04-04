@@ -105,6 +105,7 @@ class _EpyxGridState extends State<EpyxGrid> {
   String _lastRowRenderCode = '';
   String _lastRowHeightsJson = '';
   double _lastRowHeight = 36.0;
+  int _lastDataVersion = 0;
 
   // ── LOD event-queue state ──────────────────────────────────────
   // Buffer: rows cached by ABSOLUTE row index.
@@ -186,17 +187,44 @@ class _EpyxGridState extends State<EpyxGrid> {
       setState(() {}); // force rebuild with new scripts
     }
 
-    // Skip full rebuild if data hasn't changed.
+    // Two change paths:
+    // 1. data_version bump from Python → clear cache, re-request current page
+    // 2. Page response (rows + buffer_start) → merge into cache
+    final newDataVersion = widget.control.getInt("data_version", 0) ?? 0;
     final newRows = widget.control.getString("rows") ?? '';
     final newCols = widget.control.getString("columns") ?? '';
     final newTotalRows = widget.control.getInt("total_rows", 0) ?? 0;
     final newBufferStart = widget.control.getInt("buffer_start", 0) ?? 0;
-    final newStyles = widget.control.getString("cell_styles") ?? '';
-    final newOverrides = widget.control.getString("override_cells") ?? '';
     final newHidden = widget.control.getString("hidden_columns") ?? '';
     final newSummary = widget.control.getString("summary_row") ?? '';
-    final newRowHeights = widget.control.getString("row_heights") ?? '';
     final newRowHeight = widget.control.getDouble("row_height", 36.0) ?? 36.0;
+
+    // Path 1: data_version changed → invalidate cache, re-request
+    if (newDataVersion != _lastDataVersion) {
+      _lastDataVersion = newDataVersion;
+      _lastTotalRows = newTotalRows;
+      _lastColsJson = newCols;
+      _clearBuffer();
+      _displayQueue.clear();
+      setState(() {
+        _sourceNeedsRebuild = true;
+        _pendingEdits.clear();
+        _invalidateRenderCaches();
+      });
+      // Re-request the page we're currently viewing
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          final firstRow = _firstVisibleRow;
+          _requestPage(math.max(0, firstRow - 150), 300);
+        }
+      });
+      return;
+    }
+
+    // Path 2: page response — merge rows into buffer
+    final newStyles = widget.control.getString("cell_styles") ?? '';
+    final newOverrides = widget.control.getString("override_cells") ?? '';
+    final newRowHeights = widget.control.getString("row_heights") ?? '';
     final dataKey = '$newRows|$newCols|$newTotalRows|$newBufferStart|$newStyles|$newOverrides|$newHidden|$newSummary|$newRowHeights|$newRowHeight';
     final oldKey = '$_lastRowsJson|$_lastColsJson|$_lastTotalRows|$_lastBufferStart|$_lastStylesJson|$_lastOverridesJson|$_lastHiddenJson|$_lastSummaryJson|$_lastRowHeightsJson|$_lastRowHeight';
     if (dataKey == oldKey) {

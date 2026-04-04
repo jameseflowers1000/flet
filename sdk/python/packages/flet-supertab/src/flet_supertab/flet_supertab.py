@@ -132,6 +132,10 @@ class SuperTab(ft.LayoutControl):
     # LOD buffer start: absolute row index of the first row in the buffer
     buffer_start: int = field(default=0, metadata={"data_field": "buffer_start"})
 
+    # Data version counter: bumped by Python on data change.
+    # Dart clears its cache and re-requests on version change.
+    data_version: int = field(default=0, metadata={"data_field": "data_version"})
+
     # Internal storage for the actual list data
     _columns_data: list[dict[str, Any]] = field(default_factory=list, repr=False, metadata={"skip": True})
     _rows_data: list[list[Any]] = field(default_factory=list, repr=False, metadata={"skip": True})
