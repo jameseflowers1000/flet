@@ -950,7 +950,6 @@ class _EpyxGridState extends State<EpyxGrid> {
                   width: _getColumnWidth(i),
                   height: headerRowHeight,
                   child: Stack(
-                    clipBehavior: Clip.none,
                     children: [
                       Container(
                         padding: EdgeInsets.symmetric(horizontal: headerPadH),
@@ -977,10 +976,38 @@ class _EpyxGridState extends State<EpyxGrid> {
                         overflow: TextOverflow.ellipsis,
                       ),
                     ),
-                    // Resize handle — centered on the divider line so
-                    // it's grabbable from both sides (6px left + 6px right)
+                    // Left-side resize handle — grabs the PREVIOUS column's
+                    // right edge.  This lets the user resize from either side
+                    // of the divider (Excel behavior).
+                    if (i > colStart)
+                      Positioned(
+                        left: 0, top: 0, bottom: 0,
+                        child: MouseRegion(
+                          cursor: SystemMouseCursors.resizeColumn,
+                          child: GestureDetector(
+                            onHorizontalDragStart: (_) {
+                              setState(() => _resizingCol = i - 1);
+                            },
+                            onHorizontalDragUpdate: (d) {
+                              setState(() {
+                                final current = _getColumnWidth(i - 1);
+                                _columnWidthOverrides[i - 1] =
+                                    (current + d.delta.dx).clamp(40.0, 4000.0);
+                              });
+                            },
+                            onHorizontalDragEnd: (_) {
+                              setState(() => _resizingCol = -1);
+                              _fireColumnResize(i - 1);
+                            },
+                            onDoubleTap: () => _autoSizeColumn(i - 1),
+                            behavior: HitTestBehavior.opaque,
+                            child: const SizedBox(width: 6),
+                          ),
+                        ),
+                      ),
+                    // Right-side resize handle — grabs THIS column's edge
                     Positioned(
-                      right: -6, top: 0, bottom: 0,
+                      right: 0, top: 0, bottom: 0,
                       child: MouseRegion(
                         cursor: SystemMouseCursors.resizeColumn,
                         child: GestureDetector(
