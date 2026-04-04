@@ -102,6 +102,8 @@ class _EpyxGridState extends State<EpyxGrid> {
   Map<String, Map<String, String>?> _cellRenderCache = {};
   String _lastRenderCode = '';
   String _lastRowRenderCode = '';
+  String _lastRowHeightsJson = '';
+  double _lastRowHeight = 36.0;
 
 
   @override
@@ -171,8 +173,10 @@ class _EpyxGridState extends State<EpyxGrid> {
     final newOverrides = widget.control.getString("override_cells") ?? '';
     final newHidden = widget.control.getString("hidden_columns") ?? '';
     final newSummary = widget.control.getString("summary_row") ?? '';
-    final dataKey = '$newRows|$newCols|$newTotalRows|$newStyles|$newOverrides|$newHidden|$newSummary';
-    final oldKey = '$_lastRowsJson|$_lastColsJson|$_lastTotalRows|$_lastStylesJson|$_lastOverridesJson|$_lastHiddenJson|$_lastSummaryJson';
+    final newRowHeights = widget.control.getString("row_heights") ?? '';
+    final newRowHeight = widget.control.getDouble("row_height", 36.0) ?? 36.0;
+    final dataKey = '$newRows|$newCols|$newTotalRows|$newStyles|$newOverrides|$newHidden|$newSummary|$newRowHeights|$newRowHeight';
+    final oldKey = '$_lastRowsJson|$_lastColsJson|$_lastTotalRows|$_lastStylesJson|$_lastOverridesJson|$_lastHiddenJson|$_lastSummaryJson|$_lastRowHeightsJson|$_lastRowHeight';
     if (dataKey == oldKey) {
       if (_pendingEdits.isNotEmpty) {
         setState(() => _pendingEdits.clear());
@@ -186,6 +190,8 @@ class _EpyxGridState extends State<EpyxGrid> {
     _lastOverridesJson = newOverrides;
     _lastHiddenJson = newHidden;
     _lastSummaryJson = newSummary;
+    _lastRowHeightsJson = newRowHeights;
+    _lastRowHeight = newRowHeight;
 
     setState(() {
       _sourceNeedsRebuild = true;
