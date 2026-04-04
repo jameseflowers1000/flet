@@ -215,6 +215,23 @@ class _EpyxGridState extends State<EpyxGrid> {
           _selectedCol = col;
         });
       },
+      getGridGeometry: () {
+        final colWidths = <double>[];
+        for (int i = 0; i < _source.columnCount; i++) {
+          colWidths.add(_getColumnWidth(i));
+        }
+        return {
+          'col_widths': colWidths,
+          'row_height': _source.rowHeight,
+          'header_height': _source.headerRowHeight,
+          'chrome_height': 26.0,  // fixed chrome bar height
+          'row_count': _source.rowCount,
+          'col_count': _source.columnCount,
+          'col_names': List.generate(
+              _source.columnCount, (i) => _source.columnName(i)),
+          'total_columns_width': _totalColumnsWidth,
+        };
+      },
       simulateKey: (key, modifiers) {
         // Simulate key press through the same handler
         // This is a simplified version — full key simulation would

@@ -28,6 +28,7 @@ class EpyxGridTestApi {
   final int Function() getFirstVisibleRow;
   final void Function(int row, int col) simulateTap;
   final void Function(String key, Set<String> modifiers) simulateKey;
+  final Map<String, dynamic> Function() getGridGeometry;
 
   EpyxGridTestApi({
     required this.control,
@@ -40,6 +41,7 @@ class EpyxGridTestApi {
     required this.getFirstVisibleRow,
     required this.simulateTap,
     required this.simulateKey,
+    required this.getGridGeometry,
   });
 
   /// Check if test mode is enabled.
@@ -99,6 +101,9 @@ class EpyxGridTestApi {
               {};
           simulateKey(key, mods);
           return jsonEncode({'result': 'ok'});
+
+        case 'get_grid_geometry':
+          return jsonEncode({'result': getGridGeometry()});
 
         default:
           return jsonEncode({'error': 'Unknown action: $action'});
