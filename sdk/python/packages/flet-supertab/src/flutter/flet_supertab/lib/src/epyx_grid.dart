@@ -990,7 +990,8 @@ class _EpyxGridState extends State<EpyxGrid> {
                             shrinkWrap: true,
                             physics: const NeverScrollableScrollPhysics(),
                             itemCount: itemCount,
-                            itemExtent: _source.hasVariableRowHeights ? null : _source.rowHeight,
+                            itemExtentBuilder: (index, __) =>
+                                _source.getRowHeight(index),
                             itemBuilder: (context, index) {
                               return buildAbsRow(index, colEnd: frozenCount);
                             },
@@ -1000,7 +1001,8 @@ class _EpyxGridState extends State<EpyxGrid> {
                             child: ListView.builder(
                               controller: _getFrozenController(),
                               itemCount: itemCount,
-                              itemExtent: _source.hasVariableRowHeights ? null : _source.rowHeight,
+                              itemExtentBuilder: (index, __) =>
+                                _source.getRowHeight(index),
                               itemBuilder: (context, index) {
                                 return buildAbsRow(index, colEnd: frozenCount);
                               },
@@ -1031,7 +1033,8 @@ class _EpyxGridState extends State<EpyxGrid> {
                                 shrinkWrap: true,
                                 physics: const NeverScrollableScrollPhysics(),
                                 itemCount: itemCount,
-                                itemExtent: _source.hasVariableRowHeights ? null : _source.rowHeight,
+                                itemExtentBuilder: (index, __) =>
+                                _source.getRowHeight(index),
                                 itemBuilder: (context, index) {
                                   return buildAbsRow(index, colStart: frozenCount);
                                 },
@@ -1041,7 +1044,8 @@ class _EpyxGridState extends State<EpyxGrid> {
                                 child: ListView.builder(
                                   controller: _yController,
                                   itemCount: itemCount,
-                                  itemExtent: _source.hasVariableRowHeights ? null : _source.rowHeight,
+                                  itemExtentBuilder: (index, __) =>
+                                _source.getRowHeight(index),
                                   itemBuilder: (context, index) {
                                     return buildAbsRow(index, colStart: frozenCount);
                                   },
@@ -1094,8 +1098,8 @@ class _EpyxGridState extends State<EpyxGrid> {
                         itemCount: scrollableRowCount.clamp(0, itemCount),
                         // itemExtent only when uniform — variable heights
                         // need the builder to size each row independently
-                        itemExtent: _source.hasVariableRowHeights
-                            ? null : _source.rowHeight,
+                        itemExtentBuilder: (index, __) =>
+                            _source.getRowHeight(index),
                         itemBuilder: (context, index) {
                           final absRow = index + frozenRows;
                           return buildAbsRow(absRow);
