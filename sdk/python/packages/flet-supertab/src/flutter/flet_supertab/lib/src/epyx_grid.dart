@@ -765,6 +765,9 @@ class _EpyxGridState extends State<EpyxGrid> {
         }
 
         // No frozen columns: single horizontal scroll wraps everything
+        final frozenRows = widget.control.getInt("frozen_rows_count", 0) ?? 0;
+        final scrollableRowCount = itemCount - frozenRows;
+
         return MouseRegion(
           onHover: (event) => _onHover(event.localPosition),
           onExit: (_) => _onHoverExit(),
@@ -784,32 +787,38 @@ class _EpyxGridState extends State<EpyxGrid> {
                   mainAxisSize: unbounded ? MainAxisSize.min : MainAxisSize.max,
                   children: [
                     _buildColumnHeaderRow(context, showRowNumbers, rowNumWidth),
+                    // Frozen rows: pinned above scrollable body
+                    if (frozenRows > 0)
+                      for (int i = 0; i < frozenRows && i < _source.rowCount; i++)
+                        _buildRow(i),
                     if (unbounded)
                       ListView.builder(
                         shrinkWrap: true,
                         physics: const NeverScrollableScrollPhysics(),
-                        itemCount: itemCount,
+                        itemCount: scrollableRowCount.clamp(0, itemCount),
                         itemExtent: _source.rowHeight,
                         itemBuilder: (context, index) {
-                          if (index >= _source.rowCount) {
+                          final actualRow = index + frozenRows;
+                          if (actualRow >= _source.rowCount) {
                             _requestNextPage();
                             return lodSpinner();
                           }
-                          return _buildRow(index);
+                          return _buildRow(actualRow);
                         },
                       )
                     else
                       Expanded(
                         child: ListView.builder(
                           controller: _yController,
-                          itemCount: itemCount,
+                          itemCount: scrollableRowCount.clamp(0, itemCount),
                           itemExtent: _source.rowHeight,
                           itemBuilder: (context, index) {
-                            if (index >= _source.rowCount) {
+                            final actualRow = index + frozenRows;
+                            if (actualRow >= _source.rowCount) {
                               _requestNextPage();
                               return lodSpinner();
                             }
-                            return _buildRow(index);
+                            return _buildRow(actualRow);
                           },
                         ),
                       ),
