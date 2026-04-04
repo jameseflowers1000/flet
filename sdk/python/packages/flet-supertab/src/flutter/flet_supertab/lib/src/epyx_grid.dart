@@ -210,26 +210,89 @@ class _EpyxGridState extends State<EpyxGrid> {
       },
       getFirstVisibleRow: () => _firstVisibleRow,
       simulateTap: (row, col) {
-        setState(() {
-          _selectedRow = row;
-          _selectedCol = col;
-        });
+        _moveTo(row, col);
+      },
+      simulateRightClick: (row, col) {
+        _moveTo(row, col);
+        final renderBox = context.findRenderObject() as RenderBox?;
+        if (renderBox != null) {
+          final pos = renderBox.localToGlobal(Offset.zero);
+          double colX = 0;
+          for (int i = 0; i < col; i++) colX += _getColumnWidth(i);
+          final x = pos.dx + colX + _getColumnWidth(col) / 2;
+          final y = pos.dy + 26.0 + _source.headerRowHeight +
+                    (row - _firstVisibleRow) * _source.rowHeight +
+                    _source.rowHeight / 2;
+          _showContextMenu(Offset(x, y), row, col);
+        }
+      },
+      simulateTypeText: (text) {
+        if (_isEditing) {
+          _editController.text = text;
+        } else {
+          // Start editing and set text
+          setState(() {
+            _isEditing = true;
+            _editOriginalValue = _source.cellText(_selectedRow, _selectedCol);
+            _editController.text = text;
+          });
+        }
+      },
+      scrollToRow: (row) {
+        if (_yController.hasClients) {
+          final offset = row * _source.rowHeight;
+          _yController.jumpTo(offset.clamp(
+              0.0, _yController.position.maxScrollExtent));
+        }
+      },
+      resizeColumn: (col, delta) {
+        final currentWidth = _getColumnWidth(col);
+        final newWidth = (currentWidth + delta).clamp(30.0, 1000.0);
+        _columnWidthOverrides[col] = newWidth;
+        // Fire column resize event to Python
+        final colName = _source.columnName(col);
+        widget.control.triggerEventWithoutSubscribers(
+            'column_resize', jsonEncode({
+              'column': colName, 'width': newWidth,
+            }));
+        setState(() {});
       },
       getGridGeometry: () {
         final colWidths = <double>[];
         for (int i = 0; i < _source.columnCount; i++) {
           colWidths.add(_getColumnWidth(i));
         }
+        // Absolute screen position of this widget
+        double screenX = 0, screenY = 0;
+        try {
+          final renderBox = context.findRenderObject() as RenderBox?;
+          if (renderBox != null) {
+            final pos = renderBox.localToGlobal(Offset.zero);
+            screenX = pos.dx;
+            screenY = pos.dy;
+          }
+        } catch (_) {}
         return {
           'col_widths': colWidths,
           'row_height': _source.rowHeight,
           'header_height': _source.headerRowHeight,
-          'chrome_height': 26.0,  // fixed chrome bar height
+          'chrome_height': 26.0,
           'row_count': _source.rowCount,
           'col_count': _source.columnCount,
           'col_names': List.generate(
               _source.columnCount, (i) => _source.columnName(i)),
           'total_columns_width': _totalColumnsWidth,
+          'screen_x': screenX,
+          'screen_y': screenY,
+          'scroll_x': _xController.hasClients ? _xController.offset : 0.0,
+          'scroll_y': _yController.hasClients ? _yController.offset : 0.0,
+          'cell_padding_h': _source.cellPaddingH,
+          'cell_padding_v': _source.cellPaddingV,
+          'has_override': List.generate(
+              _source.rowCount,
+              (r) => List.generate(
+                  _source.columnCount,
+                  (c) => _source.hasOverride(r, c))),
         };
       },
       simulateKey: (key, modifiers) {

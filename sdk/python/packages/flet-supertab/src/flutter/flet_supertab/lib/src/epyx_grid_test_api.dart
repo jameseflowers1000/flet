@@ -27,7 +27,11 @@ class EpyxGridTestApi {
   final int Function() getVisibleRowCount;
   final int Function() getFirstVisibleRow;
   final void Function(int row, int col) simulateTap;
+  final void Function(int row, int col) simulateRightClick;
   final void Function(String key, Set<String> modifiers) simulateKey;
+  final void Function(String text) simulateTypeText;
+  final void Function(int row) scrollToRow;
+  final void Function(int col, double delta) resizeColumn;
   final Map<String, dynamic> Function() getGridGeometry;
 
   EpyxGridTestApi({
@@ -40,7 +44,11 @@ class EpyxGridTestApi {
     required this.getVisibleRowCount,
     required this.getFirstVisibleRow,
     required this.simulateTap,
+    required this.simulateRightClick,
     required this.simulateKey,
+    required this.simulateTypeText,
+    required this.scrollToRow,
+    required this.resizeColumn,
     required this.getGridGeometry,
   });
 
@@ -100,6 +108,28 @@ class EpyxGridTestApi {
                   .toSet() ??
               {};
           simulateKey(key, mods);
+          return jsonEncode({'result': 'ok'});
+
+        case 'right_click':
+          final row = cmd['row'] as int;
+          final col = cmd['col'] as int;
+          simulateRightClick(row, col);
+          return jsonEncode({'result': 'ok'});
+
+        case 'type_text':
+          final text = cmd['text'] as String;
+          simulateTypeText(text);
+          return jsonEncode({'result': 'ok'});
+
+        case 'scroll_to_row':
+          final row = cmd['row'] as int;
+          scrollToRow(row);
+          return jsonEncode({'result': 'ok'});
+
+        case 'resize_column':
+          final col = cmd['col'] as int;
+          final delta = (cmd['delta'] as num).toDouble();
+          resizeColumn(col, delta);
           return jsonEncode({'result': 'ok'});
 
         case 'get_grid_geometry':
