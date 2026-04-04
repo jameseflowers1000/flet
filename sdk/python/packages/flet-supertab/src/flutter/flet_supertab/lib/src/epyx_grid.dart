@@ -89,6 +89,9 @@ class _EpyxGridState extends State<EpyxGrid> {
   // -- Checkbox column state --
   final Set<int> _checkedRows = {};
 
+  // -- Validation error cells (red border, auto-clear after 3s) --
+  Set<String> _validationErrorCells = {};  // "row:colName" keys
+
   // -- Hover tracking for render_code --
   int _hoveredRow = -1;
   int _hoveredCol = -1;
@@ -130,6 +133,24 @@ class _EpyxGridState extends State<EpyxGrid> {
 
   void _onControlChanged() {
     if (!mounted) return;
+
+    // Check for validation errors (red border feedback)
+    final valErrors = widget.control.getString("validation_errors");
+    if (valErrors != null && valErrors.isNotEmpty) {
+      try {
+        final errors = jsonDecode(valErrors) as List;
+        final keys = errors.map<String>((e) => '${e["row"]}:${e["col"]}').toSet();
+        setState(() => _validationErrorCells = keys);
+        // Auto-clear after 3 seconds
+        Future.delayed(const Duration(seconds: 3), () {
+          if (mounted) {
+            setState(() => _validationErrorCells.clear());
+          }
+        });
+        // Clear the property so it doesn't re-trigger
+        widget.control.updateProperties({'validation_errors': null});
+      } catch (_) {}
+    }
 
     // Check render script changes FIRST (before data version early-return).
     // render_code can change independently of data.
@@ -1095,9 +1116,17 @@ class _EpyxGridState extends State<EpyxGrid> {
 
     final isEditingThis = _isEditing && isAnchor;
 
+    // Validation error: red border overrides all other borders
+    final colName = colIndex < _source.columnCount
+        ? _source.columnName(colIndex) : '';
+    final hasValidationError =
+        _validationErrorCells.contains('$rowIndex:$colName');
+
     // Selection border: anchor gets solid border, range gets thin highlight
     BoxBorder cellBorder;
-    if (isAnchor) {
+    if (hasValidationError) {
+      cellBorder = Border.all(color: Colors.red, width: 2.0);
+    } else if (isAnchor) {
       cellBorder = Border.all(
         color: _source.currentCellBorderColor,
         width: _source.currentCellBorderWidth,

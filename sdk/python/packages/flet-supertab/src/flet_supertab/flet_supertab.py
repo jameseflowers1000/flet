@@ -77,6 +77,10 @@ class SuperTab(ft.LayoutControl):
     # JSON array of "row:col_name" strings identifying cells with overrides
     override_cells: Optional[str] = field(default=None, metadata={"data_field": "override_cells"})
 
+    # JSON array of validation errors for red border display
+    # Structure: [{"row": int, "col": "name", "msg": "error"}]
+    validation_errors: Optional[str] = field(default=None, metadata={"data_field": "validation_errors"})
+
     # JSON-encoded cell styles for conditional formatting (§9.5)
     # Structure: [[{"bg": "#color", "fg": "#color"} | null, ...], ...]
     cell_styles: Optional[str] = field(default=None, metadata={"data_field": "cell_styles"})
