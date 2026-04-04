@@ -403,13 +403,17 @@ class _EpyxGridState extends State<EpyxGrid> {
     final viewportRows = (_yController.position.viewportDimension / _source.rowHeight).ceil();
     final absLastVisible = absFirst + viewportRows;
 
-    // Approaching bottom of buffer — request page below
-    if (absLastVisible + prefetchThreshold >= _source.bufferEnd &&
+    // Approaching bottom of buffer — request next page.
+    // Only when user has scrolled past the first screenful (avoid
+    // prefetching on first paint when buffer is small).
+    if (absFirst > 0 &&
+        absLastVisible + prefetchThreshold >= _source.bufferEnd &&
         _source.bufferEnd < totalRows) {
       _requestPage(_source.bufferEnd, 300);
     }
     // Approaching top of buffer — request page above
-    if (absFirst - prefetchThreshold <= _source.bufferStart &&
+    if (absFirst > _source.bufferStart &&
+        absFirst - prefetchThreshold <= _source.bufferStart &&
         _source.bufferStart > 0) {
       final offset = math.max(0, _source.bufferStart - 300);
       _requestPage(offset, 300);
@@ -442,13 +446,15 @@ class _EpyxGridState extends State<EpyxGrid> {
       _lastSummaryJson = widget.control.getString("summary_row") ?? '';
       _sourceInitialized = true;
 
-      // If the selected row is outside the new buffer (e.g. Python
-      // pushed buffer_start=0 after recalc, but user is at row 359),
-      // re-request the page containing the selection.
-      if (_selectedRow > 0 && !_source.isInBuffer(_selectedRow)) {
+      // After source rebuild: if selection is outside buffer, re-request.
+      // If selection IS in buffer, scroll to show it (deferred page arrival).
+      if (_selectedRow > 0) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted) {
+          if (!mounted) return;
+          if (!_source.isInBuffer(_selectedRow)) {
             _requestPage(math.max(0, _selectedRow - 150), 300);
+          } else {
+            _ensureRowVisible(_selectedRow);
           }
         });
       }
@@ -2028,8 +2034,11 @@ class _EpyxGridState extends State<EpyxGrid> {
         _moveTo(row, _selectedCol, scroll: false);
         if (!_source.isInBuffer(row)) {
           _requestPage(math.max(0, row - 150), 300);
+          // Don't scroll now — page hasn't arrived.
+          // Post-frame callback after rebuild will scroll to selection.
+        } else {
+          _scrollToEdge(bottom: true);
         }
-        _scrollToEdge(bottom: true);
       } else {
         // Single step: request page if target not in buffer
         if (!_source.isInBuffer(row)) {
@@ -2057,8 +2066,9 @@ class _EpyxGridState extends State<EpyxGrid> {
         _moveTo(row, _selectedCol, scroll: false);
         if (!_source.isInBuffer(row)) {
           _requestPage(0, 300);
+        } else {
+          _scrollToEdge(bottom: false);
         }
-        _scrollToEdge(bottom: false);
       } else {
         // Single step: request page if target not in buffer
         if (!_source.isInBuffer(row)) {
