@@ -991,7 +991,7 @@ class _EpyxGridState extends State<EpyxGrid> {
                             physics: const NeverScrollableScrollPhysics(),
                             itemCount: itemCount,
                             itemExtentBuilder: (index, __) =>
-                                _source.getRowHeight(index),
+                                _bufferedRowHeight(index),
                             itemBuilder: (context, index) {
                               return buildAbsRow(index, colEnd: frozenCount);
                             },
@@ -1002,7 +1002,7 @@ class _EpyxGridState extends State<EpyxGrid> {
                               controller: _getFrozenController(),
                               itemCount: itemCount,
                               itemExtentBuilder: (index, __) =>
-                                _source.getRowHeight(index),
+                                _bufferedRowHeight(index),
                               itemBuilder: (context, index) {
                                 return buildAbsRow(index, colEnd: frozenCount);
                               },
@@ -1034,7 +1034,7 @@ class _EpyxGridState extends State<EpyxGrid> {
                                 physics: const NeverScrollableScrollPhysics(),
                                 itemCount: itemCount,
                                 itemExtentBuilder: (index, __) =>
-                                _source.getRowHeight(index),
+                                _bufferedRowHeight(index),
                                 itemBuilder: (context, index) {
                                   return buildAbsRow(index, colStart: frozenCount);
                                 },
@@ -1045,7 +1045,7 @@ class _EpyxGridState extends State<EpyxGrid> {
                                   controller: _yController,
                                   itemCount: itemCount,
                                   itemExtentBuilder: (index, __) =>
-                                _source.getRowHeight(index),
+                                _bufferedRowHeight(index),
                                   itemBuilder: (context, index) {
                                     return buildAbsRow(index, colStart: frozenCount);
                                   },
@@ -1099,7 +1099,7 @@ class _EpyxGridState extends State<EpyxGrid> {
                         // itemExtent only when uniform — variable heights
                         // need the builder to size each row independently
                         itemExtentBuilder: (index, __) =>
-                            _source.getRowHeight(index),
+                            _bufferedRowHeight(index),
                         itemBuilder: (context, index) {
                           final absRow = index + frozenRows;
                           return buildAbsRow(absRow);
