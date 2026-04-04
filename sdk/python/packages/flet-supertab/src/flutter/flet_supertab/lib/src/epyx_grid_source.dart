@@ -49,7 +49,7 @@ class EpyxGridSource {
   final double gridLineWidth;
   final double currentCellBorderWidth;
   final double rowHeight;
-  final List<double> perRowHeights;  // per-row heights (empty = use uniform rowHeight)
+  final Map<int, double> perRowHeights;  // sparse: {row_idx: height}
   final double headerRowHeight;
 
   EpyxGridSource({
@@ -80,7 +80,7 @@ class EpyxGridSource {
     this.gridLineWidth = 1.0,
     this.currentCellBorderWidth = 2.0,
     this.rowHeight = 36.0,
-    this.perRowHeights = const [],
+    this.perRowHeights = const {},
     this.headerRowHeight = 40.0,
   }) : _columnWidths = columnWidths;
 
@@ -190,21 +190,20 @@ class EpyxGridSource {
     );
   }
 
-  /// Parse row_heights JSON string → list of doubles.
-  static List<double> _parseRowHeights(String? json) {
-    if (json == null || json.isEmpty) return const [];
+  /// Parse row_heights JSON — sparse map {"row_idx": height}.
+  static Map<int, double> _parseRowHeights(String? json) {
+    if (json == null || json.isEmpty) return const {};
     try {
-      final parsed = jsonDecode(json) as List;
-      return parsed.map<double>((e) => (e as num).toDouble()).toList();
+      final parsed = jsonDecode(json) as Map<String, dynamic>;
+      return parsed.map((k, v) => MapEntry(int.parse(k), (v as num).toDouble()));
     } catch (_) {
-      return const [];
+      return const {};
     }
   }
 
-  /// Height of a specific row (per-row if set, else uniform).
+  /// Height of a specific row (override if set, else uniform default).
   double getRowHeight(int row) {
-    if (row < perRowHeights.length) return perRowHeights[row];
-    return rowHeight;
+    return perRowHeights[row] ?? rowHeight;
   }
 
   /// Whether per-row heights are active.
