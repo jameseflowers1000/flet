@@ -129,6 +129,9 @@ class SuperTab(ft.LayoutControl):
     # Total row count for LOD (Dart uses this to size the scrollbar)
     total_rows: int = field(default=0, metadata={"data_field": "total_rows"})
 
+    # LOD buffer start: absolute row index of the first row in the buffer
+    buffer_start: int = field(default=0, metadata={"data_field": "buffer_start"})
+
     # Internal storage for the actual list data
     _columns_data: list[dict[str, Any]] = field(default_factory=list, repr=False, metadata={"skip": True})
     _rows_data: list[list[Any]] = field(default_factory=list, repr=False, metadata={"skip": True})

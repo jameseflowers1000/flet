@@ -32,6 +32,9 @@ class EpyxGridSource {
   // -- Hidden columns (set of column names) --
   final Set<String> hiddenColumns;
 
+  // -- LOD buffer start: absolute row index of the first row in the buffer --
+  final int bufferStart;
+
   // -- Styling properties (ST1-ST18) --
   final Color headerBgColor;
   final Color headerTextColor;
@@ -64,6 +67,7 @@ class EpyxGridSource {
     this.cellStyles = const [],
     this.overrideCells = const {},
     this.hiddenColumns = const {},
+    this.bufferStart = 0,
     this.headerBgColor = const Color(0xFF2D2D30),
     this.headerTextColor = Colors.white,
     this.gridLineColor = const Color(0xFF3E3E42),
@@ -166,6 +170,7 @@ class EpyxGridSource {
       cellStyles: styles,
       overrideCells: overrides,
       hiddenColumns: hidden,
+      bufferStart: control.getInt("buffer_start", 0) ?? 0,
       headerBgColor: color("header_bg_color", const Color(0xFF2D2D30)),
       headerTextColor: color("header_text_color", Colors.white),
       gridLineColor: color("grid_line_color", const Color(0xFF3E3E42)),
@@ -202,8 +207,9 @@ class EpyxGridSource {
   }
 
   /// Height of a specific row (override if set, else uniform default).
+  /// [row] is buffer-relative; perRowHeights keys are ABSOLUTE.
   double getRowHeight(int row) {
-    return perRowHeights[row] ?? rowHeight;
+    return perRowHeights[bufferStart + row] ?? rowHeight;
   }
 
   /// Whether per-row heights are active.
@@ -213,6 +219,24 @@ class EpyxGridSource {
 
   int get rowCount => rows.length;
   int get columnCount => columns.length;
+
+  /// Absolute row index of the last row + 1 in the buffer.
+  int get bufferEnd => bufferStart + rowCount;
+
+  /// Convert absolute row index to buffer-relative index.
+  /// Returns -1 if the row is not in the buffer.
+  int toBufferIndex(int absRow) {
+    final rel = absRow - bufferStart;
+    if (rel < 0 || rel >= rowCount) return -1;
+    return rel;
+  }
+
+  /// Convert buffer-relative index to absolute row index.
+  int toAbsoluteRow(int bufferIndex) => bufferStart + bufferIndex;
+
+  /// Is the given absolute row within the buffer?
+  bool isInBuffer(int absRow) =>
+      absRow >= bufferStart && absRow < bufferEnd;
 
   String columnName(int i) => columnNames[i];
   String columnLabel(int i) => columnLabels[i];
