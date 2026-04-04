@@ -199,29 +199,18 @@ class _EpyxGridState extends State<EpyxGrid> {
     final newSummary = widget.control.getString("summary_row") ?? '';
     final newRowHeight = widget.control.getDouble("row_height", 36.0) ?? 36.0;
 
-    // Path 1: data_version changed → invalidate cache, re-request
+    // Path 1: data_version changed → data is fresh from Python.
+    // DON'T clear buffer or scroll. Merge incoming rows, rebuild source.
+    // If the user is scrolled to a different page, that page's stale
+    // data will be refreshed when they scroll back (next page_request).
     if (newDataVersion != _lastDataVersion) {
       _lastDataVersion = newDataVersion;
-      _lastTotalRows = newTotalRows;
-      _lastColsJson = newCols;
-      _clearBuffer();
-      _displayQueue.clear();
-      setState(() {
-        _sourceNeedsRebuild = true;
-        _pendingEdits.clear();
-        _invalidateRenderCaches();
-      });
-      // Re-request the page we're currently viewing.
-      // Estimate current row from scroll offset and default height.
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) {
-          final currentRow = _yController.hasClients
-              ? (_yController.offset / _source.rowHeight).floor()
-              : 0;
-          _requestPage(math.max(0, currentRow - 150), 300);
-        }
-      });
-      return;
+      // Column structure change → must clear
+      if (newCols != _lastColsJson) {
+        _clearBuffer();
+        _displayQueue.clear();
+      }
+      // Fall through to path 2 to merge the incoming rows
     }
 
     // Path 2: page response — merge rows into buffer
