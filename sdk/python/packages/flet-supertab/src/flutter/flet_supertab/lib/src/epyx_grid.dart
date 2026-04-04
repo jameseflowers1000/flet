@@ -441,6 +441,17 @@ class _EpyxGridState extends State<EpyxGrid> {
       _lastHiddenJson = widget.control.getString("hidden_columns") ?? '';
       _lastSummaryJson = widget.control.getString("summary_row") ?? '';
       _sourceInitialized = true;
+
+      // If the selected row is outside the new buffer (e.g. Python
+      // pushed buffer_start=0 after recalc, but user is at row 359),
+      // re-request the page containing the selection.
+      if (_selectedRow > 0 && !_source.isInBuffer(_selectedRow)) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) {
+            _requestPage(math.max(0, _selectedRow - 150), 300);
+          }
+        });
+      }
     }
     final totalRows = widget.control.getInt("total_rows", 0) ?? 0;
     final label = widget.control.getString("label") ?? "";
