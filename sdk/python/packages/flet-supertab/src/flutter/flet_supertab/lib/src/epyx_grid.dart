@@ -3170,6 +3170,10 @@ class _EpyxGridState extends State<EpyxGrid> {
           'hovered_col': _hoveredCol,
           'total_rows': _effectiveRowCount,
           'total_cols': _source.columnCount,
+          'viewport_pos': rowIndex - _firstVisibleRow,
+          'viewport_count': _yController.hasClients
+              ? (_yController.position.viewportDimension / _cache.defaultRowHeight).ceil()
+              : 20,
         };
         try {
           final config = MicroPythonService.execEval(
