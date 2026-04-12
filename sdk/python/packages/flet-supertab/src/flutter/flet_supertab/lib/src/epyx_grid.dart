@@ -134,6 +134,10 @@ class _EpyxGridState extends State<EpyxGrid> {
   String _onKeyHostId = '';
   VoidCallback? _onKeyProjectionUnsubscribe;
 
+  // ListController for the main SuperListView — used to invalidate
+  // specific row extents when height overrides change.
+  final ListController _listController = ListController();
+
 
 
   @override
@@ -233,6 +237,7 @@ class _EpyxGridState extends State<EpyxGrid> {
       // Path 1: data version changed — clear cache, merge fresh data.
       _lastDataVersion = newDataVersion;
       _cache.clear();
+      _lastHeightOverridesJson = ''; // force re-apply after clear
       _cache.totalRows = newTotalRows;
       _cache.totalHeight = newTotalHeight;
       _cache.defaultRowHeight = newRowHeight;
@@ -1147,7 +1152,9 @@ class _EpyxGridState extends State<EpyxGrid> {
                             shrinkWrap: true,
                             physics: const NeverScrollableScrollPhysics(),
                             itemCount: itemCount,
-                          extentEstimation: (i, _) => _cache.fastRowHeight(i ?? 0),
+                          extentEstimation: (i, _) => i != null
+                            ? _cache.fastRowHeight(i)
+                            : (_cache.hasHeightOverrides ? 0.0 : _cache.defaultRowHeight),
                             
                             itemBuilder: (context, index) {
                               if (cacheActive) {
@@ -1165,7 +1172,9 @@ class _EpyxGridState extends State<EpyxGrid> {
                             child: SuperListView.builder(
                               controller: _getFrozenController(),
                               itemCount: itemCount,
-                          extentEstimation: (i, _) => _cache.fastRowHeight(i ?? 0),
+                          extentEstimation: (i, _) => i != null
+                            ? _cache.fastRowHeight(i)
+                            : (_cache.hasHeightOverrides ? 0.0 : _cache.defaultRowHeight),
                               
                               itemBuilder: (context, index) {
                                 if (cacheActive) {
@@ -1204,7 +1213,9 @@ class _EpyxGridState extends State<EpyxGrid> {
                                 shrinkWrap: true,
                                 physics: const NeverScrollableScrollPhysics(),
                                 itemCount: itemCount,
-                          extentEstimation: (i, _) => _cache.fastRowHeight(i ?? 0),
+                          extentEstimation: (i, _) => i != null
+                            ? _cache.fastRowHeight(i)
+                            : (_cache.hasHeightOverrides ? 0.0 : _cache.defaultRowHeight),
                                 
                                 itemBuilder: (context, index) {
                                   if (cacheActive) {
@@ -1218,9 +1229,12 @@ class _EpyxGridState extends State<EpyxGrid> {
                               Expanded(
                                 child: SuperListView.builder(
                                   controller: _yController,
+                                  listController: _listController,
                                   itemCount: itemCount,
-                          extentEstimation: (i, _) => _cache.fastRowHeight(i ?? 0),
-                                  
+                          extentEstimation: (i, _) => i != null
+                            ? _cache.fastRowHeight(i)
+                            : (_cache.hasHeightOverrides ? 0.0 : _cache.defaultRowHeight),
+
                                   itemBuilder: (context, index) {
                                     if (cacheActive) {
                                       return _buildCachedRow(index, colStart: frozenCount);
@@ -1275,7 +1289,9 @@ class _EpyxGridState extends State<EpyxGrid> {
                         shrinkWrap: true,
                         physics: const NeverScrollableScrollPhysics(),
                         itemCount: scrollableRowCount.clamp(0, itemCount),
-                        extentEstimation: (i, _) => _cache.fastRowHeight(i ?? 0),
+                        extentEstimation: (i, _) => i != null
+                            ? _cache.fastRowHeight(i)
+                            : (_cache.hasHeightOverrides ? 0.0 : _cache.defaultRowHeight),
                         itemBuilder: (context, index) {
                           final actualRow = index + frozenRows;
                           if (cacheActive) {
@@ -1292,8 +1308,11 @@ class _EpyxGridState extends State<EpyxGrid> {
                       Expanded(
                         child: SuperListView.builder(
                           controller: _yController,
+                          listController: _listController,
                           itemCount: scrollableRowCount.clamp(0, itemCount),
-                          extentEstimation: (i, _) => _cache.fastRowHeight(i ?? 0),
+                          extentEstimation: (i, _) => i != null
+                            ? _cache.fastRowHeight(i)
+                            : (_cache.hasHeightOverrides ? 0.0 : _cache.defaultRowHeight),
                           itemBuilder: (context, index) {
                             final actualRow = index + frozenRows;
                             if (cacheActive) {
@@ -2873,29 +2892,22 @@ class _EpyxGridState extends State<EpyxGrid> {
   int _hitTestRow(double absY) {
     final maxRow = _effectiveRowCount - 1;
     if (maxRow < 0) return 0;
-    if (_pixelLodActive && _yController.hasClients) {
-      // SuperListView's scroll extent uses defaultRowHeight for unbuilt
-      // rows, so it may differ from Python's totalHeight when there are
-      // height overrides. Map absY from SuperListView's coordinate space
-      // to Python's pixel space using the ratio, then find the row.
-      final maxScroll = _yController.position.maxScrollExtent;
-      final vpH = _yController.position.viewportDimension;
-      final sliverTotal = maxScroll + vpH; // SuperListView's total
-      final scale = (sliverTotal > 0 && _cache.totalHeight > 0)
-          ? _cache.totalHeight / sliverTotal : 1.0;
-      final pixelY = absY * scale;
-      // Estimate row from average height, then refine with cached offsets
+    if (_pixelLodActive) {
+      // With per-index extentEstimation (when height overrides exist),
+      // SuperListView's scroll extent matches Python's totalHeight
+      // exactly. absY maps directly to cached pixel offsets.
       final avgH = _cache.totalRows > 0
           ? _cache.totalHeight / _cache.totalRows
           : _cache.defaultRowHeight;
-      int est = avgH > 0 ? (pixelY / avgH).floor().clamp(0, maxRow) : 0;
+      int est = avgH > 0 ? (absY / avgH).floor().clamp(0, maxRow) : 0;
+      // Refine using cached pixel offsets
       final lo = math.max(0, est - 50);
       final hi = math.min(maxRow, est + 50);
       for (int r = lo; r <= hi; r++) {
         final cached = _cache.get(r);
         final top = cached?.pixelOffset ?? r * avgH;
         final h = cached?.height ?? avgH;
-        if (pixelY < top + h) return r;
+        if (absY < top + h) return r;
       }
       return est;
     }
