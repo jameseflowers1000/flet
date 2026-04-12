@@ -88,7 +88,12 @@ dependencies:
   flet_code_editor:
     path: ../sdk/python/packages/flet-code-editor/src/flutter/flet_code_editor
 
+  super_sliver_list: ^0.4.1
+
   # Epyx custom extensions:
+  flet_einput:
+    path: ../sdk/python/packages/flet-einput/src/flutter/flet_einput
+
   flet_supertab:
     path: ../sdk/python/packages/flet-supertab/src/flutter/flet_supertab
 

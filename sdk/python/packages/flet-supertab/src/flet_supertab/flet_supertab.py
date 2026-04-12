@@ -91,6 +91,9 @@ class SuperTab(ft.LayoutControl):
     render_code: str = field(default="", metadata={"data_field": "render_code"})
     row_render_code: str = field(default="", metadata={"data_field": "row_render_code"})
 
+    # Dart-side MicroPython keyboard handler (§6)
+    on_key_code: str = field(default="", metadata={"data_field": "on_key_code"})
+
     # JSON-encoded summary row values (list of strings in column order) for footer display
     summary_row: str = field(default="", metadata={"data_field": "summary_row"})
 
@@ -129,12 +132,12 @@ class SuperTab(ft.LayoutControl):
     # Total row count for LOD (Dart uses this to size the scrollbar)
     total_rows: int = field(default=0, metadata={"data_field": "total_rows"})
 
-    # LOD buffer start: absolute row index of the first row in the buffer
-    buffer_start: int = field(default=0, metadata={"data_field": "buffer_start"})
-
-    # Data version counter: bumped by Python on data change.
-    # Dart clears its cache and re-requests on version change.
+    # Pixel-space LOD metadata (always pushed by _sync_to_control)
+    total_height: float = field(default=0.0, metadata={"data_field": "total_height"})
     data_version: int = field(default=0, metadata={"data_field": "data_version"})
+    # Atomic page data blob: rows, pixel_offsets, buffer_start, storage_indices,
+    # cell_styles, override_cells, token — all in one JSON string.
+    page_data: Optional[str] = field(default=None, metadata={"data_field": "page_data"})
 
     # Internal storage for the actual list data
     _columns_data: list[dict[str, Any]] = field(default_factory=list, repr=False, metadata={"skip": True})

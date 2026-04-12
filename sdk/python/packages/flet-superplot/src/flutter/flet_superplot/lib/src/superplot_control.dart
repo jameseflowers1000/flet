@@ -2,10 +2,13 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:flet/flet.dart';
+import 'package:flet_micropython/flet_micropython.dart';
 import 'package:flutter/material.dart';
 import 'package:flet_micropython/src/micropython_service.dart'
     if (dart.library.io) 'package:flet_micropython/src/micropython_service_native.dart';
 
+import 'debug_log.dart'
+    if (dart.library.io) 'debug_log_io.dart';
 import 'interactive_chart.dart';
 import 'models/axis_model.dart';
 import 'models/series_model.dart';
@@ -38,22 +41,20 @@ class _SuperPlotControlState extends State<SuperPlotControl> {
   List<Map<String, dynamic>> _annotations = [];
   bool _versionSent = false;
 
-  // Named data buffers from series_code
+  // Named data buffers pushed by EInk via EMatPlot.push_data()
   final DataBufferStore _dataBuffers = DataBufferStore();
 
-  // Config-driven series from chart_config or plot_code_src (bridge API)
+  // Config-driven series from chart bridge evaluation via RenderPlane
   List<SeriesModel> _configSeries = [];
   List<Map<String, dynamic>> _configAnnotations = [];
 
   // Render state for draggable annotations → PaletteProvider formulas
   final Map<String, dynamic> _renderState = {};
 
-  // Last plot_code_src to avoid re-evaluation on unchanged code
-  String? _lastPlotCodeSrc;
-
-  // Plot context: container-computed values passed to plot_code evaluation
-  Map<String, dynamic> _plotContext = {};
-  String? _lastPlotContextJson;
+  // RenderPlane subscription
+  VoidCallback? _renderPlaneUnregister;
+  String? _renderPlaneControlId;
+  String? _lastRenderPlaneProjJson;
 
   // Chart styling from control
   Color _backgroundColor = const Color(0xFF1c1c1e);
@@ -65,13 +66,107 @@ class _SuperPlotControlState extends State<SuperPlotControl> {
   @override
   void initState() {
     super.initState();
+    superplotLog('[SuperPlot] initState');
     _parseConfig();
+    _subscribeRenderPlane();
   }
 
   @override
   void didUpdateWidget(covariant SuperPlotControl oldWidget) {
     super.didUpdateWidget(oldWidget);
     _parseConfig();
+    _subscribeRenderPlane();
+  }
+
+  @override
+  void dispose() {
+    superplotLog('[SuperPlot] dispose — _configSeries=${_configSeries.length}, _series=${_series.length}');
+    _renderPlaneUnregister?.call();
+    super.dispose();
+  }
+
+  // -----------------------------------------------------------------------
+  // Phase 3b — Subscribe to the shared RenderPlane registry. The container
+  // pushes a projection of the spec_code's def render() function to the
+  // RenderPlane keyed by our control id; when it changes (or when context
+  // changes), we re-evaluate via MicroPython using the registered chart
+  // bridge prelude (singleton named `chart`).
+  // -----------------------------------------------------------------------
+  void _subscribeRenderPlane() {
+    final newId = widget.control.id?.toString();
+    if (newId == _renderPlaneControlId) return; // already subscribed
+    _renderPlaneUnregister?.call();
+    _renderPlaneControlId = newId;
+    if (newId == null) return;
+    _renderPlaneUnregister = RenderPlaneControl.addListener(
+      newId,
+      _onRenderPlaneChanged,
+    );
+    // Run once to seed initial state if a projection already exists
+    _onRenderPlaneChanged();
+  }
+
+  void _onRenderPlaneChanged() {
+    final ctrlId = _renderPlaneControlId;
+    if (ctrlId == null) return;
+    final proj = RenderPlaneControl.getProjection(ctrlId, 'render');
+    if (proj == null) return;
+
+    // Skip redundant evals if the projection JSON hasn't changed AND
+    // we successfully evaluated last time. We can't set _lastRenderPlaneProjJson
+    // until AFTER a successful eval — otherwise a "not ready" deferred retry
+    // would think the eval already happened and bail.
+    final projJson = jsonEncode(proj);
+    if (projJson == _lastRenderPlaneProjJson) return;
+
+    if (!MicroPythonService.isReady) {
+      Future.delayed(const Duration(milliseconds: 100), () {
+        if (mounted) _onRenderPlaneChanged();
+      });
+      return;
+    }
+
+    // Build the exec body: chart._reset() + the render function body.
+    // Note: project_render_funcs splits the body into exec + eval (last
+    // expression). We concatenate both as statements since chart.* calls
+    // return None and we don't care about their return values — we only
+    // care about chart._to_config() at the end.
+    final exec = proj['exec'] as String? ?? '';
+    final lastExpr = proj['eval'] as String?;
+    final body = StringBuffer();
+    body.writeln('chart._reset()');
+    if (exec.isNotEmpty) body.writeln(exec);
+    if (lastExpr != null && lastExpr.isNotEmpty) body.writeln(lastExpr);
+
+    // Closure context — Phase 3 just passes any registered context for
+    // this control_id. Future phases will populate it with doc-level
+    // free vars referenced by the render function.
+    final ctx = RenderPlaneControl.getContext(ctrlId) ?? <String, dynamic>{};
+    final mergedCtx = <String, dynamic>{...ctx, ..._renderState};
+
+    try {
+      final result = MicroPythonService.execEval(
+        body.toString(),
+        'chart._to_config()',
+        mergedCtx,
+      );
+      if (result is Map) {
+        final configJson = jsonEncode(result);
+        _parseChartConfig(configJson);
+        _initRenderStateFromAnnotations();
+        // Cache the JSON only after a successful eval — so a future
+        // identical projection skips work, but failed/deferred evals
+        // can be retried.
+        _lastRenderPlaneProjJson = projJson;
+        superplotLog(
+            '[SuperPlot] RenderPlane SUCCESS: ${_configSeries.length} series, ${_configAnnotations.length} annotations');
+        if (mounted) setState(() {});
+      } else {
+        superplotLog('[SuperPlot] RenderPlane eval returned $result');
+      }
+    } catch (e) {
+      superplotLog('[SuperPlot] RenderPlane eval error: $e');
+    }
   }
 
   void _parseConfig() {
@@ -143,39 +238,10 @@ class _SuperPlotControlState extends State<SuperPlotControl> {
       }
     }
 
-    // Parse plot_context (container-computed values for plot_code evaluation)
-    final plotContextJson = widget.control.getString("plot_context");
-    bool contextChanged = false;
-    if (plotContextJson != null && plotContextJson.isNotEmpty) {
-      if (plotContextJson != _lastPlotContextJson) {
-        _lastPlotContextJson = plotContextJson;
-        try {
-          _plotContext = jsonDecode(plotContextJson) as Map<String, dynamic>;
-          contextChanged = true;
-        } catch (e) {
-          debugPrint('[SuperPlot] ERROR parsing plot_context: $e');
-        }
-      }
-    } else if (_lastPlotContextJson != null) {
-      _lastPlotContextJson = null;
-      _plotContext = {};
-      contextChanged = true;
-    }
-
-    // Evaluate plot_code_src via client MicroPython (takes priority over chart_config)
-    final plotCodeSrc = widget.control.getString("plot_code_src");
-    if (plotCodeSrc != null && plotCodeSrc.isNotEmpty) {
-      if (plotCodeSrc != _lastPlotCodeSrc || contextChanged || dataBuffersChanged) {
-        print('[SuperPlot] plot_code_src received (${plotCodeSrc.length} chars), evaluating...');
-        _lastPlotCodeSrc = plotCodeSrc;
-        _evaluatePlotCode(plotCodeSrc);
-      }
-    } else {
-      if (_lastPlotCodeSrc != null) {
-        print('[SuperPlot] plot_code_src cleared');
-      }
-      _lastPlotCodeSrc = null;
-    }
+    // Log state after parsing
+    superplotLog('[SuperPlot] _parseConfig done: '
+        'series=${_series.length}, configSeries=${_configSeries.length}, '
+        'buffers=${_dataBuffers.length}(gen=${_dataBuffers.generation})');
 
     // Parse styling
     final bgColor = widget.control.getString("background_color");
@@ -244,50 +310,6 @@ class _SuperPlotControlState extends State<SuperPlotControl> {
         .cast<Map<String, dynamic>>();
   }
 
-  /// Evaluate plot_code source via client-side MicroPython.
-  ///
-  /// Concatenates BRIDGE_SOURCE + plotCode, evaluates via execEval,
-  /// and parses the resulting JSON into series/axis/annotation models.
-  void _evaluatePlotCode(String plotCode) {
-    if (!MicroPythonService.isReady) {
-      print('[SuperPlot] MicroPython not ready, deferring plot_code eval');
-      Future.delayed(const Duration(milliseconds: 100), () {
-        if (mounted && _lastPlotCodeSrc == plotCode) {
-          _evaluatePlotCode(plotCode);
-        }
-      });
-      return;
-    }
-    print('[SuperPlot] evaluating plot_code (${plotCode.length} chars) via MicroPython');
-    try {
-      final execBody = '$_bridgeSource\n$plotCode';
-      final ctx = <String, dynamic>{..._plotContext, ..._renderState};
-      final result = MicroPythonService.execEval(
-        execBody, 'chart._to_config()', ctx);
-      if (result is Map) {
-        // MicroPython returns dict → _epyx_exec_eval serializes → Dart decodes to Map
-        final configJson = jsonEncode(result);
-        _parseChartConfig(configJson);
-        _initRenderStateFromAnnotations();
-        print('[SuperPlot] plot_code SUCCESS: ${_configSeries.length} series, ${_configAnnotations.length} annotations');
-        if (mounted) setState(() {});
-      } else if (result is String) {
-        // Fallback: if somehow a JSON string comes back
-        _parseChartConfig(result);
-        _initRenderStateFromAnnotations();
-        print('[SuperPlot] plot_code SUCCESS (string path): ${_configSeries.length} series');
-        if (mounted) setState(() {});
-      } else {
-        final err = MicroPythonService.getError();
-        print('[SuperPlot] plot_code eval failed — result: $result, error: $err');
-      }
-    } catch (e) {
-      print('[SuperPlot] EXCEPTION evaluating plot_code: $e');
-      final err = MicroPythonService.getError();
-      if (err.isNotEmpty) print('[SuperPlot] MicroPython error: $err');
-    }
-  }
-
   /// Initialize renderState from draggable annotation defaults.
   void _initRenderStateFromAnnotations() {
     for (final ann in _configAnnotations) {
@@ -340,6 +362,11 @@ class _SuperPlotControlState extends State<SuperPlotControl> {
       });
     }
 
+    final allS = _allSeries;
+    if (allS.isEmpty) {
+      superplotLog('[SuperPlot] BUILD: NO SERIES — chart will be blank');
+    }
+
     return LayoutControl(
       control: widget.control,
       child: ClipRect(
@@ -365,199 +392,3 @@ class _SuperPlotControlState extends State<SuperPlotControl> {
   }
 }
 
-/// ChartBridge Python source — prepended to plot_code for MicroPython evaluation.
-/// This is an exact copy of BRIDGE_SOURCE from bridge.py.
-/// Must work in MicroPython (no dataclasses, no typing, no numpy).
-const String _bridgeSource = '''
-class ChartBridge:
-    def __init__(self):
-        self._series = []
-        self._axes = []
-        self._legend = None
-        self._annotations = []
-
-    def line(self, x_col, y_col, color="#4083FF", name=None, width=2,
-             y_axis="y0", draw_mode="linear", opacity=1.0,
-             point_marker=None, tooltip_format=None, color_formula=None,
-             dash_pattern=None):
-        self._series.append({
-            "type": "line", "x_col": x_col, "y_col": y_col,
-            "color": color, "name": name, "width": width,
-            "y_axis": y_axis, "draw_mode": draw_mode, "opacity": opacity,
-            "point_marker": point_marker, "tooltip_format": tooltip_format,
-            "color_formula": color_formula, "dash_pattern": dash_pattern,
-        })
-
-    def scatter(self, x_col, y_col, color="#FF6600", name=None, size=8,
-                marker="circle", y_axis="y0", opacity=1.0, tooltip_format=None,
-                color_formula=None):
-        self._series.append({
-            "type": "scatter", "x_col": x_col, "y_col": y_col,
-            "color": color, "name": name, "size": size,
-            "marker": marker, "y_axis": y_axis, "opacity": opacity,
-            "tooltip_format": tooltip_format, "color_formula": color_formula,
-        })
-
-    def mountain(self, x_col, y_col, color="#4083FF", fill_color=None,
-                 name=None, width=2, y_axis="y0", opacity=1.0,
-                 zero_line_y=0.0, tooltip_format=None, stack_group=None):
-        self._series.append({
-            "type": "mountain", "x_col": x_col, "y_col": y_col,
-            "color": color, "fill_color": fill_color, "name": name,
-            "width": width, "y_axis": y_axis, "opacity": opacity,
-            "zero_line_y": zero_line_y, "tooltip_format": tooltip_format,
-            "stack_group": stack_group,
-        })
-
-    def column(self, x_col, y_col, fill_color="#4083FF", stroke_color=None,
-               bar_width=0.7, name=None, y_axis="y0", opacity=1.0,
-               tooltip_format=None, color_formula=None, stack_group=None):
-        self._series.append({
-            "type": "column", "x_col": x_col, "y_col": y_col,
-            "fill_color": fill_color, "stroke_color": stroke_color,
-            "bar_width": bar_width, "name": name, "y_axis": y_axis,
-            "opacity": opacity, "tooltip_format": tooltip_format,
-            "color_formula": color_formula, "stack_group": stack_group,
-        })
-
-    def candlestick(self, x_col, open_col, high_col, low_col, close_col,
-                    up_color="#26A69A", down_color="#EF5350", wick_color=None,
-                    body_width=0.6, name=None, y_axis="y0", opacity=1.0,
-                    tooltip_format=None, color_formula=None):
-        self._series.append({
-            "type": "candlestick", "x_col": x_col,
-            "open_col": open_col, "high_col": high_col,
-            "low_col": low_col, "close_col": close_col,
-            "up_color": up_color, "down_color": down_color,
-            "wick_color": wick_color, "body_width": body_width,
-            "name": name, "y_axis": y_axis, "opacity": opacity,
-            "tooltip_format": tooltip_format, "color_formula": color_formula,
-        })
-
-    def band(self, x_col, y_high_col, y_low_col, fill_color="#2196F320",
-             border_color=None, border_width=1.0, name=None, y_axis="y0",
-             opacity=1.0, tooltip_format=None):
-        self._series.append({
-            "type": "band", "x_col": x_col,
-            "y_high_col": y_high_col, "y_low_col": y_low_col,
-            "fill_color": fill_color, "border_color": border_color,
-            "border_width": border_width, "name": name,
-            "y_axis": y_axis, "opacity": opacity,
-            "tooltip_format": tooltip_format,
-        })
-
-    def impulse(self, x_col, y_col, color="#4083FF", name=None, width=1.0,
-                y_axis="y0", opacity=1.0, tooltip_format=None):
-        self._series.append({
-            "type": "impulse", "x_col": x_col, "y_col": y_col,
-            "color": color, "name": name, "width": width,
-            "y_axis": y_axis, "opacity": opacity,
-            "tooltip_format": tooltip_format,
-        })
-
-    def bubble(self, x_col, y_col, size_col, color="#4083FF", name=None,
-               y_axis="y0", opacity=0.7, tooltip_format=None):
-        self._series.append({
-            "type": "bubble", "x_col": x_col, "y_col": y_col,
-            "size_col": size_col, "color": color, "name": name,
-            "y_axis": y_axis, "opacity": opacity,
-            "tooltip_format": tooltip_format,
-        })
-
-    def error_bar(self, x_col, y_col, error_high_col, error_low_col=None,
-                  color="#4083FF", name=None, width=1.5, cap_width=6.0,
-                  y_axis="y0", opacity=1.0, tooltip_format=None):
-        self._series.append({
-            "type": "error_bar", "x_col": x_col, "y_col": y_col,
-            "error_high_col": error_high_col,
-            "error_low_col": error_low_col if error_low_col else error_high_col,
-            "color": color, "name": name, "width": width,
-            "cap_width": cap_width, "y_axis": y_axis, "opacity": opacity,
-            "tooltip_format": tooltip_format,
-        })
-
-    def box_plot(self, x_col, min_col, q1_col, median_col, q3_col, max_col,
-                 fill_color="#4083FF40", stroke_color="#4083FF",
-                 median_color="#FFFFFF", name=None, y_axis="y0",
-                 opacity=1.0, tooltip_format=None):
-        self._series.append({
-            "type": "box_plot", "x_col": x_col,
-            "min_col": min_col, "q1_col": q1_col,
-            "median_col": median_col, "q3_col": q3_col,
-            "max_col": max_col, "fill_color": fill_color,
-            "stroke_color": stroke_color, "median_color": median_color,
-            "name": name, "y_axis": y_axis, "opacity": opacity,
-            "tooltip_format": tooltip_format,
-        })
-
-    def waterfall(self, x_col, y_col, up_color="#26A69A", down_color="#EF5350",
-                  total_color="#4083FF", name=None, y_axis="y0",
-                  opacity=1.0, tooltip_format=None):
-        self._series.append({
-            "type": "waterfall", "x_col": x_col, "y_col": y_col,
-            "up_color": up_color, "down_color": down_color,
-            "total_color": total_color, "name": name,
-            "y_axis": y_axis, "opacity": opacity,
-            "tooltip_format": tooltip_format,
-        })
-
-    def histogram(self, y_col, bins=20, color="#4083FF", name=None,
-                  y_axis="y0", opacity=1.0, tooltip_format=None):
-        self._series.append({
-            "type": "histogram", "y_col": y_col, "bins": bins,
-            "color": color, "name": name, "y_axis": y_axis,
-            "opacity": opacity, "tooltip_format": tooltip_format,
-        })
-
-    def axis(self, axis_id, title=None, type="numeric", align="left",
-             range_mode="auto", visible_range_min=None, visible_range_max=None,
-             log_base=10, label_format=None):
-        self._axes.append({
-            "id": axis_id, "title": title, "type": type,
-            "align": align, "range_mode": range_mode,
-            "visible_range_min": visible_range_min,
-            "visible_range_max": visible_range_max,
-            "log_base": log_base, "label_format": label_format,
-        })
-
-    def legend(self, position="top-left", checkboxes=True):
-        self._legend = {"position": position, "checkboxes": checkboxes}
-
-    def hline(self, y, color="#FFFF00", label=None, thickness=1.0, opacity=0.8):
-        self._annotations.append({
-            "type": "horizontal_line", "y": y, "color": color,
-            "label": label, "thickness": thickness, "opacity": opacity,
-        })
-
-    def vline(self, x, color="#FFFF00", label=None, thickness=1.0, opacity=0.8):
-        self._annotations.append({
-            "type": "vertical_line", "x": x, "color": color,
-            "label": label, "thickness": thickness, "opacity": opacity,
-        })
-
-    def draggable_hline(self, id, y, color="#FFFF00", label=None,
-                        thickness=1.5, opacity=0.8):
-        self._annotations.append({
-            "type": "draggable_hline", "id": id, "y": y, "color": color,
-            "label": label, "thickness": thickness, "opacity": opacity,
-        })
-
-    def draggable_vline(self, id, x, color="#FFFF00", label=None,
-                        thickness=1.5, opacity=0.8):
-        self._annotations.append({
-            "type": "draggable_vline", "id": id, "x": x, "color": color,
-            "label": label, "thickness": thickness, "opacity": opacity,
-        })
-
-    def _to_config(self):
-        config = {
-            "series": self._series,
-            "axes": self._axes,
-            "annotations": self._annotations,
-        }
-        if self._legend is not None:
-            config["legend"] = self._legend
-        return config
-
-chart = ChartBridge()
-''';

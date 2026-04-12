@@ -9,20 +9,21 @@ import 'slash_menu.dart';
 /// Chat input composer with keyboard shortcuts and slash command popup.
 ///
 /// Keyboard behavior:
-///   Enter          → submit
+///   Enter          → submit (or select highlighted item)
 ///   Shift+Enter    → insert newline
 ///   CMD/Ctrl+Enter → submit
 ///   Escape         → dismiss slash menu / exit arg phase / clear input
+///   Tab            → common-prefix complete, or select highlighted item
+///   Arrow Up/Down  → navigate slash menu items
 ///
 /// Two-phase slash menu:
 ///   Phase 1 (commands): type `/` to see commands, pick one
 ///   Phase 2 (args): if the command has arg suggestions, show them
 ///     for the user to pick or type-filter
 ///
-/// The slash menu floats above the input via Positioned + FractionalTranslation
-/// inside a Stack. The inputRow alone defines the Stack's size, so the menu
-/// never causes layout shifts. clipBehavior: Clip.none lets it render outside
-/// the Stack bounds into the message list area above.
+/// The slash menu sits above the input in a Column layout. A GlobalKey on
+/// the inputRow prevents TextField unmount/remount (which kills focus)
+/// when the menu appears or disappears.
 class ChatComposer extends StatefulWidget {
   final String hintText;
   final List<SlashCommand> slashCommands;
@@ -51,6 +52,7 @@ class ChatComposer extends StatefulWidget {
 
 class _ChatComposerState extends State<ChatComposer> {
   final TextEditingController _textController = TextEditingController();
+  final GlobalKey _inputRowKey = GlobalKey();
   late final FocusNode _focusNode;
   bool _showSlashMenu = false;
   String _slashFilter = '';
@@ -58,6 +60,24 @@ class _ChatComposerState extends State<ChatComposer> {
   // Two-phase arg selection state
   SlashCommand? _selectedCommand; // non-null = arg phase
   String _argFilter = '';
+  int _highlightedIndex = -1; // keyboard-navigated item in slash menu
+  final GlobalKey _highlightedItemKey = GlobalKey();
+
+  /// Scroll the slash menu ListView to keep the highlighted item visible.
+  /// Two-pass approach: only scrolls if the item is actually off-screen.
+  void _scrollToHighlighted() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final ctx = _highlightedItemKey.currentContext;
+      if (ctx == null) return;
+      // keepVisibleAtEnd scrolls only if item is below viewport.
+      // keepVisibleAtStart scrolls only if item is above viewport.
+      // If already visible, neither pass scrolls.
+      Scrollable.ensureVisible(ctx,
+          alignmentPolicy: ScrollPositionAlignmentPolicy.keepVisibleAtEnd);
+      Scrollable.ensureVisible(ctx,
+          alignmentPolicy: ScrollPositionAlignmentPolicy.keepVisibleAtStart);
+    });
+  }
 
   @override
   void initState() {
@@ -80,7 +100,6 @@ class _ChatComposerState extends State<ChatComposer> {
     // Escape handling
     if (event.logicalKey == LogicalKeyboardKey.escape) {
       if (_selectedCommand != null) {
-        // In arg phase → back to command phase
         _exitArgPhase();
         return KeyEventResult.handled;
       }
@@ -89,30 +108,64 @@ class _ChatComposerState extends State<ChatComposer> {
         setState(() {
           _showSlashMenu = false;
           _slashFilter = '';
+          _highlightedIndex = -1;
         });
         return KeyEventResult.handled;
       }
       return KeyEventResult.ignored;
     }
 
-    // Tab handling — auto-complete slash command instead of tab-order navigation
+    // Arrow key handling — navigate slash menu items
+    if (event.logicalKey == LogicalKeyboardKey.arrowDown && _showSlashMenu) {
+      final count = _selectedCommand != null
+          ? _filteredArgs().length
+          : _filteredCommands().length;
+      if (count > 0) {
+        setState(() {
+          _highlightedIndex = (_highlightedIndex + 1) % count;
+        });
+        _scrollToHighlighted();
+      }
+      return KeyEventResult.handled;
+    }
+    if (event.logicalKey == LogicalKeyboardKey.arrowUp && _showSlashMenu) {
+      final count = _selectedCommand != null
+          ? _filteredArgs().length
+          : _filteredCommands().length;
+      if (count > 0) {
+        setState(() {
+          _highlightedIndex =
+              _highlightedIndex <= 0 ? count - 1 : _highlightedIndex - 1;
+        });
+        _scrollToHighlighted();
+      }
+      return KeyEventResult.handled;
+    }
+
+    // Tab handling — auto-complete or select highlighted item
     if (event.logicalKey == LogicalKeyboardKey.tab) {
       if (_selectedCommand != null) {
-        // In arg phase — select best arg match
-        final match = _bestArgMatch();
-        if (match != null) {
-          _onSlashArgSelected(match);
+        if (_highlightedIndex >= 0) {
+          final filtered = _filteredArgs();
+          if (_highlightedIndex < filtered.length) {
+            _onSlashArgSelected(filtered[_highlightedIndex]);
+          }
+        } else {
+          _tabCompleteArgs();
         }
         return KeyEventResult.handled;
       }
       if (_showSlashMenu) {
-        final match = _bestSlashMatch();
-        if (match != null) {
-          _onSlashCommandSelected(match);
+        if (_highlightedIndex >= 0) {
+          final filtered = _filteredCommands();
+          if (_highlightedIndex < filtered.length) {
+            _onSlashCommandSelected(filtered[_highlightedIndex]);
+          }
+        } else {
+          _tabCompleteCommands();
         }
         return KeyEventResult.handled;
       }
-      // No slash menu — still consume Tab to prevent focus escape
       if (_textController.text.startsWith('/')) {
         return KeyEventResult.handled;
       }
@@ -121,38 +174,49 @@ class _ChatComposerState extends State<ChatComposer> {
 
     // Enter handling
     if (event.logicalKey == LogicalKeyboardKey.enter) {
-      // Shift+Enter → insert newline (let TextField handle it)
       if (HardwareKeyboard.instance.isShiftPressed) {
         return KeyEventResult.ignored;
       }
-      // In arg phase → select best arg match or submit as-is
+      // In arg phase → select highlighted, best match, or submit as-is
       if (_selectedCommand != null) {
+        if (_highlightedIndex >= 0) {
+          final filtered = _filteredArgs();
+          if (_highlightedIndex < filtered.length) {
+            _onSlashArgSelected(filtered[_highlightedIndex]);
+            return KeyEventResult.handled;
+          }
+        }
         final match = _bestArgMatch();
         if (match != null) {
           _onSlashArgSelected(match);
         } else {
-          // Submit as-is (user typed a custom value)
           _submit();
         }
         return KeyEventResult.handled;
       }
-      // If slash menu is showing, Enter always submits the command
-      // (Tab/space are the triggers for entering arg phase)
+      // Slash menu: select highlighted or best match, then submit
       if (_showSlashMenu) {
-        final match = _bestSlashMatch();
-        if (match != null) {
-          _textController.text = match.command;
+        SlashCommand? cmd;
+        if (_highlightedIndex >= 0) {
+          final filtered = _filteredCommands();
+          if (_highlightedIndex < filtered.length) {
+            cmd = filtered[_highlightedIndex];
+          }
+        }
+        cmd ??= _bestSlashMatch();
+        if (cmd != null) {
+          _textController.text = cmd.command;
           setState(() {
             _showSlashMenu = false;
             _slashFilter = '';
             _selectedCommand = null;
             _argFilter = '';
+            _highlightedIndex = -1;
           });
           _submit();
           return KeyEventResult.handled;
         }
       }
-      // Bare Enter or CMD/Ctrl+Enter → submit
       _submit();
       return KeyEventResult.handled;
     }
@@ -170,6 +234,7 @@ class _ChatComposerState extends State<ChatComposer> {
       _slashFilter = '';
       _selectedCommand = null;
       _argFilter = '';
+      _highlightedIndex = -1;
     });
     widget.onSubmit(text);
 
@@ -178,6 +243,7 @@ class _ChatComposerState extends State<ChatComposer> {
   }
 
   void _onTextChanged(String text) {
+    _highlightedIndex = -1; // Reset highlight on any text change
     if (_selectedCommand != null) {
       // In arg phase — extract filter text after the command prefix
       final prefix = '${_selectedCommand!.command} ';
@@ -233,6 +299,7 @@ class _ChatComposerState extends State<ChatComposer> {
     setState(() {
       _selectedCommand = null;
       _argFilter = '';
+      _highlightedIndex = -1;
       _textController.text = '/';
       _textController.selection = TextSelection.fromPosition(
         TextPosition(offset: _textController.text.length),
@@ -283,6 +350,108 @@ class _ChatComposerState extends State<ChatComposer> {
     return null;
   }
 
+  /// Filtered commands in category order (matches SlashMenu visual layout).
+  List<SlashCommand> _filteredCommands() {
+    final filtered = widget.slashCommands.where((cmd) {
+      final name = cmd.command.substring(1).toLowerCase();
+      return name.startsWith(_slashFilter) ||
+          cmd.label.toLowerCase().contains(_slashFilter);
+    }).toList();
+
+    // Replicate SlashMenu's category grouping order
+    final grouped = <String, List<SlashCommand>>{};
+    for (final cmd in filtered) {
+      final cat = cmd.category ?? '';
+      grouped.putIfAbsent(cat, () => []).add(cmd);
+    }
+    final ordered = <SlashCommand>[];
+    for (final cat in slashCategoryOrder) {
+      final cmds = grouped.remove(cat);
+      if (cmds != null) ordered.addAll(cmds);
+    }
+    for (final cmds in grouped.values) {
+      ordered.addAll(cmds);
+    }
+    return ordered;
+  }
+
+  /// Filtered args for the current command.
+  List<SlashArg> _filteredArgs() {
+    final argList = _selectedCommand?.args ?? [];
+    if (_argFilter.isEmpty) return argList;
+    return argList.where((a) {
+      return a.value.toLowerCase().contains(_argFilter) ||
+          (a.label?.toLowerCase().contains(_argFilter) ?? false);
+    }).toList();
+  }
+
+  /// Longest common prefix of a list of strings (case-insensitive match).
+  static String _longestCommonPrefix(List<String> strings) {
+    if (strings.isEmpty) return '';
+    var prefix = strings.first;
+    for (final s in strings.skip(1)) {
+      var i = 0;
+      while (i < prefix.length &&
+          i < s.length &&
+          prefix[i].toLowerCase() == s[i].toLowerCase()) {
+        i++;
+      }
+      prefix = prefix.substring(0, i);
+      if (prefix.isEmpty) return '';
+    }
+    return prefix;
+  }
+
+  /// Tab-complete commands: common prefix or select first match.
+  void _tabCompleteCommands() {
+    final filtered = _filteredCommands();
+    if (filtered.isEmpty) return;
+    if (filtered.length == 1) {
+      _onSlashCommandSelected(filtered.first);
+      return;
+    }
+    // Multiple matches — try common prefix
+    final names = filtered.map((c) => c.command.substring(1)).toList();
+    final prefix = _longestCommonPrefix(names);
+    if (prefix.length > _slashFilter.length) {
+      _textController.text = '/$prefix';
+      _textController.selection = TextSelection.fromPosition(
+        TextPosition(offset: _textController.text.length),
+      );
+      setState(() {
+        _slashFilter = prefix.toLowerCase();
+        _highlightedIndex = -1;
+      });
+    } else {
+      // Can't extend further — select first match
+      _onSlashCommandSelected(filtered.first);
+    }
+  }
+
+  /// Tab-complete args: common prefix or select first match.
+  void _tabCompleteArgs() {
+    final filtered = _filteredArgs();
+    if (filtered.isEmpty) return;
+    if (filtered.length == 1) {
+      _onSlashArgSelected(filtered.first);
+      return;
+    }
+    final values = filtered.map((a) => a.value).toList();
+    final prefix = _longestCommonPrefix(values);
+    if (prefix.length > _argFilter.length) {
+      _textController.text = '${_selectedCommand!.command} $prefix';
+      _textController.selection = TextSelection.fromPosition(
+        TextPosition(offset: _textController.text.length),
+      );
+      setState(() {
+        _argFilter = prefix.toLowerCase();
+        _highlightedIndex = -1;
+      });
+    } else {
+      _onSlashArgSelected(filtered.first);
+    }
+  }
+
   void _onSlashCommandSelected(SlashCommand cmd) {
     if (cmd.hasArgs) {
       // Enter arg phase — show arg suggestions
@@ -296,6 +465,7 @@ class _ChatComposerState extends State<ChatComposer> {
         _slashFilter = '';
         _selectedCommand = cmd;
         _argFilter = '';
+        _highlightedIndex = -1;
       });
     } else {
       // No args — auto-submit immediately
@@ -305,6 +475,7 @@ class _ChatComposerState extends State<ChatComposer> {
         _slashFilter = '';
         _selectedCommand = null;
         _argFilter = '';
+        _highlightedIndex = -1;
       });
       _submit();
     }
@@ -319,15 +490,15 @@ class _ChatComposerState extends State<ChatComposer> {
       _slashFilter = '';
       _selectedCommand = null;
       _argFilter = '';
+      _highlightedIndex = -1;
     });
     _submit();
   }
 
   @override
   Widget build(BuildContext context) {
-    // The slash menu floats above the input row via a Stack so it doesn't
-    // push the input/buttons out of the window bounds.
     final inputRow = Container(
+          key: _inputRowKey,
           padding: const EdgeInsets.all(8),
           decoration: const BoxDecoration(
             border: Border(
@@ -417,45 +588,37 @@ class _ChatComposerState extends State<ChatComposer> {
           ),
         );
 
-    // CRITICAL: Always return a Stack so the TextField is never
-    // unmounted/remounted (which kills focus). The inputRow is the only
-    // non-Positioned child, so it alone defines the Stack's layout size.
-    // The slash menu floats above via Positioned + FractionalTranslation,
-    // causing zero layout shift regardless of menu size changes.
-    return Stack(
-      clipBehavior: Clip.none,
+    // The slash menu sits above the input in a Column. The GlobalKey on
+    // inputRow preserves TextField focus when the menu appears/disappears
+    // (prevents unmount/remount when Column children change).
+    return Column(
+      mainAxisSize: MainAxisSize.min,
       children: [
-        // Input row — defines the Stack's intrinsic size
-        inputRow,
-        // Slash menu — floats above the input, outside Stack bounds
         if (_showSlashMenu)
-          Positioned(
-            left: 8,
-            right: 8,
-            bottom: 0,
-            child: FractionalTranslation(
-              translation: const Offset(0, -1),
-              child: Padding(
-                padding: const EdgeInsets.only(bottom: 4),
-                child: _selectedCommand != null
-                    ? SlashMenu(
-                        commands: widget.slashCommands,
-                        filter: _slashFilter,
-                        onSelected: _onSlashCommandSelected,
-                        mode: SlashMenuMode.args,
-                        args: _selectedCommand!.args,
-                        onArgSelected: _onSlashArgSelected,
-                        selectedCommandLabel: _selectedCommand!.command,
-                        argFilter: _argFilter,
-                      )
-                    : SlashMenu(
-                        commands: widget.slashCommands,
-                        filter: _slashFilter,
-                        onSelected: _onSlashCommandSelected,
-                      ),
-              ),
-            ),
+          Padding(
+            padding: const EdgeInsets.only(left: 8, right: 8, bottom: 4),
+            child: _selectedCommand != null
+                ? SlashMenu(
+                    commands: widget.slashCommands,
+                    filter: _slashFilter,
+                    onSelected: _onSlashCommandSelected,
+                    mode: SlashMenuMode.args,
+                    args: _selectedCommand!.args,
+                    onArgSelected: _onSlashArgSelected,
+                    selectedCommandLabel: _selectedCommand!.command,
+                    argFilter: _argFilter,
+                    highlightedIndex: _highlightedIndex,
+                    highlightedItemKey: _highlightedItemKey,
+                  )
+                : SlashMenu(
+                    commands: widget.slashCommands,
+                    filter: _slashFilter,
+                    onSelected: _onSlashCommandSelected,
+                    highlightedIndex: _highlightedIndex,
+                    highlightedItemKey: _highlightedItemKey,
+                  ),
           ),
+        inputRow,
       ],
     );
   }

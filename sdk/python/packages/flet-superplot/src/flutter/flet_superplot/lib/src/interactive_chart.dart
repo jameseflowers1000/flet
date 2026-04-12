@@ -7,6 +7,8 @@ import 'package:flutter/scheduler.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/services.dart';
 
+import 'debug_log.dart'
+    if (dart.library.io) 'debug_log_io.dart';
 import 'models/axis_model.dart';
 import 'models/series_model.dart';
 import 'painters/chart_painter.dart';
@@ -217,6 +219,13 @@ class _InteractiveChartState extends State<InteractiveChart>
   @override
   void didUpdateWidget(InteractiveChart oldWidget) {
     super.didUpdateWidget(oldWidget);
+    final seriesChanged = widget.series.length != oldWidget.series.length;
+    final buffersChanged = widget.dataBuffers.generation != oldWidget.dataBuffers.generation;
+    if (seriesChanged || buffersChanged) {
+      superplotLog('[InteractiveChart] didUpdateWidget: series ${oldWidget.series.length}→${widget.series.length}, '
+          'bufferGen ${oldWidget.dataBuffers.generation}→${widget.dataBuffers.generation}, '
+          'userZoomed=$_userHasZoomed');
+    }
     // If parent pushes new axis config while user hasn't zoomed, respect it
     if (!_userHasZoomed) {
       ChartPainter.resetAutoRange();

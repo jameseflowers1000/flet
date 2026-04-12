@@ -18,6 +18,7 @@ class EpyxGridSource {
   final List<String> columnDtypes;
   final List<String> columnFormats;
   final List<String> columnDisplayCodes;
+  final List<String> columnStyleCodes;
   final List<double> _columnWidths;
 
   // -- Row data (display-formatted strings) --
@@ -31,9 +32,6 @@ class EpyxGridSource {
 
   // -- Hidden columns (set of column names) --
   final Set<String> hiddenColumns;
-
-  // -- LOD buffer start: absolute row index of the first row in the buffer --
-  final int bufferStart;
 
   // -- Styling properties (ST1-ST18) --
   final Color headerBgColor;
@@ -52,7 +50,7 @@ class EpyxGridSource {
   final double gridLineWidth;
   final double currentCellBorderWidth;
   final double rowHeight;
-  final Map<int, double> perRowHeights;  // sparse: {row_idx: height}
+  final List<double> perRowHeights;  // per-row heights (empty = use uniform rowHeight)
   final double headerRowHeight;
 
   EpyxGridSource({
@@ -62,12 +60,12 @@ class EpyxGridSource {
     required this.columnDtypes,
     this.columnFormats = const [],
     this.columnDisplayCodes = const [],
+    this.columnStyleCodes = const [],
     required List<double> columnWidths,
     required this.rows,
     this.cellStyles = const [],
     this.overrideCells = const {},
     this.hiddenColumns = const {},
-    this.bufferStart = 0,
     this.headerBgColor = const Color(0xFF2D2D30),
     this.headerTextColor = Colors.white,
     this.gridLineColor = const Color(0xFF3E3E42),
@@ -84,7 +82,7 @@ class EpyxGridSource {
     this.gridLineWidth = 1.0,
     this.currentCellBorderWidth = 2.0,
     this.rowHeight = 36.0,
-    this.perRowHeights = const {},
+    this.perRowHeights = const [],
     this.headerRowHeight = 40.0,
   }) : _columnWidths = columnWidths;
 
@@ -116,6 +114,8 @@ class EpyxGridSource {
         cols.map<String>((c) => (c["format"] as String?) ?? "").toList();
     final displayCodes =
         cols.map<String>((c) => (c["display_code"] as String?) ?? "").toList();
+    final styleCodes =
+        cols.map<String>((c) => (c["style_code"] as String?) ?? "").toList();
 
     // Column widths: use persisted width if set, else default 120px
     final widths = List<double>.generate(cols.length, (i) {
@@ -165,12 +165,12 @@ class EpyxGridSource {
       columnDtypes: dtypes,
       columnFormats: formats,
       columnDisplayCodes: displayCodes,
+      columnStyleCodes: styleCodes,
       columnWidths: widths,
       rows: parsedRows,
       cellStyles: styles,
       overrideCells: overrides,
       hiddenColumns: hidden,
-      bufferStart: control.getInt("buffer_start", 0) ?? 0,
       headerBgColor: color("header_bg_color", const Color(0xFF2D2D30)),
       headerTextColor: color("header_text_color", Colors.white),
       gridLineColor: color("grid_line_color", const Color(0xFF3E3E42)),
@@ -195,21 +195,21 @@ class EpyxGridSource {
     );
   }
 
-  /// Parse row_heights JSON — sparse map {"row_idx": height}.
-  static Map<int, double> _parseRowHeights(String? json) {
-    if (json == null || json.isEmpty) return const {};
+  /// Parse row_heights JSON string → list of doubles.
+  static List<double> _parseRowHeights(String? json) {
+    if (json == null || json.isEmpty) return const [];
     try {
-      final parsed = jsonDecode(json) as Map<String, dynamic>;
-      return parsed.map((k, v) => MapEntry(int.parse(k), (v as num).toDouble()));
+      final parsed = jsonDecode(json) as List;
+      return parsed.map<double>((e) => (e as num).toDouble()).toList();
     } catch (_) {
-      return const {};
+      return const [];
     }
   }
 
-  /// Height of a specific row (override if set, else uniform default).
-  /// [row] is buffer-relative; perRowHeights keys are ABSOLUTE.
+  /// Height of a specific row (per-row if set, else uniform).
   double getRowHeight(int row) {
-    return perRowHeights[bufferStart + row] ?? rowHeight;
+    if (row < perRowHeights.length) return perRowHeights[row];
+    return rowHeight;
   }
 
   /// Whether per-row heights are active.
@@ -219,24 +219,6 @@ class EpyxGridSource {
 
   int get rowCount => rows.length;
   int get columnCount => columns.length;
-
-  /// Absolute row index of the last row + 1 in the buffer.
-  int get bufferEnd => bufferStart + rowCount;
-
-  /// Convert absolute row index to buffer-relative index.
-  /// Returns -1 if the row is not in the buffer.
-  int toBufferIndex(int absRow) {
-    final rel = absRow - bufferStart;
-    if (rel < 0 || rel >= rowCount) return -1;
-    return rel;
-  }
-
-  /// Convert buffer-relative index to absolute row index.
-  int toAbsoluteRow(int bufferIndex) => bufferStart + bufferIndex;
-
-  /// Is the given absolute row within the buffer?
-  bool isInBuffer(int absRow) =>
-      absRow >= bufferStart && absRow < bufferEnd;
 
   String columnName(int i) => columnNames[i];
   String columnLabel(int i) => columnLabels[i];
@@ -296,6 +278,12 @@ class EpyxGridSource {
   String displayCode(int col) {
     if (col >= columnDisplayCodes.length) return "";
     return columnDisplayCodes[col];
+  }
+
+  /// Get the style_code for a column (or empty string).
+  String styleCode(int col) {
+    if (col >= columnStyleCodes.length) return "";
+    return columnStyleCodes[col];
   }
 
   /// Get the format string for a column (or empty string).

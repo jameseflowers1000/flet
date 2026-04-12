@@ -6,6 +6,8 @@ import 'package:flutter/material.dart';
 import 'package:flet_micropython/src/micropython_service.dart'
     if (dart.library.io) 'package:flet_micropython/src/micropython_service_native.dart';
 
+import '../debug_log.dart'
+    if (dart.library.io) '../debug_log_io.dart';
 import '../models/axis_model.dart';
 import '../models/series_model.dart';
 
@@ -3330,6 +3332,15 @@ class ChartPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant ChartPainter oldDelegate) {
+    if (oldDelegate.series.isNotEmpty && series.isEmpty) {
+      superplotLog('[ChartPainter] shouldRepaint: SERIES WENT EMPTY '
+          '(was ${oldDelegate.series.length}, now 0) — PLOT WILL VANISH');
+    }
+    if (oldDelegate.series.length != series.length ||
+        oldDelegate.dataBuffers.generation != dataBuffers.generation) {
+      superplotLog('[ChartPainter] shouldRepaint: series ${oldDelegate.series.length}→${series.length}, '
+          'bufferGen ${oldDelegate.dataBuffers.generation}→${dataBuffers.generation}');
+    }
     return oldDelegate.xAxis != xAxis ||
         oldDelegate.yAxis != yAxis ||
         oldDelegate.gestureActive != gestureActive ||

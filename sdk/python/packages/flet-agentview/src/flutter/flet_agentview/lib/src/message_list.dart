@@ -42,15 +42,55 @@ class _MessageListState extends State<MessageList> {
     }
 
     // reverse: true — index 0 is the newest message, shown at bottom.
+    // The extra item (highest index) is a compact placeholder at the top
+    // of the conversation history, so the icon/help text stay accessible.
     return ListView.builder(
       controller: _scrollController,
       reverse: true,
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      itemCount: widget.messages.length,
+      itemCount: widget.messages.length + 1,
       itemBuilder: (_, index) {
+        if (index == widget.messages.length) {
+          return _buildCompactPlaceholder();
+        }
         final msg = widget.messages[widget.messages.length - 1 - index];
         return _MessageBubble(message: msg);
       },
+    );
+  }
+
+  Widget _buildCompactPlaceholder() {
+    return Padding(
+      padding: const EdgeInsets.only(top: 16, bottom: 24),
+      child: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (widget.placeholderIcon.isNotEmpty)
+              Opacity(
+                opacity: 0.4,
+                child: Image.memory(
+                  base64Decode(widget.placeholderIcon),
+                  height: 40,
+                  filterQuality: FilterQuality.medium,
+                ),
+              )
+            else
+              Icon(Icons.chat_bubble_outline,
+                  color: AgentTheme.mutedTextColor.withValues(alpha: 0.4),
+                  size: 32),
+            const SizedBox(height: 8),
+            Text(
+              widget.placeholderText,
+              style: TextStyle(
+                color: AgentTheme.mutedTextColor.withValues(alpha: 0.5),
+                fontSize: 11,
+              ),
+              textAlign: TextAlign.center,
+            ),
+          ],
+        ),
+      ),
     );
   }
 

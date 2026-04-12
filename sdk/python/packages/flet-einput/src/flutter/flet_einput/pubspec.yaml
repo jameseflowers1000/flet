@@ -1,5 +1,5 @@
-name: flet_supertab
-description: Flet SuperTab control
+name: flet_einput
+description: Custom Flet input controls (text, slider) with on_key_code scripting
 version: 0.1.0
 publish_to: none
 
@@ -17,10 +17,7 @@ dependencies:
   flet_micropython:
     path: ../../../../flet-micropython/src/flutter/flet_micropython
 
-  super_sliver_list: ^0.4.1
-
 dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^3.0.0
-  

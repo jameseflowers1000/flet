@@ -34,6 +34,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_web_plugins/url_strategy.dart';
 import 'dart:convert';
 import 'dart:io';
+import 'package:flet_einput/flet_einput.dart' as flet_einput;
 import 'package:flet_supertab/flet_supertab.dart' as flet_supertab;
 import 'package:flet_superplot/flet_superplot.dart' as flet_superplot;
 import 'package:flet_agentview/flet_agentview.dart' as flet_agentview;
@@ -68,6 +69,7 @@ List<FletExtension> _buildExtensions() {
     flet_map.Extension(),
     flet_permission_handler.Extension(),
     // Epyx custom extensions:
+    flet_einput.Extension(),
     flet_supertab.Extension(),
     flet_superplot.Extension(),
     flet_agentview.Extension(),

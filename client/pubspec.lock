@@ -439,6 +439,13 @@ packages:
       relative: true
     source: path
     version: "0.1.0"
+  flet_einput:
+    dependency: "direct main"
+    description:
+      path: "../sdk/python/packages/flet-einput/src/flutter/flet_einput"
+      relative: true
+    source: path
+    version: "0.1.0"
   flet_flashlight:
     dependency: "direct main"
     description:
@@ -1654,6 +1661,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "1.4.1"
+  super_sliver_list:
+    dependency: "direct main"
+    description:
+      name: super_sliver_list
+      sha256: b1e1e64d08ce40e459b9bb5d9f8e361617c26b8c9f3bb967760b0f436b6e3f56
+      url: "https://pub.dev"
+    source: hosted
+    version: "0.4.1"
   sync_http:
     dependency: transitive
     description:
@@ -1669,13 +1684,6 @@ packages:
       sha256: a7cc6eaed797806890de86b208b2094e66f61e278457867677a29b040ed56879
       url: "https://pub.dev"
     source: hosted
-    version: "32.2.7"
-  syncfusion_flutter_datagrid:
-    dependency: transitive
-    description:
-      path: "../vendor/syncfusion_flutter_datagrid"
-      relative: true
-    source: path
     version: "32.2.7"
   synchronized:
     dependency: transitive

@@ -3,7 +3,8 @@ import 'package:flutter/material.dart';
 import 'models.dart';
 
 /// Category display order and labels for the slash menu.
-const _categoryOrder = [
+const slashCategoryOrder = [
+  'context',
   'navigation',
   'control',
   'code',
@@ -13,7 +14,8 @@ const _categoryOrder = [
   'layout',
 ];
 
-const _categoryLabels = {
+const slashCategoryLabels = {
+  'context': 'CONTEXT',
   'navigation': 'NAVIGATION',
   'control': 'CONTROLS',
   'code': 'CODE',
@@ -44,6 +46,8 @@ class SlashMenu extends StatelessWidget {
   final ValueChanged<SlashArg>? onArgSelected;
   final String? selectedCommandLabel;
   final String argFilter;
+  final int highlightedIndex;
+  final GlobalKey? highlightedItemKey;
 
   const SlashMenu({
     super.key,
@@ -55,6 +59,8 @@ class SlashMenu extends StatelessWidget {
     this.onArgSelected,
     this.selectedCommandLabel,
     this.argFilter = '',
+    this.highlightedIndex = -1,
+    this.highlightedItemKey,
   });
 
   @override
@@ -83,19 +89,24 @@ class SlashMenu extends StatelessWidget {
 
     // Build ordered list of widgets (headers + items)
     final widgets = <Widget>[];
-    for (final cat in _categoryOrder) {
+    int cmdIdx = 0;
+    for (final cat in slashCategoryOrder) {
       final cmds = grouped.remove(cat);
       if (cmds == null || cmds.isEmpty) continue;
-      final label = _categoryLabels[cat] ?? cat.toUpperCase();
+      final label = slashCategoryLabels[cat] ?? cat.toUpperCase();
       widgets.add(_buildCategoryHeader(label));
       for (final cmd in cmds) {
-        widgets.add(_buildCommandTile(cmd));
+        widgets.add(
+            _buildCommandTile(cmd, highlighted: cmdIdx == highlightedIndex));
+        cmdIdx++;
       }
     }
     // Any uncategorized commands
     for (final cmds in grouped.values) {
       for (final cmd in cmds) {
-        widgets.add(_buildCommandTile(cmd));
+        widgets.add(
+            _buildCommandTile(cmd, highlighted: cmdIdx == highlightedIndex));
+        cmdIdx++;
       }
     }
 
@@ -107,7 +118,7 @@ class SlashMenu extends StatelessWidget {
         borderRadius: BorderRadius.circular(8),
         color: AgentTheme.inputBgColor,
         child: ConstrainedBox(
-          constraints: const BoxConstraints(maxHeight: 300, maxWidth: 320),
+          constraints: const BoxConstraints(maxHeight: 400, maxWidth: 320),
           child: ListView(
             shrinkWrap: true,
             padding: const EdgeInsets.symmetric(vertical: 4),
@@ -148,8 +159,11 @@ class SlashMenu extends StatelessWidget {
       ));
     }
 
+    int argIdx = 0;
     for (final arg in filtered) {
-      widgets.add(_buildArgTile(arg));
+      widgets.add(
+          _buildArgTile(arg, highlighted: argIdx == highlightedIndex));
+      argIdx++;
     }
 
     return ExcludeFocus(
@@ -158,7 +172,7 @@ class SlashMenu extends StatelessWidget {
         borderRadius: BorderRadius.circular(8),
         color: AgentTheme.inputBgColor,
         child: ConstrainedBox(
-          constraints: const BoxConstraints(maxHeight: 300, maxWidth: 320),
+          constraints: const BoxConstraints(maxHeight: 400, maxWidth: 320),
           child: ListView(
             shrinkWrap: true,
             padding: const EdgeInsets.symmetric(vertical: 4),
@@ -184,7 +198,7 @@ class SlashMenu extends StatelessWidget {
     );
   }
 
-  Widget _buildCommandTile(SlashCommand cmd) {
+  Widget _buildCommandTile(SlashCommand cmd, {bool highlighted = false}) {
     // Build subtitle: label + optional args_hint
     String subtitle = cmd.label;
     if (cmd.argsHint != null) {
@@ -192,8 +206,11 @@ class SlashMenu extends StatelessWidget {
     }
 
     return ListTile(
+      key: highlighted ? highlightedItemKey : null,
       dense: true,
       visualDensity: const VisualDensity(vertical: -3),
+      selected: highlighted,
+      selectedTileColor: AgentTheme.accentColor.withValues(alpha: 0.15),
       leading: Icon(
         AgentTheme.getIcon(cmd.icon),
         color: AgentTheme.accentColor,
@@ -201,30 +218,47 @@ class SlashMenu extends StatelessWidget {
       ),
       title: Text(
         cmd.command,
-        style: const TextStyle(color: Colors.white, fontSize: 12),
+        style: TextStyle(
+          color: highlighted ? AgentTheme.accentColor : Colors.white,
+          fontSize: 12,
+        ),
       ),
       subtitle: Text(
         subtitle,
-        style: const TextStyle(
-            color: AgentTheme.mutedTextColor, fontSize: 10),
+        style: TextStyle(
+          color: highlighted
+              ? AgentTheme.accentColor.withValues(alpha: 0.7)
+              : AgentTheme.mutedTextColor,
+          fontSize: 10,
+        ),
       ),
       onTap: () => onSelected(cmd),
     );
   }
 
-  Widget _buildArgTile(SlashArg arg) {
+  Widget _buildArgTile(SlashArg arg, {bool highlighted = false}) {
     return ListTile(
+      key: highlighted ? highlightedItemKey : null,
       dense: true,
       visualDensity: const VisualDensity(vertical: -3),
+      selected: highlighted,
+      selectedTileColor: AgentTheme.accentColor.withValues(alpha: 0.15),
       title: Text(
         arg.value,
-        style: const TextStyle(color: Colors.white, fontSize: 12),
+        style: TextStyle(
+          color: highlighted ? AgentTheme.accentColor : Colors.white,
+          fontSize: 12,
+        ),
       ),
       subtitle: arg.label != null && arg.label!.isNotEmpty
           ? Text(
               arg.label!,
-              style: const TextStyle(
-                  color: AgentTheme.mutedTextColor, fontSize: 10),
+              style: TextStyle(
+                color: highlighted
+                    ? AgentTheme.accentColor.withValues(alpha: 0.7)
+                    : AgentTheme.mutedTextColor,
+                fontSize: 10,
+              ),
             )
           : null,
       onTap: onArgSelected != null ? () => onArgSelected!(arg) : null,

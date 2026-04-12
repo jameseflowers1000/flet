@@ -8,6 +8,54 @@ import 'dart:js_interop_unsafe';
 class MicroPythonService {
   MicroPythonService._();
 
+  /// Registered prelude scripts, keyed by name. Each prelude is run via
+  /// exec() once MicroPython is ready, defining bridge classes etc. in
+  /// the global namespace. Names are arbitrary identifiers used for
+  /// deduplication and debugging.
+  static final Map<String, String> _preludes = {};
+
+  /// Whether preludes have been loaded into the running MicroPython instance.
+  static bool _preludesLoaded = false;
+
+  /// Register a prelude script that will be exec'd in the MicroPython
+  /// global namespace as soon as the runtime is ready. If the runtime is
+  /// already ready, the prelude is exec'd immediately.
+  ///
+  /// Each control package (flet-superplot, flet-supertab, etc.) calls this
+  /// at extension load time to install its bridge classes (chart, cell,
+  /// field, ...). The bridge classes become singletons in MicroPython's
+  /// global namespace, available to every render function evaluation.
+  ///
+  /// Calling registerPrelude with the same name twice replaces the entry
+  /// (the new source will be exec'd the next time preludes load).
+  static void registerPrelude(String name, String source) {
+    _preludes[name] = source;
+    if (isReady && _preludesLoaded) {
+      // Re-exec just this one
+      try {
+        exec(source);
+      } catch (e) {
+        // Best effort — caller may not care about failures
+      }
+    }
+  }
+
+  /// Run all registered preludes in the MicroPython namespace.
+  /// Called automatically by init() once the runtime is ready.
+  /// Idempotent — safe to call multiple times.
+  static void _loadPreludes() {
+    if (_preludesLoaded) return;
+    if (!isReady) return;
+    for (final entry in _preludes.entries) {
+      try {
+        exec(entry.value);
+      } catch (_) {
+        // Best effort — failures don't block other preludes
+      }
+    }
+    _preludesLoaded = true;
+  }
+
   /// Get the bridge namespace, or null if not loaded.
   static JSObject? get _ns {
     final ns = globalContext['_epyxMicroPython'];
@@ -46,13 +94,16 @@ class MicroPythonService {
 
   /// Initialize the MicroPython WASM runtime.
   ///
-  /// Returns a Future that completes when the runtime is ready.
+  /// Returns a Future that completes when the runtime is ready and all
+  /// registered preludes have been loaded into the global namespace.
   /// Safe to call multiple times — subsequent calls return immediately.
   static Future<void> init() async {
     final result = _call('init');
     if (result != null && result.isA<JSPromise>()) {
       await (result as JSPromise).toDart;
     }
+    // Load any preludes registered before init completed
+    _loadPreludes();
   }
 
   /// Whether the MicroPython runtime is loaded and ready.

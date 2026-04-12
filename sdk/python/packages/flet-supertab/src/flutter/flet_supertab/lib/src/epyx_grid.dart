@@ -10,11 +10,15 @@ import 'dart:convert';
 import 'dart:math' as math;
 
 import 'package:flet/flet.dart';
+import 'package:flet_micropython/flet_micropython.dart' show RenderPlaneControl;
 import 'package:flet_micropython/src/micropython_service.dart'
     if (dart.library.io) 'package:flet_micropython/src/micropython_service_native.dart';
+import 'package:flutter/foundation.dart' show defaultTargetPlatform, TargetPlatform;
 import 'package:flutter/material.dart';
+import 'package:super_sliver_list/super_sliver_list.dart';
 import 'package:flutter/services.dart';
 
+import 'epyx_grid_cache.dart';
 import 'epyx_grid_source.dart';
 import 'epyx_grid_test_api.dart';
 
@@ -30,6 +34,18 @@ class EpyxGrid extends StatefulWidget {
 }
 
 class _EpyxGridState extends State<EpyxGrid> {
+  // -- Pixel-space LOD cache --
+  final GridCache _cache = GridCache();
+  int _lastDataVersion = -1;
+  // Pending pixel-page request range: when a page request fires for target T
+  // with context 150, we mark [T-150, T+150) as "requested".  Any new request
+  // whose target falls inside that range is skipped until the response arrives
+  // and clears the range.  This prevents the prefetch storm where targets
+  // 150, 151, 152... each fire a near-identical 300-row request.
+  int _pendingRangeStart = -1;
+  int _pendingRangeEnd   = -1;
+  int _lastPageToken = 0; // atomic dedup: only merge when Python pushes new data
+
   // -- Data parsed from control properties --
   late EpyxGridSource _source;
   bool _sourceNeedsRebuild = true;
@@ -57,6 +73,7 @@ class _EpyxGridState extends State<EpyxGrid> {
   bool _isCodeMode = false;
   String _editValue = '';
   String _editOriginalValue = '';
+  String? _editPrompt;  // ephemeral prompt shown as italic prefix during editing
   final TextEditingController _editController = TextEditingController();
   final FocusNode _editFocusNode = FocusNode();
 
@@ -71,7 +88,6 @@ class _EpyxGridState extends State<EpyxGrid> {
   String _lastRowsJson = '';
   String _lastColsJson = '';
   int _lastTotalRows = 0;
-  int _lastBufferStart = 0;
   String _lastStylesJson = '';
   String _lastOverridesJson = '';
   String _lastHiddenJson = '';
@@ -103,29 +119,18 @@ class _EpyxGridState extends State<EpyxGrid> {
   Map<String, Map<String, String>?> _cellRenderCache = {};
   String _lastRenderCode = '';
   String _lastRowRenderCode = '';
-  String _lastRowHeightsJson = '';
   double _lastRowHeight = 36.0;
-  int _lastDataVersion = 0;
 
-  // ── LOD event-queue state ──────────────────────────────────────
-  // Buffer: rows cached by ABSOLUTE row index.
-  // Key = absolute row index, value = row data (list of cell values).
-  final Map<int, List<Object?>> _rowBuffer = {};
-
-  // Cell styles buffer: absolute row index → list of per-cell style maps.
-  final Map<int, List<Map<String, String>?>> _cellStyleBuffer = {};
-
-  // Override cells buffer: set of "absRow:colName" strings.
-  final Set<String> _overrideBuffer = {};
-
-  // Row height overrides buffer: absolute row index → height.
-  final Map<int, double> _rowHeightBuffer = {};
-
-  // Event queue: pending display events that may need data not yet in buffer.
-  final List<_DisplayEvent> _displayQueue = [];
-
-  // Track in-flight page requests to avoid duplicates.
-  final Set<int> _pendingPageRequests = {};
+  // -- on_key projection (Phase 5 finish) --
+  // Pulled from RenderPlaneControl's static registry, keyed by this grid's
+  // own Flet control id. The user's spec_code `def on_key(...)` body is
+  // wrapped by project_render_funcs as a callable; we eval it via
+  // MicroPythonService.execEval on each key press. Replaces the legacy
+  // line-split-bare-statement path that used `_onKeyCodeCached` from a
+  // page_data blob.
+  Map<String, dynamic>? _onKeyProjection;
+  String _onKeyHostId = '';
+  VoidCallback? _onKeyProjectionUnsubscribe;
 
 
   @override
@@ -138,10 +143,23 @@ class _EpyxGridState extends State<EpyxGrid> {
     // When Python pushes new data via _sync_to_control(), the Control
     // notifies listeners. We must rebuild the source to pick up new data.
     widget.control.addListener(_onControlChanged);
+    // Subscribe to the on_key projection on the shared RenderPlane,
+    // keyed by this grid's own Flet control id. Initial fetch + listener
+    // for future projection updates.
+    _onKeyHostId = widget.control.id.toString();
+    _refreshOnKeyProjection();
+    _onKeyProjectionUnsubscribe = RenderPlaneControl.addListener(
+        _onKeyHostId, _refreshOnKeyProjection);
+    // Process the initial control state — properties were set before
+    // the listener was registered, so no notification fired for them.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _onControlChanged();
+    });
   }
 
   @override
   void dispose() {
+    _onKeyProjectionUnsubscribe?.call();
     widget.control.removeListener(_onControlChanged);
     _yController.removeListener(_onVerticalScroll);
     _yController.dispose();
@@ -155,6 +173,15 @@ class _EpyxGridState extends State<EpyxGrid> {
     super.dispose();
   }
 
+  void _refreshOnKeyProjection() {
+    if (_onKeyHostId.isEmpty) {
+      _onKeyProjection = null;
+      return;
+    }
+    _onKeyProjection =
+        RenderPlaneControl.getProjection(_onKeyHostId, 'on_key');
+  }
+
   void _onControlChanged() {
     if (!mounted) return;
 
@@ -165,8 +192,8 @@ class _EpyxGridState extends State<EpyxGrid> {
         final errors = jsonDecode(valErrors) as List;
         final keys = errors.map<String>((e) => '${e["row"]}:${e["col"]}').toSet();
         setState(() => _validationErrorCells = keys);
-        // Auto-clear after 10 seconds
-        Future.delayed(const Duration(seconds: 10), () {
+        // Auto-clear after 3 seconds
+        Future.delayed(const Duration(seconds: 3), () {
           if (mounted) {
             setState(() => _validationErrorCells.clear());
           }
@@ -187,131 +214,316 @@ class _EpyxGridState extends State<EpyxGrid> {
       setState(() {}); // force rebuild with new scripts
     }
 
-    // Two change paths:
-    // 1. data_version bump from Python → clear cache, re-request current page
-    // 2. Page response (rows + buffer_start) → merge into cache
+    // -- Pixel-space LOD: two paths --
+    // Path 1: data_version changed → clear cache, rebuild source for columns
+    // Path 2: page response (rows + pixel_offsets) → merge into cache
     final newDataVersion = widget.control.getInt("data_version", 0) ?? 0;
-    final newRows = widget.control.getString("rows") ?? '';
-    final newCols = widget.control.getString("columns") ?? '';
     final newTotalRows = widget.control.getInt("total_rows", 0) ?? 0;
-    final newBufferStart = widget.control.getInt("buffer_start", 0) ?? 0;
-    final newHidden = widget.control.getString("hidden_columns") ?? '';
-    final newSummary = widget.control.getString("summary_row") ?? '';
+    final newTotalHeight = widget.control.getDouble("total_height", 0.0) ?? 0.0;
     final newRowHeight = widget.control.getDouble("row_height", 36.0) ?? 36.0;
 
-    // Path 1: data_version changed → data is fresh from Python.
-    // DON'T clear buffer or scroll. Merge incoming rows, rebuild source.
-    // If the user is scrolled to a different page, that page's stale
-    // data will be refreshed when they scroll back (next page_request).
     if (newDataVersion != _lastDataVersion) {
+      // Path 1: data version changed — clear cache, merge fresh data.
       _lastDataVersion = newDataVersion;
-      // Column structure change → must clear
-      if (newCols != _lastColsJson) {
-        _clearBuffer();
-        _displayQueue.clear();
+      _cache.clear();
+      _cache.totalRows = newTotalRows;
+      _cache.totalHeight = newTotalHeight;
+      _cache.defaultRowHeight = newRowHeight;
+      _pendingRangeStart = -1;
+      _pendingRangeEnd = -1;
+      _lastPageToken = 0; // reset so path 2 merges fresh data
+
+      // Merge from atomic page_data blob if present.
+      _tryMergePageData();
+
+      // Force rebuild
+      setState(() {
+        _sourceNeedsRebuild = true;
+        _invalidateRenderCaches();
+      });
+
+      // Request data for current viewport position.
+      // The initial page covers rows 0-149 but user may be elsewhere.
+      if (newTotalRows > 0) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) return;
+          final currentRow = _yController.hasClients
+              ? (_yController.offset / newRowHeight).floor().clamp(0, newTotalRows - 1)
+              : 0;
+          if (!_cache.has(currentRow)) {
+            _requestPixelPage(currentRow);
+          }
+        });
       }
-      // Fall through to path 2 to merge the incoming rows
+
+      // Path 1 complete — skip path 2
+      // Fall through to the data-change detection below for column/style updates.
+    } else {
+      // Always update cache metadata (totalRows may change without version bump)
+      _cache.totalRows = newTotalRows;
+      _cache.totalHeight = newTotalHeight;
+      _cache.defaultRowHeight = newRowHeight;
+
+      // Path 2: merge page response if pixel offsets are present.
+      // Merge from atomic page_data blob.
+      if (_tryMergePageData()) {
+        setState(() {});
+      }
     }
 
-    // Path 2: page response — merge rows into buffer
+    // Skip full rebuild if data hasn't changed.
+    final newRows = widget.control.getString("rows") ?? '';
+    final newCols = widget.control.getString("columns") ?? '';
     final newStyles = widget.control.getString("cell_styles") ?? '';
     final newOverrides = widget.control.getString("override_cells") ?? '';
-    final newRowHeights = widget.control.getString("row_heights") ?? '';
-    final dataKey = '$newRows|$newCols|$newTotalRows|$newBufferStart|$newStyles|$newOverrides|$newHidden|$newSummary|$newRowHeights|$newRowHeight';
-    final oldKey = '$_lastRowsJson|$_lastColsJson|$_lastTotalRows|$_lastBufferStart|$_lastStylesJson|$_lastOverridesJson|$_lastHiddenJson|$_lastSummaryJson|$_lastRowHeightsJson|$_lastRowHeight';
+    final newHidden = widget.control.getString("hidden_columns") ?? '';
+    final newSummary = widget.control.getString("summary_row") ?? '';
+    // Note: row_heights is excluded from the data key because it's page-scoped
+    // LOD data (changes on every page_request), not table structure. Including
+    // it causes false rebuilds that lose cached heights.
+    final dataKey = '$newRows|$newCols|$newTotalRows|$newStyles|$newOverrides|$newHidden|$newSummary|$newRowHeight';
+    final oldKey = '$_lastRowsJson|$_lastColsJson|$_lastTotalRows|$_lastStylesJson|$_lastOverridesJson|$_lastHiddenJson|$_lastSummaryJson|$_lastRowHeight';
     if (dataKey == oldKey) {
       if (_pendingEdits.isNotEmpty) {
         setState(() => _pendingEdits.clear());
       }
       return;
     }
-    // If columns or totalRows changed, clear the entire buffer — row data
-    // structure may have changed or a full reload was triggered (sort, filter).
-    final colsChanged = newCols != _lastColsJson;
-    final totalChanged = newTotalRows != _lastTotalRows;
-    if (colsChanged || totalChanged) {
-      _clearBuffer();
-      _displayQueue.clear();
-    }
-
     _lastRowsJson = newRows;
     _lastColsJson = newCols;
     _lastTotalRows = newTotalRows;
-    _lastBufferStart = newBufferStart;
     _lastStylesJson = newStyles;
     _lastOverridesJson = newOverrides;
     _lastHiddenJson = newHidden;
     _lastSummaryJson = newSummary;
-    _lastRowHeightsJson = newRowHeights;
     _lastRowHeight = newRowHeight;
-
-    // Merge incoming rows into the buffer before source rebuild.
-    final incomingBufferStart = newBufferStart;
-    if (newRows.isNotEmpty) {
-      try {
-        final parsedRows = (jsonDecode(newRows) as List)
-            .map<List<Object?>>((r) => (r as List).cast<Object?>())
-            .toList();
-        for (int i = 0; i < parsedRows.length; i++) {
-          _rowBuffer[incomingBufferStart + i] = parsedRows[i];
-        }
-      } catch (_) {}
-    }
-
-    // Merge cell styles into buffer
-    if (newStyles.isNotEmpty) {
-      try {
-        final parsed = jsonDecode(newStyles) as List;
-        for (int i = 0; i < parsed.length; i++) {
-          final row = parsed[i] as List;
-          _cellStyleBuffer[incomingBufferStart + i] =
-              row.map<Map<String, String>?>((cell) {
-            if (cell == null) return null;
-            return Map<String, String>.from(cell as Map);
-          }).toList();
-        }
-      } catch (_) {}
-    }
-
-    // Merge override cells into buffer
-    if (newOverrides.isNotEmpty) {
-      try {
-        final parsed = jsonDecode(newOverrides) as List;
-        // Remove old overrides in this page range first
-        final pageEnd = incomingBufferStart + (newRows.isNotEmpty
-            ? (jsonDecode(newRows) as List).length : 0);
-        _overrideBuffer.removeWhere((key) {
-          final row = int.tryParse(key.split(':').first) ?? -1;
-          return row >= incomingBufferStart && row < pageEnd;
-        });
-        for (final e in parsed) {
-          _overrideBuffer.add(e.toString());
-        }
-      } catch (_) {}
-    }
-
-    // Merge row height overrides into buffer
-    if (newRowHeights.isNotEmpty) {
-      try {
-        final parsed = jsonDecode(newRowHeights) as Map<String, dynamic>;
-        for (final entry in parsed.entries) {
-          _rowHeightBuffer[int.parse(entry.key)] =
-              (entry.value as num).toDouble();
-        }
-      } catch (_) {}
-    }
-
-    // Clear in-flight tracking for this page offset
-    _pendingPageRequests.remove(incomingBufferStart);
 
     setState(() {
       _sourceNeedsRebuild = true;
+      _lastRequestedOffset = -1; // reset LOD dedup — data changed
       _pendingEdits.clear(); // Python has authoritative data now
       _invalidateRenderCaches(); // data changed → re-evaluate styles
     });
+  }
 
-    // Retry pending display events now that new data has arrived
-    _tryProcessQueue();
+  /// Merge a page response from Python into the pixel-space cache.
+  /// Parses rows, pixel offsets, heights, cell styles, and overrides
+  /// Try to merge from the atomic page_data blob.
+  /// Returns true if new data was merged.
+  bool _tryMergePageData() {
+    final pageDataJson = widget.control.getString("page_data") ?? '';
+    if (pageDataJson.isEmpty) return false;
+
+    try {
+      final pd = jsonDecode(pageDataJson) as Map<String, dynamic>;
+      final token = pd['token'] as int? ?? 0;
+      if (token <= _lastPageToken) return false; // already merged
+
+      final bufferStart = pd['buffer_start'] as int? ?? 0;
+      final rows = (pd['rows'] as List)
+          .map<List<Object?>>((r) => (r as List).cast<Object?>())
+          .toList();
+      final allOffsets = (pd['pixel_offsets'] as List)
+          .map<double>((e) => (e as num).toDouble())
+          .toList();
+
+      // Derive heights from N+1 offsets
+      final pixelOffsets = allOffsets.length > rows.length
+          ? allOffsets.sublist(0, rows.length) : allOffsets;
+      List<double> heights = [];
+      for (int i = 0; i < rows.length; i++) {
+        if (i + 1 < allOffsets.length) {
+          heights.add(allOffsets[i + 1] - allOffsets[i]);
+        } else {
+          heights.add(_cache.defaultRowHeight);
+        }
+      }
+
+      // Parse storage indices
+      List<int>? storageIndices;
+      if (pd['storage_indices'] != null) {
+        storageIndices = (pd['storage_indices'] as List)
+            .map<int>((e) => (e as num).toInt()).toList();
+      }
+
+      // Parse cell styles
+      List<List<Map<String, String>?>>? cellStyles;
+      if (pd['cell_styles'] != null) {
+        cellStyles = (pd['cell_styles'] as List).map<List<Map<String, String>?>>((row) {
+          return (row as List).map<Map<String, String>?>((cell) {
+            if (cell == null) return null;
+            return Map<String, String>.from(cell as Map);
+          }).toList();
+        }).toList();
+      }
+
+      // Parse override cells
+      List<String>? overrideCells;
+      if (pd['override_cells'] != null) {
+        overrideCells = (pd['override_cells'] as List)
+            .map<String>((e) => e.toString()).toList();
+      }
+
+      // Merge into cache (mergePage handles override clearing internally)
+      _cache.mergePage(
+        bufferStart: bufferStart,
+        rows: rows,
+        pixelOffsets: pixelOffsets,
+        heights: heights,
+        storageIndices: storageIndices,
+        cellStyles: cellStyles,
+        overrideCells: overrideCells,
+      );
+
+      // Also set raw_rows on control for editing
+      if (pd['raw_rows'] != null) {
+        widget.control.updateProperties(
+            {'raw_rows': jsonEncode(pd['raw_rows'])}, python: false, notify: false);
+      }
+
+      // (Phase 5) on_key_code is no longer carried in the page_data blob —
+      // it now flows through the canonical RenderPlane projection channel
+      // and lives in `_onKeyProjection`, populated by _refreshOnKeyProjection.
+
+      _lastPageToken = token;
+      _pendingRangeStart = -1;
+      _pendingRangeEnd = -1;
+      _tryProcessQueue();
+
+      // Invalidate render caches for merged rows
+      for (int i = 0; i < rows.length; i++) {
+        final absRow = bufferStart + i;
+        _rowRenderCache.remove(absRow);
+        _cellRenderCache.removeWhere((k, _) => k.startsWith('$absRow:'));
+      }
+
+      // LRU eviction
+      _cache.evictIfNeeded(
+        maxPages: 20,
+        pageSize: _dynamicPageSize,
+      );
+
+      return true;
+    } catch (e, st) {
+      print('[GRID PAGE_DATA ERROR] $e\n$st');
+      return false;
+    }
+  }
+
+  /// Try to process pending display events from the queue.
+  /// Events are processed in order; a PageFault stops processing
+  /// and requests the missing page.
+  void _tryProcessQueue() {
+    bool scrolled = false;
+    while (_cache.displayQueue.isNotEmpty) {
+      final event = _cache.displayQueue.first;
+      final vpHeight = _yController.hasClients
+          ? _yController.position.viewportDimension
+          : 600.0;
+      final result = _cache.walk(event, vpHeight);
+      if (result.success) {
+        _cache.displayQueue.removeAt(0);
+        _scrollToCachedRow(result.row);
+        scrolled = true;
+      } else {
+        // PageFault: request the missing page, stop processing
+        _requestPixelPage(result.row);
+        break;
+      }
+    }
+    // Rebuild after scroll so selection renders at new position
+    if (scrolled) setState(() {});
+  }
+
+  /// Scroll to a row using its cached pixel offset. O(1).
+  void _scrollToCachedRow(int absRow) {
+    if (!_yController.hasClients) return;
+    final maxScroll = _yController.position.maxScrollExtent;
+    // For the last row, jump to maxScrollExtent (SuperListView's estimate
+    // may be less than totalHeight, so cached offset could exceed it).
+    if (absRow >= _effectiveRowCount - 1) {
+      _yController.jumpTo(maxScroll);
+      return;
+    }
+    final offset = _cache.pixelOffset(absRow);
+    if (offset != null) {
+      _yController.jumpTo(offset.clamp(0.0, maxScroll));
+    }
+  }
+
+  /// Request a pixel-space page centered on targetRow from Python.
+  /// Context adapts to viewport size via _dynamicPageSize.
+  void _requestPixelPage(int targetRow) {
+    final int context = (_dynamicPageSize / 2).ceil();
+    // Dedup: skip if target falls inside the range already in flight
+    if (_cache.has(targetRow)) return; // already cached — no request needed
+    if (targetRow >= _pendingRangeStart && targetRow < _pendingRangeEnd) return;
+
+    // Mark the range we're about to request
+    _pendingRangeStart = math.max(0, targetRow - context);
+    _pendingRangeEnd   = targetRow + context;
+
+    final eventData = jsonEncode({
+      "type": "row",
+      "target_row": targetRow,
+      "context": context,
+    });
+    widget.control.triggerEventWithoutSubscribers("page_request", eventData);
+  }
+
+  /// Build a row from the cache, or return a placeholder if not cached.
+  /// This is the entry point for cache-backed rendering. When the row is
+  /// in the cache, it delegates to _buildRow (full-featured renderer).
+  /// When not cached, returns a SizedBox placeholder and requests the page.
+  Widget _buildCachedRow(int absRow, {int colStart = 0, int? colEnd}) {
+    if (_cache.has(absRow)) {
+      return _buildRow(absRow, colStart: colStart, colEnd: colEnd);
+    }
+    // Not in cache — show placeholder. Do NOT request pages here —
+    // SuperListView probes rows across the entire table for extent
+    // estimation, not just visible rows. Page requests come from
+    // scroll prefetch and path 1 postFrameCallback only.
+    final rh = _cache.rowHeight(absRow);
+    return Container(
+      height: rh,
+      decoration: BoxDecoration(
+        border: Border(
+          bottom: BorderSide(
+              color: _source.gridLineColor, width: _source.gridLineWidth),
+        ),
+      ),
+      child: rh >= 20 ? Center(
+        child: SizedBox(width: 14, height: 14,
+          child: CircularProgressIndicator(
+            strokeWidth: 1.5,
+            color: _source.gridLineColor,
+          ),
+        ),
+      ) : null,
+    );
+  }
+
+  /// Get cell text for an absolute row, checking cache first then source.
+  String _cachedCellText(int absRow, int col) {
+    final cached = _cache.get(absRow);
+    if (cached != null && col < cached.data.length) {
+      return cached.data[col]?.toString() ?? '';
+    }
+    return _source.cellText(absRow, col);
+  }
+
+  /// Check if a row has an override, checking cache first then source.
+  bool _cachedHasOverride(int absRow, String colName) {
+    if (_cache.hasOverride(absRow, colName)) return true;
+    // Fall back to source for non-LOD mode
+    return _source.overrideCells.contains('$absRow:$colName');
+  }
+
+  /// Get cell style for an absolute row, checking cache first then source.
+  Map<String, String>? _cachedCellStyle(int absRow, int col) {
+    final styles = _cache.cellStyles(absRow);
+    if (styles != null && col < styles.length) return styles[col];
+    return _source.cellStyle(absRow, col);
   }
 
   @override
@@ -335,11 +547,7 @@ class _EpyxGridState extends State<EpyxGrid> {
   void _handleTestCommand(String commandJson) {
     final api = EpyxGridTestApi(
       control: widget.control,
-      getCellText: (row, col) {
-        // Test API passes absolute row; convert to buffer-relative
-        final bufR = _source.toBufferIndex(row);
-        return bufR >= 0 ? _source.cellText(bufR, col) : '';
-      },
+      getCellText: (row, col) => _cachedCellText(row, col),
       getSelection: () => {'row': _selectedRow, 'col': _selectedCol},
       getSelectionRange: () => {
         'row': _selectedRow, 'col': _selectedCol,
@@ -364,11 +572,8 @@ class _EpyxGridState extends State<EpyxGrid> {
           double colX = 0;
           for (int i = 0; i < col; i++) colX += _getColumnWidth(i);
           final x = pos.dx + colX + _getColumnWidth(col) / 2;
-          final bufR = _source.toBufferIndex(row);
-          final bufFirst = _source.toBufferIndex(_firstVisibleRow);
-          final rowOff = (bufR >= 0 && bufFirst >= 0) ? bufR - bufFirst : 0;
           final y = pos.dy + 26.0 + _source.headerRowHeight +
-                    rowOff * _source.rowHeight +
+                    (row - _firstVisibleRow) * _source.rowHeight +
                     _source.rowHeight / 2;
           _showContextMenu(Offset(x, y), row, col);
         }
@@ -378,25 +583,27 @@ class _EpyxGridState extends State<EpyxGrid> {
           _editController.text = text;
         } else {
           // Start editing and set text
-          final bufR = _source.toBufferIndex(_selectedRow);
-          final origText = bufR >= 0
-              ? _source.cellText(bufR, _selectedCol) : '';
           setState(() {
             _isEditing = true;
-            _editOriginalValue = origText;
+            _editOriginalValue = _cachedCellText(_selectedRow, _selectedCol);
             _editController.text = text;
           });
         }
       },
       scrollToRow: (row) {
         if (_yController.hasClients) {
-          // row is absolute; convert to buffer-relative for scroll offset
-          final bufR = _source.toBufferIndex(row);
-          if (bufR >= 0) {
-            final offset = bufR * _source.rowHeight;
-            _yController.jumpTo(offset.clamp(
-                0.0, _yController.position.maxScrollExtent));
+          // In LOD mode, use cached pixel offset for accurate scroll
+          if (_pixelLodActive) {
+            final offset = _cache.pixelOffset(row);
+            if (offset != null) {
+              _yController.jumpTo(offset.clamp(
+                  0.0, _yController.position.maxScrollExtent));
+              return;
+            }
           }
+          final offset = row * _source.rowHeight;
+          _yController.jumpTo(offset.clamp(
+              0.0, _yController.position.maxScrollExtent));
         }
       },
       resizeColumn: (col, delta) {
@@ -442,20 +649,18 @@ class _EpyxGridState extends State<EpyxGrid> {
           'scroll_y': _yController.hasClients ? _yController.offset : 0.0,
           'cell_padding_h': _source.cellPaddingH,
           'cell_padding_v': _source.cellPaddingV,
-          'buffer_start': _source.bufferStart,
           'has_override': List.generate(
-              _source.rowCount,
+              _effectiveRowCount,
               (r) => List.generate(
                   _source.columnCount,
-                  (c) => _source.hasOverride(
-                      _source.toAbsoluteRow(r), c))),
+                  (c) => _cachedHasOverride(r, _source.columnName(c)))),
         };
       },
       simulateKey: (key, modifiers) {
         // Simulate key press through the same handler
-        final totalRows = widget.control.getInt("total_rows", 0) ?? 0;
-        final maxAbsRow = (totalRows > 0 ? totalRows : _source.rowCount) - 1;
-        if (key == 'Arrow_Down' && _selectedRow < maxAbsRow) {
+        // This is a simplified version — full key simulation would
+        // create and dispatch actual KeyEvent objects
+        if (key == 'Arrow_Down' && _selectedRow < _effectiveRowCount - 1) {
           setState(() => _selectedRow++);
         } else if (key == 'Arrow_Up' && _selectedRow > 0) {
           setState(() => _selectedRow--);
@@ -490,42 +695,54 @@ class _EpyxGridState extends State<EpyxGrid> {
   }
 
   /// Track first visible row for header display + LOD prefetch.
-  /// Simple prefetch: request next page when within 50 rows of buffer edge.
   void _onVerticalScroll() {
     if (!_sourceInitialized) return;
-    final totalRows = widget.control.getInt("total_rows", 0) ?? 0;
-    final effectiveTotal = totalRows > 0 ? totalRows : _source.rowCount;
+    final rh = _source.rowHeight;
+    final newFirst = (_yController.offset / rh).floor();
+    if (newFirst != _firstVisibleRow) {
+      setState(() {
+        _firstVisibleRow = newFirst;
+      });
+    }
 
-    // Compute first visible row from scroll offset
-    if (_yController.hasClients) {
-      final absFirst = (_yController.offset / _source.rowHeight).floor()
-          .clamp(0, math.max(0, effectiveTotal - 1)) as int;
-      if (absFirst != _firstVisibleRow) {
-        setState(() {
-          _firstVisibleRow = absFirst;
-        });
+    // Pixel-space LOD prefetch: check if approaching cache boundary.
+    // When within 50 rows of a cache edge, request the next page.
+    if (_pixelLodActive && _yController.hasClients) {
+      final vpHeight = _yController.position.viewportDimension;
+      final visibleRows = (vpHeight / rh).ceil();
+      final lastVisible = newFirst + visibleRows;
+
+      // Prefetch forward: 50 rows from last cached row ahead
+      for (int r = lastVisible; r < math.min(lastVisible + 50, _cache.totalRows); r++) {
+        if (!_cache.has(r)) {
+          _requestPixelPage(r);
+          break;
+        }
+      }
+      // Prefetch backward: 50 rows from first visible row behind
+      for (int r = newFirst; r > math.max(newFirst - 50, 0); r--) {
+        if (!_cache.has(r)) {
+          _requestPixelPage(r);
+          break;
+        }
       }
     }
 
-    // No LOD needed if all rows fit in one page
-    if (effectiveTotal <= _source.rowCount && _source.bufferStart == 0) return;
-    if (!_yController.hasClients) return;
-
-    const prefetchThreshold = 50; // rows from buffer edge to trigger fetch
-    final viewportRows = (_yController.position.viewportDimension / _source.rowHeight).ceil();
-    final absLastVisible = _firstVisibleRow + viewportRows;
-
-    // Prefetch forward: approaching bottom of buffered data
-    if (absLastVisible + prefetchThreshold > _bufferMaxRow &&
-        _bufferMaxRow < effectiveTotal) {
-      final fetchStart = _bufferMaxRow;
-      _requestPage(fetchStart, 300);
-    }
-    // Prefetch backward: approaching top of buffered data
-    if (_firstVisibleRow - prefetchThreshold < _bufferMinRow &&
-        _bufferMinRow > 0) {
-      final fetchStart = math.max(0, _bufferMinRow - 300);
-      _requestPage(fetchStart, 300);
+    // Legacy LOD: fire page_request at 70% of loaded data (non-pixel-space only)
+    if (!_pixelLodActive) {
+      final totalRows = widget.control.getInt("total_rows", 0) ?? 0;
+      if (totalRows > _source.rowCount && _yController.hasClients) {
+        final maxScroll = _yController.position.maxScrollExtent;
+        if (maxScroll > 0 &&
+            _yController.offset / maxScroll > 0.7) {
+          final eventData = jsonEncode({
+            "offset": _source.rowCount,
+            "limit": 100,
+          });
+          widget.control
+              .triggerEventWithoutSubscribers("page_request", eventData);
+        }
+      }
     }
   }
 
@@ -533,169 +750,6 @@ class _EpyxGridState extends State<EpyxGrid> {
 
   Color _color(String prop, BuildContext? ctx, Color fallback) {
     return widget.control.getColor(prop, ctx, fallback) ?? fallback;
-  }
-
-  // ────────────────────────────────────────────────────────────────
-  // LOD event queue
-  // ────────────────────────────────────────────────────────────────
-
-  /// Lowest absolute row index in the buffer.
-  int get _bufferMinRow => _rowBuffer.isEmpty ? 0 : _rowBuffer.keys.reduce(math.min);
-
-  /// Highest absolute row index + 1 in the buffer (exclusive upper bound).
-  int get _bufferMaxRow => _rowBuffer.isEmpty ? 0 : _rowBuffer.keys.reduce(math.max) + 1;
-
-  /// Is the given absolute row in the buffer?
-  bool _isRowInBuffer(int absRow) => _rowBuffer.containsKey(absRow);
-
-  /// Get row data from the buffer (or null if not buffered).
-  List<Object?>? _bufferedRow(int absRow) => _rowBuffer[absRow];
-
-  /// Get cell style from the buffer (or null).
-  Map<String, String>? _bufferedCellStyle(int absRow, int col) {
-    final styles = _cellStyleBuffer[absRow];
-    if (styles == null || col >= styles.length) return null;
-    return styles[col];
-  }
-
-  /// Is this absolute row:colName an override?
-  bool _bufferedHasOverride(int absRow, int colIndex) {
-    if (colIndex >= _source.columnCount) return false;
-    return _overrideBuffer.contains('$absRow:${_source.columnName(colIndex)}');
-  }
-
-  /// Get per-row height override from buffer (or default).
-  double _bufferedRowHeight(int absRow) {
-    return _rowHeightBuffer[absRow] ?? _source.rowHeight;
-  }
-
-  /// Push a display event onto the queue and try to process immediately.
-  void _enqueueDisplay(_DisplayEvent event) {
-    _displayQueue.add(event);
-    _tryProcessQueue();
-  }
-
-  /// Can we satisfy this display event with data currently in the buffer?
-  /// Checks that the target row AND enough surrounding rows for a screenful
-  /// are in the buffer.
-  /// Try to process pending display events.
-  void _tryProcessQueue() {
-    while (_displayQueue.isNotEmpty) {
-      final event = _displayQueue.first;
-      final firstRow = _walkEvent(event);
-      if (firstRow == null) {
-        break; // PageFault — waiting for data
-      }
-      _displayQueue.removeAt(0);
-      // Scroll so firstRow is at the top of the viewport
-      _scrollToItemTop(firstRow);
-    }
-  }
-
-  /// Walk from the target row to find which row should be at the top
-  /// of the viewport.  Returns null on PageFault (data requested).
-  ///
-  /// For bottom: walk backward from targetRow, accumulating heights
-  /// until the viewport is filled.  The row where we stop = first visible.
-  /// For top: targetRow IS the first visible.
-  /// If any row is not in cache → PageFault.
-  int? _walkEvent(_DisplayEvent event) {
-    final viewportH = _yController.hasClients
-        ? _yController.position.viewportDimension
-        : _source.rowHeight * _source.visibleRowEstimate;
-    final totalRows = widget.control.getInt("total_rows", 0) ?? 0;
-    final effectiveTotal = totalRows > 0 ? totalRows : _source.rowCount;
-
-    switch (event.position) {
-      case _DisplayPosition.top:
-        // Target row at top — just check it's in cache
-        if (!_isRowInBuffer(event.targetRow)) {
-          _requestPage(math.max(0, event.targetRow - 150), 300);
-          return null;
-        }
-        // Walk forward to verify a screenful is cached
-        double acc = 0;
-        for (int r = event.targetRow; r < effectiveTotal; r++) {
-          if (!_isRowInBuffer(r)) {
-            _requestPage(math.max(0, r - 150), 300);
-            return null;
-          }
-          acc += _bufferedRowHeight(r);
-          if (acc >= viewportH) break;
-        }
-        return event.targetRow;
-
-      case _DisplayPosition.bottom:
-        // Walk backward from target, accumulating heights
-        double acc = 0;
-        for (int r = event.targetRow; r >= 0; r--) {
-          if (!_isRowInBuffer(r)) {
-            _requestPage(math.max(0, r - 150), 300);
-            return null; // PageFault
-          }
-          acc += _bufferedRowHeight(r);
-          if (acc >= viewportH) return r;
-        }
-        return 0; // not enough rows to fill viewport — start at top
-
-      case _DisplayPosition.center:
-        // Walk both directions from target
-        if (!_isRowInBuffer(event.targetRow)) {
-          _requestPage(math.max(0, event.targetRow - 150), 300);
-          return null;
-        }
-        double halfH = viewportH / 2;
-        int firstRow = event.targetRow;
-        double acc = _bufferedRowHeight(event.targetRow) / 2;
-        // Walk backward for top half
-        for (int r = event.targetRow - 1; r >= 0 && acc < halfH; r--) {
-          if (!_isRowInBuffer(r)) {
-            _requestPage(math.max(0, r - 150), 300);
-            return null;
-          }
-          acc += _bufferedRowHeight(r);
-          firstRow = r;
-        }
-        // Walk forward to verify bottom half is cached
-        acc = _bufferedRowHeight(event.targetRow) / 2;
-        for (int r = event.targetRow + 1; r < effectiveTotal && acc < halfH; r++) {
-          if (!_isRowInBuffer(r)) {
-            _requestPage(math.max(0, r - 150), 300);
-            return null;
-          }
-          acc += _bufferedRowHeight(r);
-        }
-        return firstRow;
-    }
-  }
-
-  /// Scroll so that the given absolute row is at the top of the viewport.
-  /// Computes pixel offset by summing heights of all rows before it.
-  /// With itemExtentBuilder, Flutter's layout matches this calculation.
-  /// Scroll so absRow is at the top of the viewport.
-  /// Walks forward from 0, accumulating row heights — same pattern
-  /// as _walkEvent walks backward.
-  void _scrollToItemTop(int absRow) {
-    if (!_yController.hasClients) return;
-    if (absRow <= 0) {
-      _yController.jumpTo(0);
-      return;
-    }
-    double offset = 0;
-    for (int r = 0; r < absRow; r++) {
-      offset += _bufferedRowHeight(r);
-    }
-    _yController.jumpTo(
-        offset.clamp(0.0, _yController.position.maxScrollExtent));
-  }
-
-  /// Clear the buffer (e.g., on full data reload from Python).
-  void _clearBuffer() {
-    _rowBuffer.clear();
-    _cellStyleBuffer.clear();
-    _overrideBuffer.clear();
-    _rowHeightBuffer.clear();
-    _pendingPageRequests.clear();
   }
 
   // ────────────────────────────────────────────────────────────────
@@ -711,30 +765,11 @@ class _EpyxGridState extends State<EpyxGrid> {
       _lastRowsJson = widget.control.getString("rows") ?? '';
       _lastColsJson = widget.control.getString("columns") ?? '';
       _lastTotalRows = widget.control.getInt("total_rows", 0) ?? 0;
-      _lastBufferStart = widget.control.getInt("buffer_start", 0) ?? 0;
       _lastStylesJson = widget.control.getString("cell_styles") ?? '';
       _lastOverridesJson = widget.control.getString("override_cells") ?? '';
       _lastHiddenJson = widget.control.getString("hidden_columns") ?? '';
       _lastSummaryJson = widget.control.getString("summary_row") ?? '';
       _sourceInitialized = true;
-
-      // Populate the row buffer from the source's parsed rows.
-      // This ensures the buffer has data on both initial build and
-      // subsequent rebuilds (data pushes from Python).
-      final bufStart = _source.bufferStart;
-      for (int i = 0; i < _source.rowCount; i++) {
-        _rowBuffer[bufStart + i] = _source.rows[i];
-      }
-      // Populate cell style buffer from source
-      for (int i = 0; i < _source.cellStyles.length; i++) {
-        _cellStyleBuffer[bufStart + i] = _source.cellStyles[i];
-      }
-      // Populate override buffer from source
-      // Source stores overrides relative to bufferStart
-      _overrideBuffer.addAll(_source.overrideCells);
-      // Populate row height overrides from source
-      _rowHeightBuffer.addAll(
-          _source.perRowHeights.map((k, v) => MapEntry(k, v)));
     }
     final totalRows = widget.control.getInt("total_rows", 0) ?? 0;
     final label = widget.control.getString("label") ?? "";
@@ -742,20 +777,45 @@ class _EpyxGridState extends State<EpyxGrid> {
     final sortIndicator = widget.control.getString("sort_indicator") ?? "";
     final filterActive = widget.control.getBool("filter_active", false) ?? false;
 
-    // Row count for display — _firstVisibleRow is now ABSOLUTE
-    final displayTotal = totalRows > 0 ? totalRows : _source.rowCount;
+    // Row count for display — use cache totalRows when available
+    final effectiveTotalRows = _pixelLodActive
+        ? _cache.totalRows : (totalRows > 0 ? totalRows : _source.rowCount);
     final visibleEnd = math.min(
-        _firstVisibleRow + _source.visibleRowEstimate, displayTotal);
-    final rowPositionText = _source.rowCount > 0
-        ? "rows ${_firstVisibleRow + 1}-$visibleEnd of $displayTotal"
+        _firstVisibleRow + _source.visibleRowEstimate, effectiveTotalRows);
+    final rowPositionText = effectiveTotalRows > 0
+        ? "rows ${_firstVisibleRow + 1}-$visibleEnd of $effectiveTotalRows"
         : "0 rows";
 
     // -- Error message --
     final errorMessage = widget.control.getString("error_message") ?? "";
 
-    // -- Header bar --
+    // -- Parse banner level + text --
+    String _bannerText = '';
+    Color _bannerFg = Colors.transparent;
+    IconData? _bannerIcon;
+    if (errorMessage.isNotEmpty) {
+      _bannerFg = Colors.white;
+      _bannerIcon = Icons.error_outline;
+      _bannerText = errorMessage;
+      if (errorMessage.startsWith('info:')) {
+        _bannerText = errorMessage.substring(5);
+        _bannerFg = const Color(0xFFB0D4F1);
+        _bannerIcon = Icons.info_outline;
+      } else if (errorMessage.startsWith('warning:')) {
+        _bannerText = errorMessage.substring(8);
+        _bannerFg = const Color(0xFFF1D6A0);
+        _bannerIcon = Icons.warning_amber_outlined;
+      } else if (errorMessage.startsWith('error:')) {
+        _bannerText = errorMessage.substring(6);
+        _bannerFg = const Color(0xFFFF8A80);
+        _bannerIcon = Icons.error_outline;
+      }
+    }
+
+    // -- Header bar (banner inlined after ctype pill) --
     final headerBar = _buildHeaderBar(
-        label, ctype, sortIndicator, filterActive, rowPositionText, context);
+        label, ctype, sortIndicator, filterActive, rowPositionText, context,
+        bannerText: _bannerText, bannerFg: _bannerFg, bannerIcon: _bannerIcon);
 
     // -- Summary row data --
     final summaryJson = widget.control.getString("summary_row") ?? "";
@@ -769,30 +829,16 @@ class _EpyxGridState extends State<EpyxGrid> {
     }
 
     // -- Grid body --
-    final gridBody = _source.rowCount == 0
+    // Show "No data" only when BOTH source and cache are empty.
+    // When pixel-space LOD is active (data_version > 0), the grid body
+    // renders placeholders that trigger page requests.
+    // Always show grid body — cache will handle missing rows as placeholders
+    final hasData = _source.rowCount > 0 || _cache.totalRows > 0 || _lastDataVersion > 0;
+    final gridBody = !hasData
         ? const Center(
             child: Text("No data",
                 style: TextStyle(color: Colors.grey, fontSize: 14)))
         : _buildGridBody(context, summaryValues: summaryValues);
-
-    final errorBanner = errorMessage.isNotEmpty
-        ? Container(
-            color: Colors.red.shade900,
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-            child: Row(
-              children: [
-                const Icon(Icons.error_outline,
-                    color: Colors.white, size: 14),
-                const SizedBox(width: 4),
-                Expanded(
-                  child: Text(errorMessage,
-                      style:
-                          const TextStyle(color: Colors.white, fontSize: 12)),
-                ),
-              ],
-            ),
-          )
-        : null;
 
     // Use LayoutBuilder to handle bounded vs unbounded height.
     // Bounded (Gallery/Fit): Expanded fills available space.
@@ -803,13 +849,29 @@ class _EpyxGridState extends State<EpyxGrid> {
         builder: (context, constraints) {
           final unbounded = constraints.maxHeight == double.infinity;
 
+          if (unbounded && _pixelLodActive) {
+            // LOD + Natural mode: force bounded height to prevent
+            // shrinkWrap from building all items every frame.
+            final screenH = MediaQuery.sizeOf(context).height;
+            final tableH = (screenH * 0.6).clamp(200.0, screenH - 100.0);
+            return SizedBox(
+              height: tableH,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  headerBar,
+                  Expanded(child: gridBody),
+                ],
+              ),
+            );
+          }
+
           if (unbounded) {
             return Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               mainAxisSize: MainAxisSize.min,
               children: [
                 headerBar,
-                if (errorBanner != null) errorBanner,
                 gridBody,
               ],
             );
@@ -819,7 +881,6 @@ class _EpyxGridState extends State<EpyxGrid> {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               headerBar,
-              if (errorBanner != null) errorBanner,
               Expanded(child: gridBody),
             ],
           );
@@ -833,7 +894,9 @@ class _EpyxGridState extends State<EpyxGrid> {
   // ────────────────────────────────────────────────────────────────
 
   Widget _buildHeaderBar(String label, String ctype, String sortIndicator,
-      bool filterActive, String rowPositionText, BuildContext context) {
+      bool filterActive, String rowPositionText, BuildContext context,
+      {String bannerText = '', Color bannerFg = Colors.transparent,
+       IconData? bannerIcon}) {
     final headerBg =
         _color("header_bg_color", context, const Color(0xFF2D2D30));
 
@@ -841,6 +904,7 @@ class _EpyxGridState extends State<EpyxGrid> {
     // chrome bar colour stops at the last column boundary.
     return GestureDetector(
       onSecondaryTapDown: (d) => _showChromeContextMenu(d.globalPosition),
+      child: ClipRect(
       child: CustomPaint(
       painter: _BarBgPainter(headerBg, _totalColumnsWidth, rowPositionText),
       child: Padding(
@@ -884,8 +948,23 @@ class _EpyxGridState extends State<EpyxGrid> {
               Text("filtered",
                   style: TextStyle(color: Colors.orange.shade400, fontSize: 10)),
             ],
+            // H6: Inline banner (info/warning/error)
+            if (bannerText.isNotEmpty) ...[
+              const SizedBox(width: 8),
+              if (bannerIcon != null)
+                Padding(
+                  padding: const EdgeInsets.only(right: 3),
+                  child: Icon(bannerIcon, size: 12, color: bannerFg),
+                ),
+              Flexible(
+                child: Text(bannerText,
+                    style: TextStyle(color: bannerFg, fontSize: 11),
+                    overflow: TextOverflow.ellipsis),
+              ),
+            ],
           ],
         ),
+      ),
       ),
       ),
     );
@@ -979,29 +1058,16 @@ class _EpyxGridState extends State<EpyxGrid> {
 
         final unbounded = constraints.maxHeight == double.infinity;
         final totalRows = widget.control.getInt("total_rows", 0) ?? 0;
-        // Full itemCount = totalRows for proper scrollbar sizing.
-        // Falls back to source rowCount when totalRows is 0 (no LOD).
-        final itemCount = totalRows > 0 ? totalRows : _source.rowCount;
+        final bool cacheActive = _pixelLodActive;
+        final hasMore = !cacheActive && totalRows > _source.rowCount;
+        final itemCount = cacheActive
+            ? _cache.totalRows
+            : (_source.rowCount + (hasMore ? 1 : 0));
 
-        /// Build a row for absolute index [absRow].
-        /// Returns real content if row is in buffer, otherwise an empty placeholder.
-        Widget buildAbsRow(int absRow, {int colStart = 0, int? colEnd}) {
-          if (_isRowInBuffer(absRow)) {
-            // Buffer-relative index for _source (which still holds the most recent page).
-            final bufIdx = _source.toBufferIndex(absRow);
-            if (bufIdx >= 0) {
-              return _buildRow(bufIdx, colStart: colStart, colEnd: colEnd);
-            }
-            // Row is in our Map buffer but not in the source's linear page.
-            // Build from the Map buffer directly.
-            return _buildBufferedRow(absRow, colStart: colStart, colEnd: colEnd);
-          }
-          // Not in buffer — return empty placeholder at the correct height.
-          // Request the page containing this row (centered for better coverage).
-          final pageStart = math.max(0, absRow - 150);
-          _requestPage(pageStart, 300);
-          return SizedBox(height: _source.rowHeight);
-        }
+        Widget lodSpinner() => const Center(
+              child: SizedBox(width: 20, height: 20,
+                child: CircularProgressIndicator(strokeWidth: 2)),
+            );
 
         // When frozen columns are active, split into frozen + scrollable panels
         if (frozenCount > 0 && frozenCount < _source.columnCount) {
@@ -1026,25 +1092,39 @@ class _EpyxGridState extends State<EpyxGrid> {
                         _buildColumnHeaderRow(context, showRowNumbers, rowNumWidth,
                             colStart: 0, colEnd: frozenCount),
                         if (unbounded)
-                          ListView.builder(
+                          SuperListView.builder(
                             shrinkWrap: true,
                             physics: const NeverScrollableScrollPhysics(),
                             itemCount: itemCount,
-                            itemExtentBuilder: (index, __) =>
-                                _bufferedRowHeight(index),
+                          extentEstimation: (i, _) => _cache.fastRowHeight(i ?? 0),
+                            
                             itemBuilder: (context, index) {
-                              return buildAbsRow(index, colEnd: frozenCount);
+                              if (cacheActive) {
+                                return _buildCachedRow(index, colEnd: frozenCount);
+                              }
+                              if (index >= _source.rowCount) {
+                                _requestNextPage();
+                                return lodSpinner();
+                              }
+                              return _buildRow(index, colEnd: frozenCount);
                             },
                           )
                         else
                           Expanded(
-                            child: ListView.builder(
+                            child: SuperListView.builder(
                               controller: _getFrozenController(),
                               itemCount: itemCount,
-                              itemExtentBuilder: (index, __) =>
-                                _bufferedRowHeight(index),
+                          extentEstimation: (i, _) => _cache.fastRowHeight(i ?? 0),
+                              
                               itemBuilder: (context, index) {
-                                return buildAbsRow(index, colEnd: frozenCount);
+                                if (cacheActive) {
+                                  return _buildCachedRow(index, colEnd: frozenCount);
+                                }
+                                if (index >= _source.rowCount) {
+                                  _requestNextPage();
+                                  return lodSpinner();
+                                }
+                                return _buildRow(index, colEnd: frozenCount);
                               },
                             ),
                           ),
@@ -1069,25 +1149,33 @@ class _EpyxGridState extends State<EpyxGrid> {
                             _buildColumnHeaderRow(context, showRowNumbers, 0,
                                 colStart: frozenCount),
                             if (unbounded)
-                              ListView.builder(
+                              SuperListView.builder(
                                 shrinkWrap: true,
                                 physics: const NeverScrollableScrollPhysics(),
                                 itemCount: itemCount,
-                                itemExtentBuilder: (index, __) =>
-                                _bufferedRowHeight(index),
+                          extentEstimation: (i, _) => _cache.fastRowHeight(i ?? 0),
+                                
                                 itemBuilder: (context, index) {
-                                  return buildAbsRow(index, colStart: frozenCount);
+                                  if (cacheActive) {
+                                    return _buildCachedRow(index, colStart: frozenCount);
+                                  }
+                                  if (index >= _source.rowCount) return lodSpinner();
+                                  return _buildRow(index, colStart: frozenCount);
                                 },
                               )
                             else
                               Expanded(
-                                child: ListView.builder(
+                                child: SuperListView.builder(
                                   controller: _yController,
                                   itemCount: itemCount,
-                                  itemExtentBuilder: (index, __) =>
-                                _bufferedRowHeight(index),
+                          extentEstimation: (i, _) => _cache.fastRowHeight(i ?? 0),
+                                  
                                   itemBuilder: (context, index) {
-                                    return buildAbsRow(index, colStart: frozenCount);
+                                    if (cacheActive) {
+                                      return _buildCachedRow(index, colStart: frozenCount);
+                                    }
+                                    if (index >= _source.rowCount) return lodSpinner();
+                                    return _buildRow(index, colStart: frozenCount);
                                   },
                                 ),
                               ),
@@ -1129,32 +1217,42 @@ class _EpyxGridState extends State<EpyxGrid> {
                     _buildColumnHeaderRow(context, showRowNumbers, rowNumWidth),
                     // Frozen rows: pinned above scrollable body
                     if (frozenRows > 0)
-                      for (int i = 0; i < frozenRows && i < itemCount; i++)
-                        buildAbsRow(i),
+                      for (int i = 0; i < frozenRows && i < _effectiveRowCount; i++)
+                        _buildRow(i),
                     if (unbounded)
-                      ListView.builder(
+                      SuperListView.builder(
                         shrinkWrap: true,
                         physics: const NeverScrollableScrollPhysics(),
                         itemCount: scrollableRowCount.clamp(0, itemCount),
-                        // itemExtent only when uniform — variable heights
-                        // need the builder to size each row independently
-                        itemExtentBuilder: (index, __) =>
-                            _bufferedRowHeight(index),
+                        extentEstimation: (i, _) => _cache.fastRowHeight(i ?? 0),
                         itemBuilder: (context, index) {
-                          final absRow = index + frozenRows;
-                          return buildAbsRow(absRow);
+                          final actualRow = index + frozenRows;
+                          if (cacheActive) {
+                            return _buildCachedRow(actualRow);
+                          }
+                          if (actualRow >= _source.rowCount) {
+                            _requestNextPage();
+                            return lodSpinner();
+                          }
+                          return _buildRow(actualRow);
                         },
                       )
                     else
                       Expanded(
-                        child: ListView.builder(
+                        child: SuperListView.builder(
                           controller: _yController,
                           itemCount: scrollableRowCount.clamp(0, itemCount),
-                          itemExtent: _source.hasVariableRowHeights
-                              ? null : _source.rowHeight,
+                          extentEstimation: (i, _) => _cache.fastRowHeight(i ?? 0),
                           itemBuilder: (context, index) {
-                            final absRow = index + frozenRows;
-                            return buildAbsRow(absRow);
+                            final actualRow = index + frozenRows;
+                            if (cacheActive) {
+                              return _buildCachedRow(actualRow);
+                            }
+                            if (actualRow >= _source.rowCount) {
+                              _requestNextPage();
+                              return lodSpinner();
+                            }
+                            return _buildRow(actualRow);
                           },
                         ),
                       ),
@@ -1257,8 +1355,8 @@ class _EpyxGridState extends State<EpyxGrid> {
                 child: SizedBox(
                   width: 18, height: 18,
                   child: Checkbox(
-                    value: _checkedRows.length == _source.rowCount &&
-                        _source.rowCount > 0,  // Approximate: only buffered rows
+                    value: _checkedRows.length == _effectiveRowCount &&
+                        _effectiveRowCount > 0,
                     tristate: true,
                     onChanged: (v) => _toggleAllCheckboxes(v ?? false),
                     materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
@@ -1386,15 +1484,19 @@ class _EpyxGridState extends State<EpyxGrid> {
   // LOD page request
   // ────────────────────────────────────────────────────────────────
 
-  /// Request a page of data from Python at the given absolute offset.
-  /// Deduped: won't re-request an offset that's already in-flight.
-  void _requestPage(int offset, int limit) {
-    if (_pendingPageRequests.contains(offset)) return;
-    _pendingPageRequests.add(offset);
+  int _lastRequestedOffset = -1;
+
+  /// Request next page of data from Python. Debounced by offset to avoid
+  /// duplicate requests for the same page.
+  void _requestNextPage() {
+    if (_pixelLodActive) return; // pixel LOD uses _requestPixelPage instead
+    final offset = _source.rowCount;
+    if (offset == _lastRequestedOffset) return; // already requested
+    _lastRequestedOffset = offset;
 
     final eventData = jsonEncode({
       "offset": offset,
-      "limit": limit,
+      "limit": 100,
     });
     widget.control.triggerEventWithoutSubscribers("page_request", eventData);
   }
@@ -1405,24 +1507,23 @@ class _EpyxGridState extends State<EpyxGrid> {
 
   static const double _checkboxColWidth = 40.0;
 
-  /// Build a row widget. [bufRowIndex] is buffer-relative (0-based into _source.rows).
-  Widget _buildRow(int bufRowIndex, {int colStart = 0, int? colEnd}) {
-    final absRow = _source.toAbsoluteRow(bufRowIndex);
-    final isSelected = absRow == _selectedRow;
+  Widget _buildRow(int rowIndex, {int colStart = 0, int? colEnd}) {
+    final isSelected = rowIndex == _selectedRow;
     final endCol = colEnd ?? _source.columnCount;
     final showCheckbox =
         widget.control.getBool("show_checkbox_column", false) ?? false;
 
-    // Apply row_render_code (§6A Layer 5) — uses buffer index for data access
-    Color? rowBg = _source.rowBackground(bufRowIndex, isSelected);
-    final rowRender = _evalRowRender(bufRowIndex, absRow);
+    // Apply row_render_code (§6A Layer 5)
+    Color? rowBg = _source.rowBackground(rowIndex, isSelected);
+    final rowRender = _evalRowRender(rowIndex);
     if (rowRender != null && rowRender['bg'] != null) {
       rowBg = _parseHexColor(rowRender['bg']!) ?? rowBg;
     }
 
+    final rh = _getRowHeight(rowIndex);
     return Container(
       key: (isSelected && colStart == 0) ? _selectedRowKey : null,
-      height: _source.getRowHeight(bufRowIndex),
+      height: rh,
       decoration: BoxDecoration(
         color: rowBg,
         border: Border(
@@ -1436,13 +1537,13 @@ class _EpyxGridState extends State<EpyxGrid> {
           if (showCheckbox && colStart == 0)
             SizedBox(
               width: _checkboxColWidth,
-              height: _source.getRowHeight(bufRowIndex),
+              height: rh,
               child: Center(
                 child: SizedBox(
                   width: 18, height: 18,
                   child: Checkbox(
-                    value: _checkedRows.contains(absRow),
-                    onChanged: (v) => _toggleCheckbox(absRow, v ?? false),
+                    value: _checkedRows.contains(rowIndex),
+                    onChanged: (v) => _toggleCheckbox(rowIndex, v ?? false),
                     materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
                   ),
                 ),
@@ -1450,121 +1551,20 @@ class _EpyxGridState extends State<EpyxGrid> {
             ),
           for (int colIndex = colStart; colIndex < endCol; colIndex++)
             if (!_source.isColumnHidden(colIndex))
-              _buildCell(bufRowIndex, absRow, colIndex),
+              _buildCell(rowIndex, colIndex),
         ],
       ),
     );
   }
 
-  /// Build a row directly from the Map buffer (for rows not in the source's
-  /// linear page array but present in _rowBuffer).
-  Widget _buildBufferedRow(int absRow, {int colStart = 0, int? colEnd}) {
-    final isSelected = absRow == _selectedRow;
-    final endCol = colEnd ?? _source.columnCount;
-    final rowData = _rowBuffer[absRow];
-    if (rowData == null) return SizedBox(height: _source.rowHeight);
-
-    final rowHeight = _bufferedRowHeight(absRow);
-    Color? rowBg = _source.rowBackground(0, isSelected); // use index 0 for even/odd
-
-    return Container(
-      key: isSelected && colStart == 0 ? _selectedRowKey : null,
-      height: rowHeight,
-      decoration: BoxDecoration(
-        color: rowBg,
-        border: Border(
-          bottom: BorderSide(
-              color: _source.gridLineColor, width: _source.gridLineWidth),
-        ),
-      ),
-      child: Row(
-        children: [
-          for (int colIndex = colStart; colIndex < endCol; colIndex++)
-            if (!_source.isColumnHidden(colIndex))
-              _buildBufferedCell(absRow, colIndex, rowData),
-        ],
-      ),
-    );
-  }
-
-  /// Build a cell from the Map buffer.
-  Widget _buildBufferedCell(int absRow, int colIndex, List<Object?> rowData) {
-    final isAnchor = _isAnchor(absRow, colIndex);
-    final inRange = _isInSelection(absRow, colIndex);
-    final pendingKey = '$absRow:$colIndex';
+  Widget _buildCell(int rowIndex, int colIndex) {
+    final isAnchor = _isAnchor(rowIndex, colIndex);
+    final inRange = _isInSelection(rowIndex, colIndex);
+    // Show optimistic edit value if pending, otherwise cache-aware value
+    final pendingKey = '$rowIndex:$colIndex';
     final cellText = _pendingEdits[pendingKey] ??
-        (colIndex < rowData.length ? rowData[colIndex]?.toString() ?? '' : '');
-    final cellStyle = _bufferedCellStyle(absRow, colIndex);
-
-    Color? fg = cellStyle?['fg'] != null
-        ? _parseHexColor(cellStyle!['fg']!) : null;
-    Color? bg = cellStyle?['bg'] != null
-        ? _parseHexColor(cellStyle!['bg']!) : null;
-
-    final textColor = fg ?? _source.cellTextColor;
-    final bgColor = isAnchor ? bg
-        : inRange ? (bg ?? const Color(0xFF1E1E1E)).withValues(alpha: 0.8)
-        : bg;
-
-    final hasOverride = _bufferedHasOverride(absRow, colIndex);
-    BoxBorder cellBorder;
-    if (isAnchor) {
-      cellBorder = Border.all(
-        color: _source.currentCellBorderColor,
-        width: _source.currentCellBorderWidth,
-      );
-    } else if (inRange) {
-      cellBorder = Border.all(
-        color: _source.currentCellBorderColor.withValues(alpha: 0.4),
-        width: 1.0,
-      );
-    } else {
-      cellBorder = Border(
-        right: BorderSide(
-            color: _source.gridLineColor, width: _source.gridLineWidth),
-      );
-    }
-
-    return Semantics(
-      label: 'cell_${absRow}_${colIndex}_$cellText',
-      child: CustomPaint(
-        foregroundPainter: hasOverride ? _OverrideTrianglePainter() : null,
-        child: Container(
-          width: _getColumnWidth(colIndex),
-          height: _bufferedRowHeight(absRow),
-          padding: EdgeInsets.symmetric(
-            horizontal: _source.cellPaddingH,
-            vertical: _source.cellPaddingV,
-          ),
-          decoration: BoxDecoration(color: bgColor, border: cellBorder),
-          child: Align(
-            alignment: _source.isNumericColumn(colIndex)
-                ? Alignment.centerRight : Alignment.centerLeft,
-            child: Text(
-              cellText,
-              style: TextStyle(
-                color: textColor == Colors.transparent ? null : textColor,
-                fontSize: _source.cellFontSize,
-                fontFamily: _source.fontFamily,
-              ),
-              overflow: TextOverflow.ellipsis,
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  /// Build a cell widget. [bufRow] is buffer-relative, [absRow] is absolute.
-  Widget _buildCell(int bufRow, int absRow, int colIndex) {
-    final isAnchor = _isAnchor(absRow, colIndex);
-    final inRange = _isInSelection(absRow, colIndex);
-    // Show optimistic edit value if pending (keyed by absolute row), otherwise source value
-    final pendingKey = '$absRow:$colIndex';
-    final cellText = _pendingEdits[pendingKey] ??
-        _source.cellText(bufRow, colIndex);
-    final cellStyle = _source.cellStyle(bufRow, colIndex);
-
+        _cachedCellText(rowIndex, colIndex);
+    final cellStyle = _cachedCellStyle(rowIndex, colIndex);
     Color? fg = cellStyle?['fg'] != null
         ? _parseHexColor(cellStyle!['fg']!)
         : null;
@@ -1573,7 +1573,7 @@ class _EpyxGridState extends State<EpyxGrid> {
         : null;
 
     // Apply render_code (§6A Layer 5 — overrides Python Layers 1-4)
-    final cellRender = _evalCellRender(bufRow, absRow, colIndex);
+    final cellRender = _evalCellRender(rowIndex, colIndex);
     if (cellRender != null) {
       if (cellRender['bg'] != null) bg = _parseHexColor(cellRender['bg']!) ?? bg;
       if (cellRender['fg'] != null) fg = _parseHexColor(cellRender['fg']!) ?? fg;
@@ -1593,7 +1593,7 @@ class _EpyxGridState extends State<EpyxGrid> {
     final colName = colIndex < _source.columnCount
         ? _source.columnName(colIndex) : '';
     final hasValidationError =
-        _validationErrorCells.contains('$absRow:$colName');
+        _validationErrorCells.contains('$rowIndex:$colName');
 
     // Selection border: anchor gets solid border, range gets thin highlight
     BoxBorder cellBorder;
@@ -1617,10 +1617,9 @@ class _EpyxGridState extends State<EpyxGrid> {
       );
     }
 
-    // Override check uses absolute row index (Python sends absolute keys)
-    final hasOverride = _source.hasOverride(absRow, colIndex);
+    final hasOverride = _cachedHasOverride(rowIndex, colName);
     return Semantics(
-      label: 'cell_${absRow}_${colIndex}_$cellText',
+      label: 'cell_${rowIndex}_${colIndex}_$cellText',
       child: CustomPaint(
         // Override triangle: foregroundPainter draws ON TOP of the Container
         // at the cell's (0,0) — the outer border corner.  This avoids the
@@ -1628,7 +1627,7 @@ class _EpyxGridState extends State<EpyxGrid> {
         foregroundPainter: hasOverride ? _OverrideTrianglePainter() : null,
         child: Container(
           width: _getColumnWidth(colIndex),
-          height: _source.getRowHeight(bufRow),
+          height: _getRowHeight(rowIndex),
           padding: EdgeInsets.symmetric(
             horizontal: _source.cellPaddingH,
             vertical: _source.cellPaddingV,
@@ -1651,10 +1650,19 @@ class _EpyxGridState extends State<EpyxGrid> {
                       fontFamily: _source.fontFamily,
                     ),
                     maxLines: _isCodeMode ? null : 1,
-                    decoration: const InputDecoration(
+                    decoration: InputDecoration(
                       isDense: true,
                       contentPadding: EdgeInsets.zero,
                       border: InputBorder.none,
+                      prefix: _editPrompt != null ? Text(
+                        '$_editPrompt: ',
+                        style: TextStyle(
+                          fontSize: _source.cellFontSize,
+                          fontFamily: _source.fontFamily,
+                          fontStyle: FontStyle.italic,
+                          color: Colors.white38,
+                        ),
+                      ) : null,
                     ),
                     onSubmitted: (_) => _commitEdit(moveDown: true),
                   )
@@ -1756,24 +1764,20 @@ class _EpyxGridState extends State<EpyxGrid> {
 
   /// Select entire column.
   void _selectColumn(int col) {
-    final totalRows = widget.control.getInt("total_rows", 0) ?? 0;
-    final effectiveTotal = totalRows > 0 ? totalRows : _source.rowCount;
     setState(() {
       _selectedRow = 0;
       _selectedCol = col;
-      _selEndRow = effectiveTotal - 1;
+      _selEndRow = _effectiveRowCount - 1;
       _selEndCol = col;
     });
   }
 
   /// Select all cells.
   void _selectAll() {
-    final totalRows = widget.control.getInt("total_rows", 0) ?? 0;
-    final effectiveTotal = totalRows > 0 ? totalRows : _source.rowCount;
     setState(() {
       _selectedRow = 0;
       _selectedCol = 0;
-      _selEndRow = effectiveTotal - 1;
+      _selEndRow = _effectiveRowCount - 1;
       _selEndCol = _source.columnCount - 1;
     });
   }
@@ -1781,13 +1785,12 @@ class _EpyxGridState extends State<EpyxGrid> {
   /// Get selected text as tab-separated values.
   String _getSelectionText() {
     final buf = StringBuffer();
-    for (int absR = _selMinRow; absR <= _selMaxRow; absR++) {
-      final bufR = _source.toBufferIndex(absR);
+    for (int r = _selMinRow; r <= _selMaxRow; r++) {
       for (int c = _selMinCol; c <= _selMaxCol; c++) {
         if (c > _selMinCol) buf.write('\t');
-        buf.write(bufR >= 0 ? _source.cellText(bufR, c) : '');
+        buf.write(_cachedCellText(r, c));
       }
-      if (absR < _selMaxRow) buf.write('\n');
+      if (r < _selMaxRow) buf.write('\n');
     }
     return buf.toString();
   }
@@ -1810,16 +1813,14 @@ class _EpyxGridState extends State<EpyxGrid> {
 
   void _clearSelection() {
     if (!_canEdit) return;
-    // Fire cell_edit with empty value for each cell in selection (absolute indices)
-    for (int absR = _selMinRow; absR <= _selMaxRow; absR++) {
-      final bufR = _source.toBufferIndex(absR);
+    // Fire cell_edit with empty value for each cell in selection
+    for (int r = _selMinRow; r <= _selMaxRow; r++) {
       for (int c = _selMinCol; c <= _selMaxCol; c++) {
         final colName = _source.columnName(c);
-        final oldVal = bufR >= 0 ? _source.cellText(bufR, c) : '';
         final eventData = jsonEncode({
-          'row_index': absR,
+          'row_index': _storageIndex(r),
           'column_name': colName,
-          'old_value': oldVal,
+          'old_value': _cachedCellText(r, c),
           'new_value': '',
         });
         widget.control.triggerEventWithoutSubscribers('cell_edit', eventData);
@@ -1832,23 +1833,19 @@ class _EpyxGridState extends State<EpyxGrid> {
     final data = await Clipboard.getData(Clipboard.kTextPlain);
     if (data?.text == null || data!.text!.isEmpty) return;
 
-    final totalRows = widget.control.getInt("total_rows", 0) ?? 0;
-    final effectiveTotal = totalRows > 0 ? totalRows : _source.rowCount;
     final lines = data.text!.split('\n');
     for (int r = 0; r < lines.length; r++) {
       final cols = lines[r].split('\t');
-      final targetAbsRow = _selectedRow + r; // absolute
-      if (targetAbsRow >= effectiveTotal) break;
-      final bufR = _source.toBufferIndex(targetAbsRow);
+      final targetRow = _selectedRow + r;
+      if (targetRow >= _effectiveRowCount) break;
       for (int c = 0; c < cols.length; c++) {
         final targetCol = _selectedCol + c;
         if (targetCol >= _source.columnCount) break;
         final colName = _source.columnName(targetCol);
-        final oldVal = bufR >= 0 ? _source.cellText(bufR, targetCol) : '';
         final eventData = jsonEncode({
-          'row_index': targetAbsRow,
+          'row_index': _storageIndex(targetRow),
           'column_name': colName,
-          'old_value': oldVal,
+          'old_value': _cachedCellText(targetRow, targetCol),
           'new_value': cols[c],
         });
         widget.control.triggerEventWithoutSubscribers('cell_edit', eventData);
@@ -1874,10 +1871,7 @@ class _EpyxGridState extends State<EpyxGrid> {
   void _toggleAllCheckboxes(bool checked) {
     setState(() {
       if (checked) {
-        // Add absolute indices for all buffered rows
-        for (int i = 0; i < _source.rowCount; i++) {
-          _checkedRows.add(_source.toAbsoluteRow(i));
-        }
+        for (int i = 0; i < _effectiveRowCount; i++) _checkedRows.add(i);
       } else {
         _checkedRows.clear();
       }
@@ -1908,21 +1902,17 @@ class _EpyxGridState extends State<EpyxGrid> {
     return true;
   }
 
-  void _startEditing({String? initialText, bool codeMode = false}) {
+  void _startEditing({String? initialText, bool codeMode = false, String? prompt}) {
     if (!_canEdit) return;
-
-    // Convert absolute _selectedRow to buffer-relative for data access
-    final bufRow = _source.toBufferIndex(_selectedRow);
-    if (bufRow < 0) return; // row not in buffer — can't edit
 
     // Get raw value for editing (not display-formatted)
     final rawRowsJson = widget.control.getString("raw_rows");
-    String rawValue = _source.cellText(bufRow, _selectedCol);
+    String rawValue = _cachedCellText(_selectedRow, _selectedCol);
     if (rawRowsJson != null && rawRowsJson.isNotEmpty) {
       try {
         final rawRows = jsonDecode(rawRowsJson) as List;
-        if (bufRow < rawRows.length) {
-          final row = rawRows[bufRow] as List;
+        if (_selectedRow < rawRows.length) {
+          final row = rawRows[_selectedRow] as List;
           if (_selectedCol < row.length && row[_selectedCol] != null) {
             rawValue = row[_selectedCol].toString();
           }
@@ -1933,6 +1923,7 @@ class _EpyxGridState extends State<EpyxGrid> {
     setState(() {
       _isEditing = true;
       _isCodeMode = codeMode;
+      _editPrompt = prompt;
       _editOriginalValue = rawValue;
       _editValue = initialText ?? rawValue;
       _editController.text = _editValue;
@@ -1966,15 +1957,14 @@ class _EpyxGridState extends State<EpyxGrid> {
       value = double.tryParse(rawValue) ?? int.tryParse(rawValue) ?? rawValue;
     }
 
-    // Build context: value + other columns in the row (buffer-relative)
+    // Build context: value + other columns in the row
     final ctx = <String, dynamic>{'value': value};
-    final bufRow = _source.toBufferIndex(_selectedRow);
     final rawRowsJson = widget.control.getString("raw_rows");
-    if (rawRowsJson != null && rawRowsJson.isNotEmpty && bufRow >= 0) {
+    if (rawRowsJson != null && rawRowsJson.isNotEmpty) {
       try {
         final rawRows = jsonDecode(rawRowsJson) as List;
-        if (bufRow < rawRows.length) {
-          final row = rawRows[bufRow] as List;
+        if (_selectedRow < rawRows.length) {
+          final row = rawRows[_selectedRow] as List;
           for (int c = 0; c < row.length && c < _source.columnCount; c++) {
             ctx[_source.columnName(c)] = row[c];
           }
@@ -1999,9 +1989,12 @@ class _EpyxGridState extends State<EpyxGrid> {
   }
 
   void _cancelEdit() {
+    // Clear any pending optimistic edits for the current cell
+    _pendingEdits.remove('$_selectedRow:$_selectedCol');
     setState(() {
       _isEditing = false;
       _isCodeMode = false;
+      _editPrompt = null;
     });
     _focusNode.requestFocus();
   }
@@ -2014,11 +2007,8 @@ class _EpyxGridState extends State<EpyxGrid> {
     setState(() {
       _isEditing = false;
       _isCodeMode = false;
+      _editPrompt = null;
     });
-
-    // _selectedRow is ABSOLUTE
-    final totalRows = widget.control.getInt("total_rows", 0) ?? 0;
-    final effectiveTotal = totalRows > 0 ? totalRows : _source.rowCount;
 
     // Fire on_cell_edit event if value changed
     if (newValue != oldValue) {
@@ -2028,7 +2018,7 @@ class _EpyxGridState extends State<EpyxGrid> {
       _pendingEdits['$_selectedRow:$_selectedCol'] = formatted ?? newValue;
       final colName = _source.columnName(_selectedCol);
       final eventData = jsonEncode({
-        'row_index': _selectedRow,
+        'row_index': _storageIndex(_selectedRow),
         'column_name': colName,
         'old_value': oldValue,
         'new_value': newValue,
@@ -2037,9 +2027,9 @@ class _EpyxGridState extends State<EpyxGrid> {
     }
 
     // Move selection (collapse range) — scroll: false, cell is adjacent and visible
-    if (moveDown && _selectedRow < effectiveTotal - 1) {
+    if (moveDown && _selectedRow < _effectiveRowCount - 1) {
       _moveTo(_selectedRow + 1, _selectedCol, scroll: false);
-    } else if (moveDown && _selectedRow == effectiveTotal - 1) {
+    } else if (moveDown && _selectedRow == _effectiveRowCount - 1) {
       // Enter at last row: fire add_row event (comparison, list ctypes)
       widget.control.triggerEventWithoutSubscribers('add_row', '{}');
     } else if (moveUp && _selectedRow > 0) {
@@ -2102,12 +2092,11 @@ class _EpyxGridState extends State<EpyxGrid> {
       cumX += w;
     }
 
-    // Hit test: find row (now returns absolute index directly)
-    final absRow = _hitTestRow(absY);
+    final row = _hitTestRow(absY);
 
     // Shift+click extends selection, plain click moves anchor.
     // scroll: false — user tapped a visible cell, don't scroll.
-    _moveTo(absRow, col,
+    _moveTo(row, col,
         extend: HardwareKeyboard.instance.isShiftPressed, scroll: false);
     _focusNode.requestFocus();
   }
@@ -2152,20 +2141,20 @@ class _EpyxGridState extends State<EpyxGrid> {
       }
       cumX += w;
     }
-    // Hit test: returns absolute row index directly
-    final absRow = _hitTestRow(absY);
+    final row = _hitTestRow(absY);
 
-    if (!_isInSelection(absRow, col)) {
-      _moveTo(absRow, col, scroll: false);
+    if (!_isInSelection(row, col)) {
+      _moveTo(row, col, scroll: false);
     }
     _focusNode.requestFocus();
 
-    _showContextMenu(details.globalPosition, absRow, col);
+    _showContextMenu(details.globalPosition, row, col);
   }
 
   /// Show right-click context menu (CM1-CM6, ctype-aware).
   void _showContextMenu(Offset globalPosition, int row, int col) {
-    final hasOverride = _source.hasOverride(row, col);
+    final colName = col < _source.columnCount ? _source.columnName(col) : '';
+    final hasOverride = _cachedHasOverride(row, colName);
     final editable = _canEdit;
     final allowDeleteRow =
         widget.control.getBool("allow_delete_row", true) ?? true;
@@ -2231,7 +2220,7 @@ class _EpyxGridState extends State<EpyxGrid> {
           final colName = _source.columnName(col);
           final eventData = jsonEncode({
             'action': action,
-            'row_index': row,
+            'row_index': _storageIndex(row),
             'column_name': colName,
           });
           widget.control.triggerEventWithoutSubscribers(
@@ -2296,6 +2285,146 @@ class _EpyxGridState extends State<EpyxGrid> {
     });
   }
 
+  /// Map a logical key event to a name compatible with the on_key convention.
+  ///
+  /// Convention (matches flet-einput): structural keys get a stable
+  /// PascalCase / Snake_Case name (Enter, Tab, Arrow_Up, ...). Letter keys
+  /// always lowercase regardless of Shift / Cmd state — modifiers are
+  /// reported separately. On macOS Cmd+letter would otherwise arrive with
+  /// `event.character == null` and we'd fall back to the uppercase
+  /// `keyLabel == "K"`, breaking user code that checks `key == "k"`.
+  String _logicalKeyName(LogicalKeyboardKey key, KeyEvent event) {
+    if (key == LogicalKeyboardKey.enter) return 'Enter';
+    if (key == LogicalKeyboardKey.tab) return 'Tab';
+    if (key == LogicalKeyboardKey.escape) return 'Escape';
+    if (key == LogicalKeyboardKey.f2) return 'F2';
+    if (key == LogicalKeyboardKey.delete) return 'Delete';
+    if (key == LogicalKeyboardKey.backspace) return 'Backspace';
+    if (key == LogicalKeyboardKey.space) return 'Space';
+    if (key == LogicalKeyboardKey.arrowUp) return 'Arrow_Up';
+    if (key == LogicalKeyboardKey.arrowDown) return 'Arrow_Down';
+    if (key == LogicalKeyboardKey.arrowLeft) return 'Arrow_Left';
+    if (key == LogicalKeyboardKey.arrowRight) return 'Arrow_Right';
+    if (key == LogicalKeyboardKey.home) return 'Home';
+    if (key == LogicalKeyboardKey.end) return 'End';
+    if (key == LogicalKeyboardKey.pageUp) return 'Page_Up';
+    if (key == LogicalKeyboardKey.pageDown) return 'Page_Down';
+    // Letter keys: always lowercase. keyLabel is "A".."Z" for letters.
+    final label = key.keyLabel;
+    if (label.length == 1 && label.codeUnitAt(0) >= 0x41 && label.codeUnitAt(0) <= 0x5A) {
+      return label.toLowerCase();
+    }
+    final char = event.character;
+    if (char != null && char.isNotEmpty) return char;
+    return label;
+  }
+
+  /// Build the modifiers list passed to user `on_key` code.
+  ///
+  /// Reports four literal modifiers (`ctrl`, `meta`, `shift`, `alt`) plus
+  /// a derived alias (`cmd`) for the platform-conventional shortcut key —
+  /// `meta` on macOS, `ctrl` elsewhere. Identical to flet-einput's helper
+  /// so EScalar and ETab on_key handlers see the same modifier vocabulary.
+  static List<String> _buildModifiers() {
+    final mods = <String>[];
+    final hasCtrl = HardwareKeyboard.instance.isControlPressed;
+    final hasMeta = HardwareKeyboard.instance.isMetaPressed;
+    if (hasCtrl) mods.add('ctrl');
+    if (hasMeta) mods.add('meta');
+    if (HardwareKeyboard.instance.isShiftPressed) mods.add('shift');
+    if (HardwareKeyboard.instance.isAltPressed) mods.add('alt');
+    final isMac = defaultTargetPlatform == TargetPlatform.macOS;
+    if ((isMac && hasMeta) || (!isMac && hasCtrl)) mods.add('cmd');
+    return mods;
+  }
+
+  /// Execute a command chain from on_key evaluation.
+  void _executeCommandChain(List<dynamic> commands) {
+    for (final cmd in commands) {
+      if (cmd is! Map) continue;
+      final name = cmd['cmd'] as String? ?? '';
+      switch (name) {
+        case 'commit':
+          if (_isEditing) _commitEdit();
+          break;
+        case 'move':
+          final r = (cmd['row'] as num?)?.toInt() ?? _selectedRow;
+          final c = (cmd['col'] as num?)?.toInt() ?? _selectedCol;
+          _moveTo(
+            r.clamp(0, _effectiveRowCount - 1),
+            c.clamp(0, _source.columnCount - 1),
+          );
+          break;
+        case 'initiate_editing':
+          final mode = cmd['mode'] as String?;
+          final initialText = cmd['initial_text'] as String?;
+          final prompt = cmd['prompt'] as String?;
+          _startEditing(codeMode: mode == 'code', initialText: initialText, prompt: prompt);
+          break;
+        case 'cancel_editing':
+          if (_isEditing) _cancelEdit();
+          break;
+        case 'commit_value':
+          // Clear cell: fire cell_edit with empty value
+          if (_canEdit) {
+            final colName = _selectedCol < _source.columnCount
+                ? _source.columnName(_selectedCol) : '';
+            final storageIdx = _storageIndex(_selectedRow);
+            widget.control.triggerEventWithoutSubscribers(
+              'cell_edit',
+              jsonEncode({
+                'row_index': storageIdx,
+                'column_name': colName,
+                'old_value': _cachedCellText(_selectedRow, _selectedCol),
+                'new_value': '',
+              }),
+            );
+          }
+          break;
+        case 'add_row':
+          widget.control.triggerEventWithoutSubscribers(
+            'context_action',
+            jsonEncode({
+              'action': 'add_row',
+              'row_index': _selectedRow,
+              'column_name': _selectedCol < _source.columnCount
+                  ? _source.columnName(_selectedCol) : '',
+            }),
+          );
+          break;
+        case 'toggle_checkbox':
+          // Toggle checkbox for selected row
+          final checkboxCol = widget.control.getBool("show_checkbox_column", false) ?? false;
+          if (checkboxCol) {
+            widget.control.triggerEventWithoutSubscribers(
+              'checkbox_selection',
+              jsonEncode({'selected_rows': [_selectedRow]}),
+            );
+          }
+          break;
+        case 'beep':
+          // No-op — absorbs the key event without action
+          break;
+        case 'banner':
+          final msg = cmd['message'] as String? ?? '';
+          final level = cmd['level'] as String? ?? 'info';
+          widget.control.updateProperties(
+              {'error_message': '$level:$msg'}, python: false, notify: false);
+          break;
+        case 'select':
+          final r = (cmd['row'] as num?)?.toInt() ?? _selectedRow;
+          final c = (cmd['col'] as num?)?.toInt() ?? _selectedCol;
+          _moveTo(r.clamp(0, _effectiveRowCount - 1),
+                  c.clamp(0, _source.columnCount - 1), scroll: false);
+          break;
+        case 'scroll_to':
+          final r = (cmd['row'] as num?)?.toInt() ?? _selectedRow;
+          _scrollToCachedRow(r.clamp(0, _effectiveRowCount - 1));
+          break;
+      }
+    }
+  }
+
   KeyEventResult _onKeyEvent(FocusNode node, KeyEvent event) {
     if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
       return KeyEventResult.ignored;
@@ -2303,6 +2432,65 @@ class _EpyxGridState extends State<EpyxGrid> {
     if (!_sourceInitialized) return KeyEventResult.ignored;
 
     final key = event.logicalKey;
+
+    // Clear ephemeral banner on any key event
+    final curBanner = widget.control.getString("error_message") ?? '';
+    if (curBanner.isNotEmpty) {
+      widget.control.updateProperties(
+          {'error_message': ''}, python: false, notify: false);
+      setState(() {});
+    }
+
+    // -- on_key hook (Phase 5): canonical render plane projection path --
+    //
+    // The user's spec_code `def on_key(...)` body is wrapped by
+    // project_render_funcs into a callable; we eval it via
+    // MicroPythonService.execEval. ctx carries the per-call args. Returning
+    // a non-empty list of commands wins (Dart executes via
+    // _executeCommandChain); returning None / [] / a non-list falls through
+    // to the hardcoded baseline below.
+    //
+    // Modifier convention (matches EInputText): ctrl/meta/shift/alt are
+    // literal modifiers; `cmd` is a derived alias for the platform-
+    // conventional shortcut key (meta on macOS, ctrl elsewhere). Users
+    // should reach for `"cmd" in modifiers` for cross-platform shortcuts.
+    if (_onKeyProjection != null && MicroPythonService.isReady) {
+      final proj = _onKeyProjection!;
+      final execBody = proj['exec'] as String? ?? '';
+      final evalExpr = proj['eval'] as String? ?? '';
+      if (evalExpr.isNotEmpty) {
+        final keyName = _logicalKeyName(key, event);
+        final mods = _buildModifiers();
+        final ctx = <String, dynamic>{
+          'key': keyName,
+          'modifiers': mods,
+          'row': _selectedRow,
+          'col': _selectedCol,
+          'col_name': _selectedCol < _source.columnCount
+              ? _source.columnName(_selectedCol) : '',
+          'editing': _isEditing,
+          'value': _cachedCellText(_selectedRow, _selectedCol),
+          'total_rows': _effectiveRowCount,
+          'total_cols': _source.columnCount,
+        };
+        try {
+          final result = MicroPythonService.execEval(execBody, evalExpr, ctx);
+          if (result != null && result is List && result.isNotEmpty) {
+            setState(() {
+              _executeCommandChain(result);
+            });
+            return KeyEventResult.handled;
+          }
+          // result null / non-list / empty → fall through to baseline
+        } catch (e) {
+          widget.control.updateProperties(
+              {'error_message': '[on_key] ERROR: $e'},
+              python: false, notify: false);
+          setState(() {});
+          // MicroPython error → fall through to baseline
+        }
+      }
+    }
 
     // When editing, the TextField handles most keys.
     // We intercept: Enter, Tab, Shift+Tab, Escape, arrow up/down
@@ -2389,66 +2577,64 @@ class _EpyxGridState extends State<EpyxGrid> {
       handled = true;
 
     // -- Arrow keys (with Ctrl+Shift, Ctrl, Shift, plain) --
-    // All selection state uses ABSOLUTE row indices.
-    // Navigation uses the event queue to defer scroll until data arrives.
     } else if (key == LogicalKeyboardKey.arrowDown) {
-      final totalRows = widget.control.getInt("total_rows", 0) ?? 0;
-      final maxAbsRow = (totalRows > 0 ? totalRows : _source.rowCount) - 1;
-      final targetRow = isCtrl ? maxAbsRow
+      final maxRow = _effectiveRowCount - 1;
+      final targetRow = isCtrl ? maxRow
           : (isShift ? _selEndRow + 1 : _selectedRow + 1);
-      final row = targetRow.clamp(0, maxAbsRow);
+      final row = targetRow.clamp(0, maxRow);
       if (isShift) {
         setState(() => _selEndRow = row);
       } else if (isCtrl) {
-        // Cmd+Down: jump to last row — enqueue display event
+        // Ctrl+Down: jump to last row — use display event for cache
         _moveTo(row, _selectedCol, scroll: false);
-        _enqueueDisplay(_DisplayEvent(
-          type: _DisplayEventType.cmdDown,
-          targetRow: row,
-          position: _DisplayPosition.bottom,
-        ));
-      } else {
-        // Single step down
-        _moveTo(row, _selectedCol, scroll: false);
-        if (_isRowInBuffer(row)) {
-          _ensureRowVisible(row);
+        if (_pixelLodActive) {
+          _cache.enqueue(DisplayEvent(row, DisplayPosition.bottom));
+          _tryProcessQueue();
         } else {
-          _enqueueDisplay(_DisplayEvent(
-            type: _DisplayEventType.arrowStep,
-            targetRow: row,
-            position: _DisplayPosition.bottom,
-          ));
+          _scrollToEdge(bottom: true);
         }
+      } else {
+        // Single step: delta scroll only if target not visible
+        if (!_isRowVisible(row) && _yController.hasClients) {
+          if (_pixelLodActive && _cache.has(row)) {
+            _scrollToCachedRow(row);
+          } else {
+            _yController.jumpTo(
+                (_yController.offset + _source.rowHeight)
+                    .clamp(0.0, _yController.position.maxScrollExtent));
+          }
+        }
+        _moveTo(row, _selectedCol, scroll: false);
       }
       handled = true;
     } else if (key == LogicalKeyboardKey.arrowUp) {
-      final totalRows = widget.control.getInt("total_rows", 0) ?? 0;
-      final maxAbsRow = (totalRows > 0 ? totalRows : _source.rowCount) - 1;
+      final maxRow = _effectiveRowCount - 1;
       final targetRow = isCtrl ? 0
           : (isShift ? _selEndRow - 1 : _selectedRow - 1);
-      final row = targetRow.clamp(0, maxAbsRow);
+      final row = targetRow.clamp(0, maxRow);
       if (isShift) {
         setState(() => _selEndRow = row);
       } else if (isCtrl) {
-        // Cmd+Up: jump to first row — enqueue display event
+        // Ctrl+Up: jump to first row — use display event for cache
         _moveTo(row, _selectedCol, scroll: false);
-        _enqueueDisplay(_DisplayEvent(
-          type: _DisplayEventType.cmdUp,
-          targetRow: row,
-          position: _DisplayPosition.top,
-        ));
-      } else {
-        // Single step up
-        _moveTo(row, _selectedCol, scroll: false);
-        if (_isRowInBuffer(row)) {
-          _ensureRowVisible(row);
+        if (_pixelLodActive) {
+          _cache.enqueue(DisplayEvent(row, DisplayPosition.top));
+          _tryProcessQueue();
         } else {
-          _enqueueDisplay(_DisplayEvent(
-            type: _DisplayEventType.arrowStep,
-            targetRow: row,
-            position: _DisplayPosition.top,
-          ));
+          _scrollToEdge(bottom: false);
         }
+      } else {
+        // Single step: delta scroll only if target not visible
+        if (!_isRowVisible(row) && _yController.hasClients) {
+          if (_pixelLodActive && _cache.has(row)) {
+            _scrollToCachedRow(row);
+          } else {
+            _yController.jumpTo(
+                (_yController.offset - _source.rowHeight)
+                    .clamp(0.0, _yController.position.maxScrollExtent));
+          }
+        }
+        _moveTo(row, _selectedCol, scroll: false);
       }
       handled = true;
     } else if (key == LogicalKeyboardKey.arrowRight) {
@@ -2457,20 +2643,9 @@ class _EpyxGridState extends State<EpyxGrid> {
       final col = targetCol.clamp(0, _source.columnCount - 1);
       if (isShift) {
         setState(() => _selEndCol = col);
+        _ensureColumnVisible(col);
       } else {
-        // Only scroll if target column is not already visible
-        if (!_isColumnVisible(col) && _xController.hasClients) {
-          if (col > _selectedCol) {
-            _xController.jumpTo(
-                (_xController.offset + _getColumnWidth(_selectedCol))
-                    .clamp(0.0, _xController.position.maxScrollExtent));
-          } else {
-            _xController.jumpTo(
-                (_xController.offset - _getColumnWidth(col))
-                    .clamp(0.0, _xController.position.maxScrollExtent));
-          }
-        }
-        _moveTo(_selectedRow, col, scroll: false);
+        _moveTo(_selectedRow, col);  // scroll: true → _ensureColumnVisible
       }
       handled = true;
     } else if (key == LogicalKeyboardKey.arrowLeft) {
@@ -2479,42 +2654,24 @@ class _EpyxGridState extends State<EpyxGrid> {
       final col = targetCol.clamp(0, _source.columnCount - 1);
       if (isShift) {
         setState(() => _selEndCol = col);
+        _ensureColumnVisible(col);
       } else {
-        // Only scroll if target column is not already visible
-        if (!_isColumnVisible(col) && _xController.hasClients) {
-          if (col < _selectedCol) {
-            _xController.jumpTo(
-                (_xController.offset - _getColumnWidth(col))
-                    .clamp(0.0, _xController.position.maxScrollExtent));
-          } else {
-            _xController.jumpTo(
-                (_xController.offset + _getColumnWidth(_selectedCol))
-                    .clamp(0.0, _xController.position.maxScrollExtent));
-          }
-        }
-        _moveTo(_selectedRow, col, scroll: false);
+        _moveTo(_selectedRow, col);  // scroll: true → _ensureColumnVisible
       }
       handled = true;
 
     // -- Home/End --
     } else if (key == LogicalKeyboardKey.home && isCtrl) {
       _moveTo(0, 0, extend: isShift);
-      _enqueueDisplay(_DisplayEvent(
-        type: _DisplayEventType.goToRow,
-        targetRow: 0,
-        position: _DisplayPosition.top,
-      ));
       handled = true;
     } else if (key == LogicalKeyboardKey.end && isCtrl) {
-      final totalRows = widget.control.getInt("total_rows", 0) ?? 0;
-      final lastRow = (totalRows > 0 ? totalRows : _source.rowCount) - 1;
+      final lastRow = _effectiveRowCount - 1;
       final lastCol = _source.columnCount - 1;
       _moveTo(lastRow, lastCol, extend: isShift);
-      _enqueueDisplay(_DisplayEvent(
-        type: _DisplayEventType.goToRow,
-        targetRow: lastRow,
-        position: _DisplayPosition.bottom,
-      ));
+      if (_pixelLodActive) {
+        _cache.enqueue(DisplayEvent(lastRow, DisplayPosition.bottom));
+        _tryProcessQueue();
+      }
       handled = true;
     } else if (key == LogicalKeyboardKey.home) {
       if (isShift) {
@@ -2534,37 +2691,38 @@ class _EpyxGridState extends State<EpyxGrid> {
       }
       handled = true;
     } else if (key == LogicalKeyboardKey.pageDown) {
-      final totalRows = widget.control.getInt("total_rows", 0) ?? 0;
-      final maxAbsRow = (totalRows > 0 ? totalRows : _source.rowCount) - 1;
       final visibleRows = _yController.hasClients
           ? (_yController.position.viewportDimension / _source.rowHeight).floor()
           : 10;
-      final row = (_selectedRow + visibleRows).clamp(0, maxAbsRow);
+      final maxRow = _effectiveRowCount - 1;
+      final row = (_selectedRow + visibleRows).clamp(0, maxRow);
       _moveTo(row, _selectedCol, scroll: false);
-      _enqueueDisplay(_DisplayEvent(
-        type: _DisplayEventType.pageDown,
-        targetRow: row,
-        position: _DisplayPosition.top,
-      ));
+      if (_pixelLodActive) {
+        _cache.enqueue(DisplayEvent(row, DisplayPosition.top));
+        _tryProcessQueue();
+      } else {
+        _scrollToAnchor();
+      }
       handled = true;
     } else if (key == LogicalKeyboardKey.pageUp) {
-      final totalRows = widget.control.getInt("total_rows", 0) ?? 0;
-      final maxAbsRow = (totalRows > 0 ? totalRows : _source.rowCount) - 1;
       final visibleRows = _yController.hasClients
           ? (_yController.position.viewportDimension / _source.rowHeight).floor()
           : 10;
-      final row = (_selectedRow - visibleRows).clamp(0, maxAbsRow);
+      final maxRow = _effectiveRowCount - 1;
+      final row = (_selectedRow - visibleRows).clamp(0, maxRow);
       _moveTo(row, _selectedCol, scroll: false);
-      _enqueueDisplay(_DisplayEvent(
-        type: _DisplayEventType.pageUp,
-        targetRow: row,
-        position: _DisplayPosition.top,
-      ));
+      if (_pixelLodActive) {
+        _cache.enqueue(DisplayEvent(row, DisplayPosition.top));
+        _tryProcessQueue();
+      } else {
+        _scrollToAnchor();
+      }
       handled = true;
     } else if (key == LogicalKeyboardKey.delete || key == LogicalKeyboardKey.backspace) {
-      // Delete/Backspace: clear selection
+      // Delete/Backspace: start editing with empty text (non-destructive).
+      // User must press Enter to confirm clear, or Escape to restore.
       if (_canEdit) {
-        _clearSelection();
+        _startEditing(initialText: '');
         handled = true;
       }
     } else if (key == LogicalKeyboardKey.escape) {
@@ -2612,8 +2770,11 @@ class _EpyxGridState extends State<EpyxGrid> {
       fontFamily: _source.fontFamily,
     );
     double maxWidth = 60.0; // minimum
-    for (int r = 0; r < _source.rowCount; r++) {
-      final text = _source.cellText(r, col);
+    // Only measure cached rows — at 1M rows we can't create 1M TextPainters.
+    // Cached rows are the ones the user has actually seen.
+    for (final entry in _cache.cachedEntries) {
+      final data = entry.value.data;
+      final text = col < data.length ? (data[col]?.toString() ?? '') : '';
       final tp = TextPainter(
         text: TextSpan(text: text, style: style),
         maxLines: 1,
@@ -2630,73 +2791,88 @@ class _EpyxGridState extends State<EpyxGrid> {
   /// Is column `col` fully visible in the horizontal viewport?
   bool _isColumnVisible(int col) {
     if (!_xController.hasClients) return true;
-    double colLeft = 0;
-    for (int i = 0; i < col; i++) colLeft += _getColumnWidth(i);
+    if (_source.isColumnHidden(col)) return false;
+    final colLeft = _scrollableColLeft(col);
     final colRight = colLeft + _getColumnWidth(col);
     final offset = _xController.offset;
     final vw = _xController.position.viewportDimension;
     return colLeft >= offset && colRight <= offset + vw;
   }
 
-  /// Is row `absRow` (absolute) fully visible in the vertical viewport?
-  bool _isRowVisible(int absRow) {
+  /// Is row `row` fully visible in the vertical viewport?
+  bool _isRowVisible(int row) {
     if (!_yController.hasClients) return true;
-    // With full-extent ListView (itemCount = totalRows), absolute row index
-    // maps directly to scroll offset.
-    final rowTop = _absRowTopOffset(absRow);
-    final rowH = _bufferedRowHeight(absRow);
     final offset = _yController.offset;
     final vh = _yController.position.viewportDimension;
-    return rowTop >= offset && rowTop + rowH <= offset + vh;
-  }
-
-  /// Y offset of the top of an ABSOLUTE row.
-  /// For uniform heights: absRow * rowHeight (O(1)).
-  /// For variable heights: walks from the current scroll anchor.
-  double _absRowTopOffset(int absRow) {
-    if (!_source.hasVariableRowHeights) return absRow * _source.rowHeight;
-    // Walk from the current anchor (first visible row) which we know the offset of
-    final anchor = _firstVisibleRow;
-    final anchorY = _yController.hasClients ? _yController.offset : 0.0;
-    double y = anchorY;
-    if (absRow >= anchor) {
-      for (int i = anchor; i < absRow; i++) y += _bufferedRowHeight(i);
-    } else {
-      for (int i = anchor - 1; i >= absRow; i--) y -= _bufferedRowHeight(i);
+    if (_pixelLodActive) {
+      final cached = _cache.get(row);
+      if (cached != null) {
+        return cached.pixelOffset >= offset &&
+            cached.pixelOffset + cached.height <= offset + vh;
+      }
     }
-    return y;
+    final rowTop = row * _source.rowHeight;
+    final rowBottom = rowTop + _source.rowHeight;
+    return rowTop >= offset && rowBottom <= offset + vh;
   }
 
-  /// Legacy compatibility: buffer-relative row top offset.
-  /// Still used by _hitTestRow.
-  double _bufRowTopOffset(int bufRow) {
-    if (!_source.hasVariableRowHeights) return bufRow * _source.rowHeight;
-    final bufAnchor = _source.toBufferIndex(_firstVisibleRow);
-    final anchor = bufAnchor >= 0 ? bufAnchor : 0;
-    final anchorY = _yController.hasClients ? _yController.offset : 0.0;
-    double y = anchorY;
-    if (bufRow >= anchor) {
-      for (int i = anchor; i < bufRow; i++) y += _source.getRowHeight(i);
-    } else {
-      for (int i = anchor - 1; i >= bufRow; i--) y -= _source.getRowHeight(i);
-    }
-    return y;
-  }
-
-  /// Hit-test: convert a Y pixel offset to an ABSOLUTE row index.
-  /// Walks forward accumulating heights — same pattern as _walkEvent
-  /// and _scrollToItemTop.
+  /// Hit-test: find which row is at absolute pixel position `absY`.
+  /// O(1) estimate-and-refine when LOD active, O(1) division otherwise.
   int _hitTestRow(double absY) {
-    final totalRows = widget.control.getInt("total_rows", 0) ?? 0;
-    final effectiveTotal = totalRows > 0 ? totalRows : _source.rowCount;
-    final maxRow = effectiveTotal > 0 ? effectiveTotal - 1 : 0;
-    double cumY = 0;
-    for (int r = 0; r <= maxRow; r++) {
-      final rh = _bufferedRowHeight(r);
-      if (absY < cumY + rh) return r;
-      cumY += rh;
+    final maxRow = _effectiveRowCount - 1;
+    if (maxRow < 0) return 0;
+    if (_pixelLodActive) {
+      // Estimate using the same average as itemExtent (totalHeight/totalRows)
+      final avgH = _cache.totalRows > 0
+          ? _cache.totalHeight / _cache.totalRows
+          : _cache.defaultRowHeight;
+      int est = avgH > 0 ? (absY / avgH).floor().clamp(0, maxRow) : 0;
+      // Refine ±20 rows using cached pixel offsets
+      final lo = math.max(0, est - 20);
+      final hi = math.min(maxRow, est + 20);
+      for (int r = lo; r <= hi; r++) {
+        final cached = _cache.get(r);
+        final top = cached?.pixelOffset ?? r * avgH;
+        final h = cached?.height ?? avgH;
+        if (absY < top + h) return r;
+      }
+      print('[HIT-TEST WARN] refinement failed: absY=$absY est=$est avgH=$avgH cached=${_cache.cachedRowCount}');
+      return est;
     }
-    return maxRow;
+    return (absY / _source.rowHeight).floor().clamp(0, maxRow);
+  }
+
+  /// Is pixel-space LOD mode active? True when Python has pushed data_version > 0.
+  bool get _pixelLodActive => _lastDataVersion > 0 && _cache.totalRows > 0;
+
+  /// Effective row count: cache totalRows when pixel-space LOD active, else source rowCount.
+  int get _effectiveRowCount =>
+      _pixelLodActive ? _cache.totalRows : _source.rowCount;
+
+  /// Dynamic page size based on viewport. Adapts to screen size and row density.
+  int get _dynamicPageSize {
+    if (_yController.hasClients) {
+      return (_yController.position.viewportDimension /
+              _cache.defaultRowHeight * 2)
+          .round()
+          .clamp(200, 1000);
+    }
+    return 150;
+  }
+
+  /// Map display row index to storage index. Uses cache when LOD active.
+  /// When no sort/filter, storage index == display index.
+  int _storageIndex(int displayRow) {
+    if (_pixelLodActive) {
+      return _cache.get(displayRow)?.storageIndex ?? displayRow;
+    }
+    return displayRow;
+  }
+
+  /// Row height: cache-aware. Uses cache height in LOD mode, else source.
+  double _getRowHeight(int row) {
+    if (_pixelLodActive) return _cache.rowHeight(row);
+    return _source.getRowHeight(row);
   }
 
   /// Column width: use drag override if set, else source default.
@@ -2737,18 +2913,16 @@ class _EpyxGridState extends State<EpyxGrid> {
     return total;
   }
 
-  void _ensureRowVisible(int absRow) {
+  void _ensureRowVisible(int row) {
     // In Natural mode, _yController has no clients (shrinkWrap ListView)
     if (!_yController.hasClients) return;
-    // With full-extent ListView, use absolute row offset directly
-    final rowTop = _absRowTopOffset(absRow);
-    final rowH = _bufferedRowHeight(absRow);
+    final offset = row * _source.rowHeight;
     final viewportHeight = _yController.position.viewportDimension;
-    if (rowTop < _yController.offset) {
-      _yController.jumpTo(rowTop.clamp(0.0, _yController.position.maxScrollExtent));
-    } else if (rowTop + rowH > _yController.offset + viewportHeight) {
-      _yController.jumpTo(
-          (rowTop + rowH - viewportHeight).clamp(0.0, _yController.position.maxScrollExtent));
+    if (offset < _yController.offset) {
+      _yController.jumpTo(offset);
+    } else if (offset + _source.rowHeight >
+        _yController.offset + viewportHeight) {
+      _yController.jumpTo(offset + _source.rowHeight - viewportHeight);
     }
   }
 
@@ -2845,31 +3019,30 @@ class _EpyxGridState extends State<EpyxGrid> {
   }
 
   /// Evaluate row_render_code for a row via MicroPython.
-  /// [bufRow] is buffer-relative, [absRow] is absolute.
-  /// Returns {bg} dict or null. Cached per absolute row.
-  Map<String, String>? _evalRowRender(int bufRow, int absRow) {
+  /// Returns {bg} dict or null. Cached per-row.
+  Map<String, String>? _evalRowRender(int rowIndex) {
     final code = widget.control.getString("row_render_code") ?? '';
     if (code.isEmpty || !MicroPythonService.isReady) return null;
 
-    // Cache check — keyed by absolute row
-    if (_rowRenderCache.containsKey(absRow)) {
-      return _rowRenderCache[absRow];
+    // Cache check
+    if (_rowRenderCache.containsKey(rowIndex)) {
+      return _rowRenderCache[rowIndex];
     }
 
     final visibleRows = _yController.hasClients
         ? (_yController.position.viewportDimension / _source.rowHeight).floor()
         : _source.visibleRowEstimate;
     final vpPos = _yController.hasClients
-        ? bufRow - (_yController.offset / _source.rowHeight).floor()
-        : bufRow;
+        ? rowIndex - (_yController.offset / _source.rowHeight).floor()
+        : rowIndex;
 
     final ctx = <String, dynamic>{
       'viewport_pos': vpPos,
       'viewport_count': visibleRows,
-      'row_index': absRow,
-      'is_selected': absRow == _selectedRow,
-      'is_hovered': absRow == _hoveredRow,
-      'existing_bg': _source.rowBackground(bufRow, absRow == _selectedRow)
+      'row_index': rowIndex,
+      'is_selected': rowIndex == _selectedRow,
+      'is_hovered': rowIndex == _hoveredRow,
+      'existing_bg': _source.rowBackground(rowIndex, rowIndex == _selectedRow)
           ?.toString(),
     };
 
@@ -2882,22 +3055,26 @@ class _EpyxGridState extends State<EpyxGrid> {
         final style = <String, String>{};
         if (result['bg'] != null) style['bg'] = result['bg'].toString();
         if (result['fg'] != null) style['fg'] = result['fg'].toString();
-        _rowRenderCache[absRow] = style.isEmpty ? null : style;
-        return _rowRenderCache[absRow];
+        _rowRenderCache[rowIndex] = style.isEmpty ? null : style;
+        return _rowRenderCache[rowIndex];
       }
     } catch (_) {}
-    _rowRenderCache[absRow] = null;
+    _rowRenderCache[rowIndex] = null;
     return null;
   }
 
-  /// Evaluate render_code for a cell via MicroPython.
-  /// [bufRow] is buffer-relative, [absRow] is absolute.
+  /// Evaluate style_code (per-column) or render_code (table-level) for a cell
+  /// via MicroPython. Per-column style_code takes priority.
   /// Returns {bg, fg} dict or null. Cached per-cell.
-  Map<String, String>? _evalCellRender(int bufRow, int absRow, int colIndex) {
-    final code = widget.control.getString("render_code") ?? '';
+  Map<String, String>? _evalCellRender(int rowIndex, int colIndex) {
+    // Per-column style_code takes priority over table-level render_code
+    final colStyleCode = colIndex < _source.columnCount
+        ? _source.styleCode(colIndex) : '';
+    final tableRenderCode = widget.control.getString("render_code") ?? '';
+    final code = colStyleCode.isNotEmpty ? colStyleCode : tableRenderCode;
     if (code.isEmpty || !MicroPythonService.isReady) return null;
 
-    final key = '$absRow:$colIndex';
+    final key = '$rowIndex:$colIndex';
     if (_cellRenderCache.containsKey(key)) {
       return _cellRenderCache[key];
     }
@@ -2906,20 +3083,25 @@ class _EpyxGridState extends State<EpyxGrid> {
         ? (_yController.position.viewportDimension / _source.rowHeight).floor()
         : _source.visibleRowEstimate;
     final vpPos = _yController.hasClients
-        ? bufRow - (_yController.offset / _source.rowHeight).floor()
-        : bufRow;
+        ? rowIndex - (_yController.offset / _source.rowHeight).floor()
+        : rowIndex;
 
-    final cellStyle = _source.cellStyle(bufRow, colIndex);
+    final cellStyle = _cachedCellStyle(rowIndex, colIndex);
+    // Get cell value from cache for style_code evaluation
+    final cached = _cache.get(rowIndex);
+    final cellValue = (cached != null && colIndex < cached.data.length)
+        ? cached.data[colIndex] : null;
     final ctx = <String, dynamic>{
+      'value': cellValue,
       'viewport_pos': vpPos,
       'viewport_count': visibleRows,
-      'row_index': absRow,
+      'row_index': rowIndex,
       'col_index': colIndex,
       'col_name': colIndex < _source.columnCount
           ? _source.columnName(colIndex) : '',
-      'is_selected': _isInSelection(absRow, colIndex),
-      'is_hovered': absRow == _hoveredRow,
-      'is_hovered_cell': absRow == _hoveredRow && colIndex == _hoveredCol,
+      'is_selected': _isInSelection(rowIndex, colIndex),
+      'is_hovered': rowIndex == _hoveredRow,
+      'is_hovered_cell': rowIndex == _hoveredRow && colIndex == _hoveredCol,
       'hovered_col': _hoveredCol,
       'existing_bg': cellStyle?['bg'],
       'existing_fg': cellStyle?['fg'],
@@ -2948,20 +3130,37 @@ class _EpyxGridState extends State<EpyxGrid> {
     _cellRenderCache.clear();
   }
 
+  /// Pixel offset of column [col] within the scrollable region.
+  /// Skips hidden columns and subtracts frozen columns (which are
+  /// outside the _xController scroll area).
+  double _scrollableColLeft(int col) {
+    final frozenCount =
+        widget.control.getInt("frozen_columns_count", 0) ?? 0;
+    final showCheckbox =
+        widget.control.getBool("show_checkbox_column", false) ?? false;
+    // Checkbox lives outside the scroll area when frozen columns exist,
+    // but INSIDE the scroll area when there are no frozen columns.
+    double left = (frozenCount == 0 && showCheckbox) ? _checkboxColWidth : 0.0;
+    final start = (frozenCount > 0) ? frozenCount : 0;
+    for (int i = start; i < col; i++) {
+      if (!_source.isColumnHidden(i)) left += _getColumnWidth(i);
+    }
+    return left;
+  }
+
   void _ensureColumnVisible(int col) {
     if (!_xController.hasClients) return;
-    // Calculate column's left offset
-    double colLeft = 0;
-    for (int i = 0; i < col; i++) {
-      colLeft += _getColumnWidth(i);
-    }
+    if (_source.isColumnHidden(col)) return;
+    final colLeft = _scrollableColLeft(col);
     final colRight = colLeft + _getColumnWidth(col);
     final viewportWidth = _xController.position.viewportDimension;
     final offset = _xController.offset;
+    final maxScroll = _xController.position.maxScrollExtent;
     if (colLeft < offset) {
-      _xController.jumpTo(colLeft);
+      _xController.jumpTo(colLeft.clamp(0.0, maxScroll));
     } else if (colRight > offset + viewportWidth) {
-      _xController.jumpTo(colRight - viewportWidth);
+      _xController.jumpTo(
+          (colRight - viewportWidth).clamp(0.0, maxScroll));
     }
   }
 
@@ -3142,37 +3341,3 @@ class _BarBgPainter extends CustomPainter {
       rightText != old.rightText;
 }
 
-// ────────────────────────────────────────────────────────────────
-// LOD display event types
-// ────────────────────────────────────────────────────────────────
-
-enum _DisplayEventType {
-  initialDisplay,
-  cmdDown,
-  cmdUp,
-  pageDown,
-  pageUp,
-  goToRow,
-  arrowStep,
-}
-
-enum _DisplayPosition {
-  top,
-  bottom,
-  center,
-}
-
-class _DisplayEvent {
-  final _DisplayEventType type;
-  final int targetRow;
-  final _DisplayPosition position;
-
-  const _DisplayEvent({
-    required this.type,
-    required this.targetRow,
-    required this.position,
-  });
-
-  @override
-  String toString() => '_DisplayEvent($type, row=$targetRow, pos=$position)';
-}

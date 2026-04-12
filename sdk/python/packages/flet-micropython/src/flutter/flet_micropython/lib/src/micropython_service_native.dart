@@ -38,6 +38,60 @@ class MicroPythonService {
   static bool _initialized = false;
   static DynamicLibrary? _lib;
 
+  /// Registered prelude scripts, keyed by name. Each prelude is run via
+  /// exec() once MicroPython is ready, defining bridge classes etc. in
+  /// the global namespace. Names are arbitrary identifiers used for
+  /// deduplication and debugging.
+  static final Map<String, String> _preludes = {};
+
+  /// Whether preludes have been loaded into the running MicroPython instance.
+  static bool _preludesLoaded = false;
+
+  /// Register a prelude script that will be exec'd in the MicroPython
+  /// global namespace as soon as the runtime is ready. If the runtime is
+  /// already ready, the prelude is exec'd immediately.
+  ///
+  /// Each control package (flet-superplot, flet-supertab, etc.) calls this
+  /// at extension load time to install its bridge classes (chart, cell,
+  /// field, ...). The bridge classes become singletons in MicroPython's
+  /// global namespace, available to every render function evaluation.
+  ///
+  /// Calling registerPrelude with the same name twice replaces the entry.
+  static void registerPrelude(String name, String source) {
+    _preludes[name] = source;
+    if (isReady && _preludesLoaded) {
+      try {
+        exec(source);
+      } catch (_) {
+        // Best effort — caller may not care about failures
+      }
+    }
+  }
+
+  /// Run all registered preludes in the MicroPython namespace.
+  /// Called automatically by init() once the runtime is ready.
+  static void _loadPreludes() {
+    if (_preludesLoaded) return;
+    if (!isReady) return;
+    // Bootstrap exec_eval first — it defines _epyx_user_preludes which the
+    // bridge preludes register themselves into. Without this, preludes load
+    // BEFORE _epyx_user_preludes exists, and the registration silently fails.
+    try {
+      _bootstrapExecEval();
+    } catch (_) {
+      // If bootstrap fails, preludes will still load but won't be visible
+      // to execEval.
+    }
+    for (final entry in _preludes.entries) {
+      try {
+        exec(entry.value);
+      } catch (_) {
+        // Best effort — failures don't block other preludes
+      }
+    }
+    _preludesLoaded = true;
+  }
+
   // Lazy FFI function lookups.
   static late final _InitDart _initFn;
   static late final _EvalDart _evalFn;
@@ -91,7 +145,8 @@ class MicroPythonService {
 
   /// Initialize the MicroPython runtime.
   ///
-  /// Returns a Future that completes when the runtime is ready.
+  /// Returns a Future that completes when the runtime is ready and all
+  /// registered preludes have been loaded into the global namespace.
   /// Safe to call multiple times — subsequent calls return immediately.
   static Future<void> init() async {
     if (_initialized) return;
@@ -99,11 +154,13 @@ class MicroPythonService {
     _lib = _loadLibrary();
     _bindFunctions(_lib!);
 
-    final result = _initFn(65536); // 64KB heap
+    final result = _initFn(1048576); // 1MB heap (was 64KB — caused MemoryError)
     if (result != 0) {
       throw StateError('MicroPython native init failed (code $result)');
     }
     _initialized = true;
+    // Load any preludes registered before init completed
+    _loadPreludes();
   }
 
   /// Whether the MicroPython runtime is loaded and ready.
@@ -231,11 +288,59 @@ class MicroPythonService {
   static bool _execEvalBootstrapped = false;
 
   /// Bootstrap _epyx_exec_eval helper in the native MicroPython runtime.
+  static bool _cmdBootstrapped = false;
+
+  /// Bootstrap the _Cmd command builder class and factory functions.
+  /// Same API as micropython_bridge.js — chainable command pattern for on_key_code.
+  static void _bootstrapCmd() {
+    if (_cmdBootstrapped) return;
+    _execSilent(
+      'class _Cmd:\n'
+      '    def _mkd(self, cmd, kw):\n'
+      '        d = {"cmd": cmd}\n'
+      '        d.update(kw)\n'
+      '        return d\n'
+      '    def __init__(self, cmd, **kw):\n'
+      '        self._chain = [self._mkd(cmd, kw)]\n'
+      '    def move(self, **kw):             self._chain.append(self._mkd("move", kw)); return self\n'
+      '    def commit(self):                 self._chain.append({"cmd": "commit"}); return self\n'
+      '    def initiate_editing(self, **kw): self._chain.append(self._mkd("initiate_editing", kw)); return self\n'
+      '    def cancel_editing(self):         self._chain.append({"cmd": "cancel_editing"}); return self\n'
+      '    def commit_value(self, v):        self._chain.append({"cmd": "commit_value", "value": v}); return self\n'
+      '    def add_row(self):                self._chain.append({"cmd": "add_row"}); return self\n'
+      '    def toggle_checkbox(self):        self._chain.append({"cmd": "toggle_checkbox"}); return self\n'
+      '    def beep(self):                   self._chain.append({"cmd": "beep"}); return self\n'
+      '    def select(self, **kw):           self._chain.append(self._mkd("select", kw)); return self\n'
+      '    def scroll_to(self, **kw):        self._chain.append(self._mkd("scroll_to", kw)); return self\n'
+      '    def banner(self, message="", level="info"): self._chain.append({"cmd": "banner", "message": message, "level": level}); return self\n',
+    );
+    _execSilent(
+      'def commit(): return _Cmd("commit")\n'
+      'def move(**kw): return _Cmd("move", **kw)\n'
+      'def initiate_editing(**kw): return _Cmd("initiate_editing", **kw)\n'
+      'def cancel_editing(): return _Cmd("cancel_editing")\n'
+      'def commit_value(v): return _Cmd("commit_value", value=v)\n'
+      'def add_row(): return _Cmd("add_row")\n'
+      'def toggle_checkbox(): return _Cmd("toggle_checkbox")\n'
+      'def beep(): return _Cmd("beep")\n'
+      'def select(**kw): return _Cmd("select", **kw)\n'
+      'def scroll_to(**kw): return _Cmd("scroll_to", **kw)\n'
+      'def banner(message="", level="info"): return _Cmd("banner", message=message, level=level)\n',
+    );
+    _cmdBootstrapped = true;
+  }
+
   static void _bootstrapExecEval() {
     if (_execEvalBootstrapped) return;
 
-    // Ensure _cfmt is available (shared with fmt)
+    // Ensure _cfmt and _Cmd are available
     _bootstrapFmt();
+    _bootstrapCmd();
+
+    // Initialize the user preludes registry — bridges (chart, field, cell)
+    // append themselves here so _epyx_exec_eval merges them into the
+    // sandboxed eval namespace.
+    _execSilent('_epyx_user_preludes = {}\n');
 
     _execSilent(
       'def _epyx_exec_eval(exec_code, eval_code, ctx_json):\n'
@@ -253,13 +358,32 @@ class MicroPythonService {
       '            "any": any, "all": all,\n'
       '            "isinstance": isinstance, "type": type,\n'
       '            "True": True, "False": False, "None": None,\n'
+      '            "_Cmd": _Cmd,\n'
+      '            "commit": commit, "move": move,\n'
+      '            "initiate_editing": initiate_editing,\n'
+      '            "cancel_editing": cancel_editing,\n'
+      '            "commit_value": commit_value,\n'
+      '            "add_row": add_row,\n'
+      '            "toggle_checkbox": toggle_checkbox,\n'
+      '            "beep": beep,\n'
+      '            "select": select,\n'
+      '            "scroll_to": scroll_to,\n'
+      '            "banner": banner,\n'
       '        }\n'
+      '        _g.update(_epyx_user_preludes)\n'
       '        _g.update(ctx)\n'
+      '        # Use _g as BOTH globals and locals so any function defined\n'
+      '        # by exec_code captures _g as its __globals__. project_render_funcs\n'
+      '        # wraps render/on_key bodies as callables, and free names like\n'
+      '        # `chart`/`field`/`cell` would otherwise raise NameError at call time.\n'
       '        if exec_code:\n'
-      '            exec(exec_code, {"__builtins__": _g}, _g)\n'
+      '            exec(exec_code, _g, _g)\n'
       '        if eval_code:\n'
-      '            result = eval(eval_code, {"__builtins__": _g}, _g)\n'
-      '            print(_json_dumps(result))\n'
+      '            result = eval(eval_code, _g, _g)\n'
+      '            if isinstance(result, _Cmd):\n'
+      '                print(_json_dumps(result._chain))\n'
+      '            else:\n'
+      '                print(_json_dumps(result))\n'
       '        else:\n'
       '            print(_json_dumps(None))\n'
       '    except Exception as e:\n'
