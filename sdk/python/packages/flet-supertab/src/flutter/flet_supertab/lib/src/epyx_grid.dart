@@ -129,6 +129,7 @@ class _EpyxGridState extends State<EpyxGrid> {
   // line-split-bare-statement path that used `_onKeyCodeCached` from a
   // page_data blob.
   Map<String, dynamic>? _onKeyProjection;
+  Map<String, dynamic>? _renderProjection;
   String _onKeyHostId = '';
   VoidCallback? _onKeyProjectionUnsubscribe;
 
@@ -176,10 +177,15 @@ class _EpyxGridState extends State<EpyxGrid> {
   void _refreshOnKeyProjection() {
     if (_onKeyHostId.isEmpty) {
       _onKeyProjection = null;
+      _renderProjection = null;
       return;
     }
     _onKeyProjection =
         RenderPlaneControl.getProjection(_onKeyHostId, 'on_key');
+    _renderProjection =
+        RenderPlaneControl.getProjection(_onKeyHostId, 'render');
+    // New projection → clear cached cell render results
+    _invalidateRenderCaches();
   }
 
   void _onControlChanged() {
@@ -3067,16 +3073,70 @@ class _EpyxGridState extends State<EpyxGrid> {
   /// via MicroPython. Per-column style_code takes priority.
   /// Returns {bg, fg} dict or null. Cached per-cell.
   Map<String, String>? _evalCellRender(int rowIndex, int colIndex) {
-    // Per-column style_code takes priority over table-level render_code
-    final colStyleCode = colIndex < _source.columnCount
-        ? _source.styleCode(colIndex) : '';
-    final tableRenderCode = widget.control.getString("render_code") ?? '';
-    final code = colStyleCode.isNotEmpty ? colStyleCode : tableRenderCode;
-    if (code.isEmpty || !MicroPythonService.isReady) return null;
+    if (!MicroPythonService.isReady) return null;
 
     final key = '$rowIndex:$colIndex';
     if (_cellRenderCache.containsKey(key)) {
       return _cellRenderCache[key];
+    }
+
+    // Get cell value from cache for evaluation context
+    final cached = _cache.get(rowIndex);
+    final cellValue = (cached != null && colIndex < cached.data.length)
+        ? cached.data[colIndex] : null;
+    final cellStyle = _cachedCellStyle(rowIndex, colIndex);
+
+    // -- Canonical path: render plane projection from spec_code def render() --
+    if (_renderProjection != null) {
+      final proj = _renderProjection!;
+      final execBody = proj['exec'] as String? ?? '';
+      final evalExpr = proj['eval'] as String? ?? '';
+      if (evalExpr.isNotEmpty) {
+        final ctx = <String, dynamic>{
+          'value': cellValue,
+          'row': _cache.get(rowIndex)?.data,
+          'col_name': colIndex < _source.columnCount
+              ? _source.columnName(colIndex) : '',
+          'col_index': colIndex,
+          'row_index': rowIndex,
+          'is_selected': _isInSelection(rowIndex, colIndex),
+          'is_hovered': rowIndex == _hoveredRow,
+          'is_hovered_cell': rowIndex == _hoveredRow && colIndex == _hoveredCol,
+          'hovered_col': _hoveredCol,
+          'total_rows': _effectiveRowCount,
+          'total_cols': _source.columnCount,
+        };
+        try {
+          // Reset cell bridge, eval render, read accumulated state
+          MicroPythonService.exec('cell._reset()');
+          MicroPythonService.execEval(execBody, evalExpr, ctx);
+          final config = MicroPythonService.execEval('', 'cell._to_config()', {});
+          if (config is Map && config.isNotEmpty) {
+            final style = <String, String>{};
+            if (config['bg'] != null) style['bg'] = config['bg'].toString();
+            if (config['color'] != null) style['fg'] = config['color'].toString();
+            if (config['weight'] != null) style['weight'] = config['weight'].toString();
+            if (config['size'] != null) style['size'] = config['size'].toString();
+            if (config['font'] != null) style['font'] = config['font'].toString();
+            if (config['italic'] != null) style['italic'] = config['italic'].toString();
+            if (config['tooltip'] != null) style['tooltip'] = config['tooltip'].toString();
+            _cellRenderCache[key] = style.isEmpty ? null : style;
+            return _cellRenderCache[key];
+          }
+        } catch (_) {}
+        _cellRenderCache[key] = null;
+        return null;
+      }
+    }
+
+    // -- Legacy path: bare-statement render_code / per-column style_code --
+    final colStyleCode = colIndex < _source.columnCount
+        ? _source.styleCode(colIndex) : '';
+    final tableRenderCode = widget.control.getString("render_code") ?? '';
+    final code = colStyleCode.isNotEmpty ? colStyleCode : tableRenderCode;
+    if (code.isEmpty) {
+      _cellRenderCache[key] = null;
+      return null;
     }
 
     final visibleRows = _yController.hasClients
@@ -3086,11 +3146,6 @@ class _EpyxGridState extends State<EpyxGrid> {
         ? rowIndex - (_yController.offset / _source.rowHeight).floor()
         : rowIndex;
 
-    final cellStyle = _cachedCellStyle(rowIndex, colIndex);
-    // Get cell value from cache for style_code evaluation
-    final cached = _cache.get(rowIndex);
-    final cellValue = (cached != null && colIndex < cached.data.length)
-        ? cached.data[colIndex] : null;
     final ctx = <String, dynamic>{
       'value': cellValue,
       'viewport_pos': vpPos,
