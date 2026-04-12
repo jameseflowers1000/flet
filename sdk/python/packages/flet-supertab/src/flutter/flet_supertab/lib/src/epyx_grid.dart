@@ -3001,25 +3001,40 @@ class _EpyxGridState extends State<EpyxGrid> {
 
     if (row != _hoveredRow || col != _hoveredCol) {
       final oldRow = _hoveredRow;
+      final colChanged = col != _hoveredCol;
       setState(() {
         _hoveredRow = row;
         _hoveredCol = col;
-        _rowRenderCache.remove(oldRow);
-        _rowRenderCache.remove(row);
-        _cellRenderCache.removeWhere(
-            (k, _) => k.startsWith('$oldRow:') || k.startsWith('$row:'));
+        if (colChanged && _renderProjection != null) {
+          // Column changed with active render projection — crosshair
+          // may style entire columns, so clear all cached cell renders.
+          _cellRenderCache.clear();
+          _rowRenderCache.clear();
+        } else {
+          _rowRenderCache.remove(oldRow);
+          _rowRenderCache.remove(row);
+          _cellRenderCache.removeWhere(
+              (k, _) => k.startsWith('$oldRow:') || k.startsWith('$row:'));
+        }
       });
     }
   }
 
   void _onHoverExit() {
-    if (_hoveredRow != -1) {
+    if (_hoveredRow != -1 || _hoveredCol != -1) {
       final oldHover = _hoveredRow;
       setState(() {
         _hoveredRow = -1;
-        _rowRenderCache.remove(oldHover);
-        _cellRenderCache.removeWhere(
-            (k, _) => k.startsWith('$oldHover:'));
+        _hoveredCol = -1;
+        if (_renderProjection != null) {
+          // Full clear — crosshair column highlight needs all cells refreshed
+          _cellRenderCache.clear();
+          _rowRenderCache.clear();
+        } else {
+          _rowRenderCache.remove(oldHover);
+          _cellRenderCache.removeWhere(
+              (k, _) => k.startsWith('$oldHover:'));
+        }
       });
     }
   }
@@ -3107,10 +3122,12 @@ class _EpyxGridState extends State<EpyxGrid> {
           'total_cols': _source.columnCount,
         };
         try {
-          // Reset cell bridge, eval render, read accumulated state
+          // Reset cell bridge, eval user's render function (mutates cell
+          // via side effects), then read accumulated state.
           MicroPythonService.exec('cell._reset()');
           MicroPythonService.execEval(execBody, evalExpr, ctx);
-          final config = MicroPythonService.execEval('', 'cell._to_config()', {});
+          final config = MicroPythonService.execEval(
+              '', 'cell._to_config()', {});
           if (config is Map && config.isNotEmpty) {
             final style = <String, String>{};
             if (config['bg'] != null) style['bg'] = config['bg'].toString();
