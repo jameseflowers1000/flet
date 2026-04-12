@@ -18,6 +18,7 @@ import 'package:flutter/material.dart';
 import 'package:super_sliver_list/super_sliver_list.dart';
 import 'package:flutter/services.dart';
 
+
 import 'epyx_grid_cache.dart';
 import 'epyx_grid_source.dart';
 import 'epyx_grid_test_api.dart';
@@ -134,6 +135,7 @@ class _EpyxGridState extends State<EpyxGrid> {
   VoidCallback? _onKeyProjectionUnsubscribe;
 
 
+
   @override
   void initState() {
     super.initState();
@@ -184,7 +186,6 @@ class _EpyxGridState extends State<EpyxGrid> {
         RenderPlaneControl.getProjection(_onKeyHostId, 'on_key');
     _renderProjection =
         RenderPlaneControl.getProjection(_onKeyHostId, 'render');
-    // New projection → clear cached cell render results
     _invalidateRenderCaches();
   }
 
@@ -239,6 +240,12 @@ class _EpyxGridState extends State<EpyxGrid> {
       _pendingRangeEnd = -1;
       _lastPageToken = 0; // reset so path 2 merges fresh data
 
+      // Apply sparse row height overrides BEFORE any page merge so
+      // extentEstimation returns correct heights for ALL rows from
+      // the first frame. Without this, SuperListView's scroll extent
+      // diverges from Python's totalHeight and hit testing breaks.
+      _applyHeightOverrides();
+
       // Merge from atomic page_data blob if present.
       _tryMergePageData();
 
@@ -269,6 +276,7 @@ class _EpyxGridState extends State<EpyxGrid> {
       _cache.totalRows = newTotalRows;
       _cache.totalHeight = newTotalHeight;
       _cache.defaultRowHeight = newRowHeight;
+      _applyHeightOverrides();
 
       // Path 2: merge page response if pixel offsets are present.
       // Merge from atomic page_data blob.
@@ -310,6 +318,29 @@ class _EpyxGridState extends State<EpyxGrid> {
       _pendingEdits.clear(); // Python has authoritative data now
       _invalidateRenderCaches(); // data changed → re-evaluate styles
     });
+  }
+
+  /// Apply sparse row height overrides from Python. These are pushed
+  /// upfront so extentEstimation is correct for ALL rows, even before
+  /// their page has been fetched.
+  String _lastHeightOverridesJson = '';
+  void _applyHeightOverrides() {
+    final json = widget.control.getString("row_height_overrides") ?? '';
+    if (json == _lastHeightOverridesJson) return; // no change
+    _lastHeightOverridesJson = json;
+    _cache.clearHeightOverrides();
+    if (json.isNotEmpty) {
+      try {
+        final map = jsonDecode(json) as Map<String, dynamic>;
+        for (final entry in map.entries) {
+          final row = int.tryParse(entry.key);
+          final h = (entry.value as num?)?.toDouble();
+          if (row != null && h != null) {
+            _cache.setHeightOverride(row, h);
+          }
+        }
+      } catch (_) {}
+    }
   }
 
   /// Merge a page response from Python into the pixel-space cache.
@@ -370,6 +401,20 @@ class _EpyxGridState extends State<EpyxGrid> {
             .map<String>((e) => e.toString()).toList();
       }
 
+      // Apply sparse height overrides for ALL rows (not just this page).
+      // This ensures extentEstimation returns correct heights for rows
+      // whose page hasn't been fetched yet.
+      if (pd['height_overrides'] != null) {
+        final ho = pd['height_overrides'] as Map<String, dynamic>;
+        for (final entry in ho.entries) {
+          final row = int.tryParse(entry.key);
+          final h = (entry.value as num?)?.toDouble();
+          if (row != null && h != null) {
+            _cache.setHeightOverride(row, h);
+          }
+        }
+      }
+
       // Merge into cache (mergePage handles override clearing internally)
       _cache.mergePage(
         bufferStart: bufferStart,
@@ -396,12 +441,12 @@ class _EpyxGridState extends State<EpyxGrid> {
       _pendingRangeEnd = -1;
       _tryProcessQueue();
 
-      // Invalidate render caches for merged rows
-      for (int i = 0; i < rows.length; i++) {
-        final absRow = bufferStart + i;
-        _rowRenderCache.remove(absRow);
-        _cellRenderCache.removeWhere((k, _) => k.startsWith('$absRow:'));
-      }
+      // Invalidate render caches for merged rows.
+      // Clear all rather than per-row removeWhere — the removeWhere with
+      // startsWith is O(cacheSize) per row and becomes a bottleneck as
+      // the user pages through a large table.
+      _cellRenderCache.clear();
+      _rowRenderCache.clear();
 
       // LRU eviction
       _cache.evictIfNeeded(
@@ -1102,7 +1147,9 @@ class _EpyxGridState extends State<EpyxGrid> {
                             shrinkWrap: true,
                             physics: const NeverScrollableScrollPhysics(),
                             itemCount: itemCount,
-                          extentEstimation: (i, _) => _cache.fastRowHeight(i ?? 0),
+                          extentEstimation: (i, _) => i != null
+                            ? _cache.fastRowHeight(i)
+                            : 0.0,
                             
                             itemBuilder: (context, index) {
                               if (cacheActive) {
@@ -1120,7 +1167,9 @@ class _EpyxGridState extends State<EpyxGrid> {
                             child: SuperListView.builder(
                               controller: _getFrozenController(),
                               itemCount: itemCount,
-                          extentEstimation: (i, _) => _cache.fastRowHeight(i ?? 0),
+                          extentEstimation: (i, _) => i != null
+                            ? _cache.fastRowHeight(i)
+                            : 0.0,
                               
                               itemBuilder: (context, index) {
                                 if (cacheActive) {
@@ -1159,7 +1208,9 @@ class _EpyxGridState extends State<EpyxGrid> {
                                 shrinkWrap: true,
                                 physics: const NeverScrollableScrollPhysics(),
                                 itemCount: itemCount,
-                          extentEstimation: (i, _) => _cache.fastRowHeight(i ?? 0),
+                          extentEstimation: (i, _) => i != null
+                            ? _cache.fastRowHeight(i)
+                            : 0.0,
                                 
                                 itemBuilder: (context, index) {
                                   if (cacheActive) {
@@ -1174,7 +1225,9 @@ class _EpyxGridState extends State<EpyxGrid> {
                                 child: SuperListView.builder(
                                   controller: _yController,
                                   itemCount: itemCount,
-                          extentEstimation: (i, _) => _cache.fastRowHeight(i ?? 0),
+                          extentEstimation: (i, _) => i != null
+                            ? _cache.fastRowHeight(i)
+                            : 0.0,
                                   
                                   itemBuilder: (context, index) {
                                     if (cacheActive) {
@@ -1230,7 +1283,9 @@ class _EpyxGridState extends State<EpyxGrid> {
                         shrinkWrap: true,
                         physics: const NeverScrollableScrollPhysics(),
                         itemCount: scrollableRowCount.clamp(0, itemCount),
-                        extentEstimation: (i, _) => _cache.fastRowHeight(i ?? 0),
+                        extentEstimation: (i, _) => i != null
+                            ? _cache.fastRowHeight(i)
+                            : 0.0,
                         itemBuilder: (context, index) {
                           final actualRow = index + frozenRows;
                           if (cacheActive) {
@@ -1248,7 +1303,9 @@ class _EpyxGridState extends State<EpyxGrid> {
                         child: SuperListView.builder(
                           controller: _yController,
                           itemCount: scrollableRowCount.clamp(0, itemCount),
-                          extentEstimation: (i, _) => _cache.fastRowHeight(i ?? 0),
+                          extentEstimation: (i, _) => i != null
+                            ? _cache.fastRowHeight(i)
+                            : 0.0,
                           itemBuilder: (context, index) {
                             final actualRow = index + frozenRows;
                             if (cacheActive) {
@@ -2797,6 +2854,7 @@ class _EpyxGridState extends State<EpyxGrid> {
   /// Is column `col` fully visible in the horizontal viewport?
   bool _isColumnVisible(int col) {
     if (!_xController.hasClients) return true;
+    if (col < 0 || col >= _source.columnCount) return true;
     if (_source.isColumnHidden(col)) return false;
     final colLeft = _scrollableColLeft(col);
     final colRight = colLeft + _getColumnWidth(col);
@@ -2828,21 +2886,22 @@ class _EpyxGridState extends State<EpyxGrid> {
     final maxRow = _effectiveRowCount - 1;
     if (maxRow < 0) return 0;
     if (_pixelLodActive) {
-      // Estimate using the same average as itemExtent (totalHeight/totalRows)
+      // With extentEstimation returning totalHeight/totalRows for null
+      // index, SuperListView's scroll extent matches Python's totalHeight.
+      // absY maps directly to cached pixel offsets.
       final avgH = _cache.totalRows > 0
           ? _cache.totalHeight / _cache.totalRows
           : _cache.defaultRowHeight;
       int est = avgH > 0 ? (absY / avgH).floor().clamp(0, maxRow) : 0;
-      // Refine ±20 rows using cached pixel offsets
-      final lo = math.max(0, est - 20);
-      final hi = math.min(maxRow, est + 20);
+      // Refine using cached pixel offsets
+      final lo = math.max(0, est - 50);
+      final hi = math.min(maxRow, est + 50);
       for (int r = lo; r <= hi; r++) {
         final cached = _cache.get(r);
         final top = cached?.pixelOffset ?? r * avgH;
         final h = cached?.height ?? avgH;
         if (absY < top + h) return r;
       }
-      print('[HIT-TEST WARN] refinement failed: absY=$absY est=$est avgH=$avgH cached=${_cache.cachedRowCount}');
       return est;
     }
     return (absY / _source.rowHeight).floor().clamp(0, maxRow);
@@ -3006,8 +3065,6 @@ class _EpyxGridState extends State<EpyxGrid> {
         _hoveredRow = row;
         _hoveredCol = col;
         if (colChanged && _renderProjection != null) {
-          // Column changed with active render projection — crosshair
-          // may style entire columns, so clear all cached cell renders.
           _cellRenderCache.clear();
           _rowRenderCache.clear();
         } else {
@@ -3027,7 +3084,6 @@ class _EpyxGridState extends State<EpyxGrid> {
         _hoveredRow = -1;
         _hoveredCol = -1;
         if (_renderProjection != null) {
-          // Full clear — crosshair column highlight needs all cells refreshed
           _cellRenderCache.clear();
           _rowRenderCache.clear();
         } else {
@@ -3095,7 +3151,6 @@ class _EpyxGridState extends State<EpyxGrid> {
       return _cellRenderCache[key];
     }
 
-    // Get cell value from cache for evaluation context
     final cached = _cache.get(rowIndex);
     final cellValue = (cached != null && colIndex < cached.data.length)
         ? cached.data[colIndex] : null;
@@ -3109,7 +3164,7 @@ class _EpyxGridState extends State<EpyxGrid> {
       if (evalExpr.isNotEmpty) {
         final ctx = <String, dynamic>{
           'value': cellValue,
-          'row': _cache.get(rowIndex)?.data,
+          'row': cached?.data,
           'col_name': colIndex < _source.columnCount
               ? _source.columnName(colIndex) : '',
           'col_index': colIndex,
@@ -3122,12 +3177,9 @@ class _EpyxGridState extends State<EpyxGrid> {
           'total_cols': _source.columnCount,
         };
         try {
-          // Reset cell bridge, eval user's render function (mutates cell
-          // via side effects), then read accumulated state.
-          MicroPythonService.exec('cell._reset()');
-          MicroPythonService.execEval(execBody, evalExpr, ctx);
           final config = MicroPythonService.execEval(
-              '', 'cell._to_config()', {});
+              'cell._reset()\n$execBody\n$evalExpr',
+              'cell._to_config()', ctx);
           if (config is Map && config.isNotEmpty) {
             final style = <String, String>{};
             if (config['bg'] != null) style['bg'] = config['bg'].toString();
@@ -3222,6 +3274,7 @@ class _EpyxGridState extends State<EpyxGrid> {
 
   void _ensureColumnVisible(int col) {
     if (!_xController.hasClients) return;
+    if (col < 0 || col >= _source.columnCount) return;
     if (_source.isColumnHidden(col)) return;
     final colLeft = _scrollableColLeft(col);
     final colRight = colLeft + _getColumnWidth(col);

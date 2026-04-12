@@ -80,6 +80,16 @@ class GridCache {
   /// Are there any height overrides?
   bool get hasHeightOverrides => _heightOverrides.isNotEmpty;
 
+  /// Set a height override for a row (from upfront Python push).
+  void setHeightOverride(int absRow, double height) {
+    _heightOverrides[absRow] = height;
+  }
+
+  /// Clear all height overrides (before re-applying from Python).
+  void clearHeightOverrides() {
+    _heightOverrides.clear();
+  }
+
   /// Cell styles for a row (or null).
   List<Map<String, String>?>? cellStyles(int absRow) => _cellStyles[absRow];
 
