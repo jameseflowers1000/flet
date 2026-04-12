@@ -410,7 +410,12 @@ class Control extends ChangeNotifier {
         var toNode = getPatchTarget(op[3]);
         var toIndex = op[4];
         if (fromNode.obj is List && toNode.obj is List) {
-          toNode.obj.insert(toIndex, fromNode.obj.removeAt(fromIndex));
+          // Guard against stale indices from race between Python patches
+          // and Dart tree state (manifests on web as RangeError).
+          if (fromIndex >= 0 && fromIndex < fromNode.obj.length) {
+            final item = fromNode.obj.removeAt(fromIndex);
+            toNode.obj.insert(toIndex.clamp(0, toNode.obj.length), item);
+          }
         } else if (fromNode.obj is Map && toNode.obj is Map) {
           toNode.obj[toIndex] = fromNode.obj.remove(fromIndex);
         } else {
