@@ -3156,8 +3156,11 @@ class _EpyxGridState extends State<EpyxGrid> {
           : 20,
     };
     try {
+      // Exec the function def + call together (f-strings with format specs
+      // only work in exec mode in MicroPython — eval can't handle them).
+      // Then eval cell._to_config() to extract the bridge state.
       final config = MicroPythonService.execEval(
-          'cell._reset()\n$execBody\n$evalExpr',
+          'cell._reset()\n$execBody\n$evalExpr\n',
           'cell._to_config()', ctx);
       if (config is Map && config.isNotEmpty) {
         final style = <String, String>{};
