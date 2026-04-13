@@ -40,7 +40,7 @@ class CellBridge:
         self._bg = str(hex_or_name) if hex_or_name is not None else None
 
     def format(self, text):
-        self._format = str(text) if text is not None else None
+        pass  # no-op on render plane — logic plane (Python) handles formatting
 
     def size(self, px):
         self._size = px
@@ -64,7 +64,7 @@ class CellBridge:
         config = {}
         if self._color is not None: config["color"] = self._color
         if self._bg is not None: config["bg"] = self._bg
-        if self._format is not None: config["format"] = self._format
+        # format is handled by logic plane (Python) — not emitted from render plane
         if self._size is not None: config["size"] = self._size
         if self._font is not None: config["font"] = self._font
         if self._weight is not None: config["weight"] = self._weight
