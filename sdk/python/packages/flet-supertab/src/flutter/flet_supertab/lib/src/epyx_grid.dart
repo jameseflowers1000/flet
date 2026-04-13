@@ -110,16 +110,13 @@ class _EpyxGridState extends State<EpyxGrid> {
   // -- Validation error cells (red border, auto-clear after 3s) --
   Set<String> _validationErrorCells = {};  // "row:colName" keys
 
-  // -- Hover tracking for render_code --
+  // -- Hover tracking --
   int _hoveredRow = -1;
   int _hoveredCol = -1;
 
   // -- Render code cache: (row,col) → {bg, fg} or null --
   // Invalidated on: scroll (new visible rows), selection change, hover change, data change.
-  Map<int, Map<String, String>?> _rowRenderCache = {};
   Map<String, Map<String, String>?> _cellRenderCache = {};
-  String _lastRenderCode = '';
-  String _lastRowRenderCode = '';
   double _lastRowHeight = 36.0;
 
   // -- on_key projection (Phase 5 finish) --
@@ -214,16 +211,8 @@ class _EpyxGridState extends State<EpyxGrid> {
       } catch (_) {}
     }
 
-    // Check render script changes FIRST (before data version early-return).
-    // render_code can change independently of data.
-    final newRenderCode = widget.control.getString("render_code") ?? '';
-    final newRowRenderCode = widget.control.getString("row_render_code") ?? '';
-    if (newRenderCode != _lastRenderCode || newRowRenderCode != _lastRowRenderCode) {
-      _lastRenderCode = newRenderCode;
-      _lastRowRenderCode = newRowRenderCode;
-      _invalidateRenderCaches();
-      setState(() {}); // force rebuild with new scripts
-    }
+    // Render projection changes are handled by _refreshOnKeyProjection
+    // (listener on RenderPlaneControl), not via Flet control properties.
 
     // -- Pixel-space LOD: two paths --
     // Path 1: data_version changed → clear cache, rebuild source for columns
@@ -451,7 +440,7 @@ class _EpyxGridState extends State<EpyxGrid> {
       // startsWith is O(cacheSize) per row and becomes a bottleneck as
       // the user pages through a large table.
       _cellRenderCache.clear();
-      _rowRenderCache.clear();
+
 
       // LRU eviction
       _cache.evictIfNeeded(
@@ -1583,12 +1572,7 @@ class _EpyxGridState extends State<EpyxGrid> {
     final showCheckbox =
         widget.control.getBool("show_checkbox_column", false) ?? false;
 
-    // Apply row_render_code (§6A Layer 5)
     Color? rowBg = _source.rowBackground(rowIndex, isSelected);
-    final rowRender = _evalRowRender(rowIndex);
-    if (rowRender != null && rowRender['bg'] != null) {
-      rowBg = _parseHexColor(rowRender['bg']!) ?? rowBg;
-    }
 
     final rh = _getRowHeight(rowIndex);
     return Container(
@@ -1783,8 +1767,6 @@ class _EpyxGridState extends State<EpyxGrid> {
     final prevRow = _selectedRow;
     final prevCol = _selectedCol;
     // Invalidate render caches for old and new selected rows
-    _rowRenderCache.remove(prevRow);
-    _rowRenderCache.remove(row);
     _cellRenderCache.removeWhere((k, _) =>
         k.startsWith('$prevRow:') || k.startsWith('$row:'));
     setState(() {
@@ -3031,7 +3013,7 @@ class _EpyxGridState extends State<EpyxGrid> {
   }
 
   // ────────────────────────────────────────────────────────────────
-  // Hover tracking + scriptable cell painting (§6A render_code)
+  // Hover tracking
   // ────────────────────────────────────────────────────────────────
 
   void _onHover(Offset localPosition) {
@@ -3043,7 +3025,7 @@ class _EpyxGridState extends State<EpyxGrid> {
         setState(() {
           _hoveredRow = -1;
           _hoveredCol = -1;
-          _rowRenderCache.remove(old);
+
           _cellRenderCache.removeWhere((k, _) => k.startsWith('$old:'));
         });
       }
@@ -3070,7 +3052,7 @@ class _EpyxGridState extends State<EpyxGrid> {
         setState(() {
           _hoveredRow = -1;
           _hoveredCol = -1;
-          _rowRenderCache.remove(old);
+
           _cellRenderCache.removeWhere((k, _) => k.startsWith('$old:'));
         });
       }
@@ -3085,10 +3067,8 @@ class _EpyxGridState extends State<EpyxGrid> {
         _hoveredCol = col;
         if (colChanged && _renderProjection != null) {
           _cellRenderCache.clear();
-          _rowRenderCache.clear();
+    
         } else {
-          _rowRenderCache.remove(oldRow);
-          _rowRenderCache.remove(row);
           _cellRenderCache.removeWhere(
               (k, _) => k.startsWith('$oldRow:') || k.startsWith('$row:'));
         }
@@ -3104,9 +3084,8 @@ class _EpyxGridState extends State<EpyxGrid> {
         _hoveredCol = -1;
         if (_renderProjection != null) {
           _cellRenderCache.clear();
-          _rowRenderCache.clear();
+    
         } else {
-          _rowRenderCache.remove(oldHover);
           _cellRenderCache.removeWhere(
               (k, _) => k.startsWith('$oldHover:'));
         }
@@ -3114,155 +3093,60 @@ class _EpyxGridState extends State<EpyxGrid> {
     }
   }
 
-  /// Evaluate row_render_code for a row via MicroPython.
-  /// Returns {bg} dict or null. Cached per-row.
-  Map<String, String>? _evalRowRender(int rowIndex) {
-    final code = widget.control.getString("row_render_code") ?? '';
-    if (code.isEmpty || !MicroPythonService.isReady) return null;
 
-    // Cache check
-    if (_rowRenderCache.containsKey(rowIndex)) {
-      return _rowRenderCache[rowIndex];
-    }
-
-    final visibleRows = _yController.hasClients
-        ? (_yController.position.viewportDimension / _source.rowHeight).floor()
-        : _source.visibleRowEstimate;
-    final vpPos = _yController.hasClients
-        ? rowIndex - (_yController.offset / _source.rowHeight).floor()
-        : rowIndex;
-
-    final ctx = <String, dynamic>{
-      'viewport_pos': vpPos,
-      'viewport_count': visibleRows,
-      'row_index': rowIndex,
-      'is_selected': rowIndex == _selectedRow,
-      'is_hovered': rowIndex == _hoveredRow,
-      'existing_bg': _source.rowBackground(rowIndex, rowIndex == _selectedRow)
-          ?.toString(),
-    };
-
-    try {
-      final lines = code.trim().split('\n');
-      lines[lines.length - 1] = '_r = ${lines.last.trim()}';
-      final fullCode = lines.join('\n');
-      final result = MicroPythonService.execEval(fullCode, '_r', ctx);
-      if (result is Map) {
-        final style = <String, String>{};
-        if (result['bg'] != null) style['bg'] = result['bg'].toString();
-        if (result['fg'] != null) style['fg'] = result['fg'].toString();
-        _rowRenderCache[rowIndex] = style.isEmpty ? null : style;
-        return _rowRenderCache[rowIndex];
-      }
-    } catch (_) {}
-    _rowRenderCache[rowIndex] = null;
-    return null;
-  }
-
-  /// Evaluate style_code (per-column) or render_code (table-level) for a cell
-  /// via MicroPython. Per-column style_code takes priority.
-  /// Returns {bg, fg} dict or null. Cached per-cell.
+  /// Evaluate spec_code def render() for a cell via MicroPython.
+  /// Uses the render plane projection + cell bridge.
+  /// Returns {bg, fg, weight, ...} dict or null. Cached per-cell.
   Map<String, String>? _evalCellRender(int rowIndex, int colIndex) {
-    if (!MicroPythonService.isReady) return null;
+    if (_renderProjection == null || !MicroPythonService.isReady) return null;
 
     final key = '$rowIndex:$colIndex';
     if (_cellRenderCache.containsKey(key)) {
       return _cellRenderCache[key];
     }
 
-    final cached = _cache.get(rowIndex);
-    final cellValue = (cached != null && colIndex < cached.data.length)
-        ? cached.data[colIndex] : null;
-    final cellStyle = _cachedCellStyle(rowIndex, colIndex);
-
-    // -- Canonical path: render plane projection from spec_code def render() --
-    if (_renderProjection != null) {
-      final proj = _renderProjection!;
-      final execBody = proj['exec'] as String? ?? '';
-      final evalExpr = proj['eval'] as String? ?? '';
-      if (evalExpr.isNotEmpty) {
-        final ctx = <String, dynamic>{
-          'value': cellValue,
-          'row': cached?.data,
-          'col_name': colIndex < _source.columnCount
-              ? _source.columnName(colIndex) : '',
-          'col_index': colIndex,
-          'row_index': rowIndex,
-          'is_selected': _isInSelection(rowIndex, colIndex),
-          'is_hovered': rowIndex == _hoveredRow,
-          'is_hovered_cell': rowIndex == _hoveredRow && colIndex == _hoveredCol,
-          'hovered_col': _hoveredCol,
-          'total_rows': _effectiveRowCount,
-          'total_cols': _source.columnCount,
-          'viewport_pos': rowIndex - _firstVisibleRow,
-          'viewport_count': _yController.hasClients
-              ? (_yController.position.viewportDimension / _cache.defaultRowHeight).ceil()
-              : 20,
-        };
-        try {
-          final config = MicroPythonService.execEval(
-              'cell._reset()\n$execBody\n$evalExpr',
-              'cell._to_config()', ctx);
-          if (config is Map && config.isNotEmpty) {
-            final style = <String, String>{};
-            if (config['bg'] != null) style['bg'] = config['bg'].toString();
-            if (config['color'] != null) style['fg'] = config['color'].toString();
-            if (config['weight'] != null) style['weight'] = config['weight'].toString();
-            if (config['size'] != null) style['size'] = config['size'].toString();
-            if (config['font'] != null) style['font'] = config['font'].toString();
-            if (config['italic'] != null) style['italic'] = config['italic'].toString();
-            if (config['tooltip'] != null) style['tooltip'] = config['tooltip'].toString();
-            _cellRenderCache[key] = style.isEmpty ? null : style;
-            return _cellRenderCache[key];
-          }
-        } catch (_) {}
-        _cellRenderCache[key] = null;
-        return null;
-      }
-    }
-
-    // -- Legacy path: bare-statement render_code / per-column style_code --
-    final colStyleCode = colIndex < _source.columnCount
-        ? _source.styleCode(colIndex) : '';
-    final tableRenderCode = widget.control.getString("render_code") ?? '';
-    final code = colStyleCode.isNotEmpty ? colStyleCode : tableRenderCode;
-    if (code.isEmpty) {
+    final proj = _renderProjection!;
+    final execBody = proj['exec'] as String? ?? '';
+    final evalExpr = proj['eval'] as String? ?? '';
+    if (evalExpr.isEmpty) {
       _cellRenderCache[key] = null;
       return null;
     }
 
-    final visibleRows = _yController.hasClients
-        ? (_yController.position.viewportDimension / _source.rowHeight).floor()
-        : _source.visibleRowEstimate;
-    final vpPos = _yController.hasClients
-        ? rowIndex - (_yController.offset / _source.rowHeight).floor()
-        : rowIndex;
-
+    final cached = _cache.get(rowIndex);
+    final cellValue = (cached != null && colIndex < cached.data.length)
+        ? cached.data[colIndex] : null;
     final ctx = <String, dynamic>{
       'value': cellValue,
-      'viewport_pos': vpPos,
-      'viewport_count': visibleRows,
-      'row_index': rowIndex,
-      'col_index': colIndex,
+      'row': cached?.data,
       'col_name': colIndex < _source.columnCount
           ? _source.columnName(colIndex) : '',
+      'col_index': colIndex,
+      'row_index': rowIndex,
       'is_selected': _isInSelection(rowIndex, colIndex),
       'is_hovered': rowIndex == _hoveredRow,
       'is_hovered_cell': rowIndex == _hoveredRow && colIndex == _hoveredCol,
       'hovered_col': _hoveredCol,
-      'existing_bg': cellStyle?['bg'],
-      'existing_fg': cellStyle?['fg'],
+      'total_rows': _effectiveRowCount,
+      'total_cols': _source.columnCount,
+      'viewport_pos': rowIndex - _firstVisibleRow,
+      'viewport_count': _yController.hasClients
+          ? (_yController.position.viewportDimension / _cache.defaultRowHeight).ceil()
+          : 20,
     };
-
     try {
-      final lines = code.trim().split('\n');
-      lines[lines.length - 1] = '_r = ${lines.last.trim()}';
-      final fullCode = lines.join('\n');
-      final result = MicroPythonService.execEval(fullCode, '_r', ctx);
-      if (result is Map) {
+      final config = MicroPythonService.execEval(
+          'cell._reset()\n$execBody\n$evalExpr',
+          'cell._to_config()', ctx);
+      if (config is Map && config.isNotEmpty) {
         final style = <String, String>{};
-        if (result['bg'] != null) style['bg'] = result['bg'].toString();
-        if (result['fg'] != null) style['fg'] = result['fg'].toString();
+        if (config['bg'] != null) style['bg'] = config['bg'].toString();
+        if (config['color'] != null) style['fg'] = config['color'].toString();
+        if (config['weight'] != null) style['weight'] = config['weight'].toString();
+        if (config['size'] != null) style['size'] = config['size'].toString();
+        if (config['font'] != null) style['font'] = config['font'].toString();
+        if (config['italic'] != null) style['italic'] = config['italic'].toString();
+        if (config['tooltip'] != null) style['tooltip'] = config['tooltip'].toString();
         _cellRenderCache[key] = style.isEmpty ? null : style;
         return _cellRenderCache[key];
       }
@@ -3273,7 +3157,6 @@ class _EpyxGridState extends State<EpyxGrid> {
 
   /// Invalidate all render caches (on data change, script change).
   void _invalidateRenderCaches() {
-    _rowRenderCache.clear();
     _cellRenderCache.clear();
   }
 
