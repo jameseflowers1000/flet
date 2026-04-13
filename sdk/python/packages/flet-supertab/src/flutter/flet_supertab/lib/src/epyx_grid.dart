@@ -3168,6 +3168,7 @@ class _EpyxGridState extends State<EpyxGrid> {
         if (config['font'] != null) style['font'] = config['font'].toString();
         if (config['italic'] != null) style['italic'] = config['italic'].toString();
         if (config['tooltip'] != null) style['tooltip'] = config['tooltip'].toString();
+        if (config['format'] != null) style['format'] = config['format'].toString();
         _cellRenderCache[key] = style.isEmpty ? null : style;
         return _cellRenderCache[key];
       }
