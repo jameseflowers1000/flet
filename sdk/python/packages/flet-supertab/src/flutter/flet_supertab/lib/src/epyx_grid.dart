@@ -409,6 +409,14 @@ class _EpyxGridState extends State<EpyxGrid> {
         }
       }
 
+      // Parse raw rows (unformatted values for render plane)
+      List<List<Object?>>? rawRows;
+      if (pd['raw_rows'] != null) {
+        rawRows = (pd['raw_rows'] as List)
+            .map<List<Object?>>((r) => (r as List).cast<Object?>())
+            .toList();
+      }
+
       // Merge into cache (mergePage handles override clearing internally)
       _cache.mergePage(
         bufferStart: bufferStart,
@@ -416,6 +424,7 @@ class _EpyxGridState extends State<EpyxGrid> {
         pixelOffsets: pixelOffsets,
         heights: heights,
         storageIndices: storageIndices,
+        rawRows: rawRows,
         cellStyles: cellStyles,
         overrideCells: overrideCells,
       );
@@ -3135,11 +3144,13 @@ class _EpyxGridState extends State<EpyxGrid> {
     }
 
     final cached = _cache.get(rowIndex);
-    final cellValue = (cached != null && colIndex < cached.data.length)
-        ? cached.data[colIndex] : null;
+    // Use raw (unformatted) value so render plane sees numbers, not strings.
+    // This matches the logic plane which also passes raw values.
+    final cellValue = (cached != null && colIndex < cached.rawData.length)
+        ? cached.rawData[colIndex] : null;
     final ctx = <String, dynamic>{
       'value': cellValue,
-      'row': cached?.data,
+      'row': cached?.rawData,
       'col_name': colIndex < _source.columnCount
           ? _source.columnName(colIndex) : '',
       'col_index': colIndex,

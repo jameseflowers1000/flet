@@ -18,14 +18,15 @@ import 'dart:math' as math;
 
 /// A single cached row: its data, pixel offset, height, and storage index.
 class CachedRow {
-  final List<Object?> data;
-  final double pixelOffset; // top of this row in pixel space
+  final List<Object?> data;      // display-formatted strings
+  final List<Object?> rawData;   // raw values (numbers, for render plane)
+  final double pixelOffset;       // top of this row in pixel space
   final double height;
-  final int storageIndex; // original storage-space row index
-  int lastAccess; // monotonic counter for LRU eviction
+  final int storageIndex;         // original storage-space row index
+  int lastAccess;                 // monotonic counter for LRU eviction
 
-  CachedRow(this.data, this.pixelOffset, this.height, this.storageIndex,
-      [this.lastAccess = 0]);
+  CachedRow(this.data, this.rawData, this.pixelOffset, this.height,
+      this.storageIndex, [this.lastAccess = 0]);
 }
 
 /// Display event types.
@@ -104,6 +105,7 @@ class GridCache {
     required List<double> pixelOffsets,
     required List<double> heights,
     List<int>? storageIndices,
+    List<List<Object?>>? rawRows,
     List<List<Map<String, String>?>>? cellStyles,
     List<String>? overrideCells,
   }) {
@@ -120,8 +122,11 @@ class GridCache {
     for (int i = 0; i < rows.length; i++) {
       final absRow = bufferStart + i;
       final h = i < heights.length ? heights[i] : defaultRowHeight;
+      final raw = (rawRows != null && i < rawRows.length)
+          ? rawRows[i] : rows[i];
       _rows[absRow] = CachedRow(
         rows[i],
+        raw,
         i < pixelOffsets.length ? pixelOffsets[i] : absRow * defaultRowHeight,
         h,
         storageIndices != null && i < storageIndices.length
