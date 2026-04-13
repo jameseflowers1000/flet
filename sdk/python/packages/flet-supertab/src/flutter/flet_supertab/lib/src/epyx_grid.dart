@@ -1616,7 +1616,7 @@ class _EpyxGridState extends State<EpyxGrid> {
     final inRange = _isInSelection(rowIndex, colIndex);
     // Show optimistic edit value if pending, otherwise cache-aware value
     final pendingKey = '$rowIndex:$colIndex';
-    final cellText = _pendingEdits[pendingKey] ??
+    var cellText = _pendingEdits[pendingKey] ??
         _cachedCellText(rowIndex, colIndex);
     final cellStyle = _cachedCellStyle(rowIndex, colIndex);
     Color? fg = cellStyle?['fg'] != null
@@ -1649,6 +1649,7 @@ class _EpyxGridState extends State<EpyxGrid> {
       if (cellRender['font'] != null) renderFont = cellRender['font'];
       if (cellRender['italic'] != null) renderItalic = cellRender['italic'] == 'true';
       if (cellRender['tooltip'] != null) renderTooltip = cellRender['tooltip'];
+      if (cellRender['format'] != null) cellText = cellRender['format']!;
     }
 
     final textColor = fg ?? _source.cellTextColor;
