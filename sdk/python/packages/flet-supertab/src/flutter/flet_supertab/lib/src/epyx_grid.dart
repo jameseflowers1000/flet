@@ -2164,6 +2164,18 @@ class _EpyxGridState extends State<EpyxGrid> {
 
     final row = _hitTestRow(absY);
 
+    // Click-away while editing: commit if user modified the text,
+    // cancel if unchanged (safe for initiate_editing(initial_text=...)
+    // where the editor opens with synthetic content the user hasn't
+    // approved — e.g. Delete key handler).
+    if (_isEditing) {
+      if (_editController.text != _editValue) {
+        _commitEdit();
+      } else {
+        _cancelEdit();
+      }
+    }
+
     // Shift+click extends selection, plain click moves anchor.
     // scroll: false — user tapped a visible cell, don't scroll.
     _moveTo(row, col,
