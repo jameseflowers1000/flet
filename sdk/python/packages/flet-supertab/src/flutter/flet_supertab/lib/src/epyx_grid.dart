@@ -1628,9 +1628,27 @@ class _EpyxGridState extends State<EpyxGrid> {
 
     // Apply render_code (§6A Layer 5 — overrides Python Layers 1-4)
     final cellRender = _evalCellRender(rowIndex, colIndex);
+    double? renderSize;
+    FontWeight? renderWeight;
+    String? renderFont;
+    bool? renderItalic;
+    String? renderTooltip;
     if (cellRender != null) {
       if (cellRender['bg'] != null) bg = _parseHexColor(cellRender['bg']!) ?? bg;
       if (cellRender['fg'] != null) fg = _parseHexColor(cellRender['fg']!) ?? fg;
+      if (cellRender['size'] != null) renderSize = double.tryParse(cellRender['size']!);
+      if (cellRender['weight'] != null) {
+        final w = cellRender['weight']!;
+        renderWeight = w == 'bold' ? FontWeight.bold
+            : w == 'w100' ? FontWeight.w100 : w == 'w200' ? FontWeight.w200
+            : w == 'w300' ? FontWeight.w300 : w == 'w400' ? FontWeight.w400
+            : w == 'w500' ? FontWeight.w500 : w == 'w600' ? FontWeight.w600
+            : w == 'w700' ? FontWeight.w700 : w == 'w800' ? FontWeight.w800
+            : w == 'w900' ? FontWeight.w900 : null;
+      }
+      if (cellRender['font'] != null) renderFont = cellRender['font'];
+      if (cellRender['italic'] != null) renderItalic = cellRender['italic'] == 'true';
+      if (cellRender['tooltip'] != null) renderTooltip = cellRender['tooltip'];
     }
 
     final textColor = fg ?? _source.cellTextColor;
@@ -1720,15 +1738,17 @@ class _EpyxGridState extends State<EpyxGrid> {
                     ),
                     onSubmitted: (_) => _commitEdit(moveDown: true),
                   )
-                : Text(
+                : _wrapTooltip(renderTooltip, Text(
                     cellText,
                     style: TextStyle(
                       color: textColor == Colors.transparent ? null : textColor,
-                      fontSize: _source.cellFontSize,
-                      fontFamily: _source.fontFamily,
+                      fontSize: renderSize ?? _source.cellFontSize,
+                      fontFamily: renderFont ?? _source.fontFamily,
+                      fontWeight: renderWeight,
+                      fontStyle: renderItalic == true ? FontStyle.italic : null,
                     ),
                     overflow: TextOverflow.ellipsis,
-                  ),
+                  )),
           ),
         ),
       ),
@@ -3158,6 +3178,12 @@ class _EpyxGridState extends State<EpyxGrid> {
   /// Invalidate all render caches (on data change, script change).
   void _invalidateRenderCaches() {
     _cellRenderCache.clear();
+  }
+
+  /// Wrap a widget in a Tooltip if text is provided.
+  Widget _wrapTooltip(String? tooltip, Widget child) {
+    if (tooltip == null || tooltip.isEmpty) return child;
+    return Tooltip(message: tooltip, child: child);
   }
 
   /// Pixel offset of column [col] within the scrollable region.
