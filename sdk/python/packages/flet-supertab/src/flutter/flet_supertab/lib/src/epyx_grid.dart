@@ -1635,7 +1635,9 @@ class _EpyxGridState extends State<EpyxGrid> {
         ? _parseHexColor(cellStyle!['bg']!)
         : null;
 
-    // Apply render_code (§6A Layer 5 — overrides Python Layers 1-4)
+    // Merge render plane results with logic plane cell_styles by z-order.
+    // For each property, the plane with the higher z wins. This makes
+    // code execution order the mental model — last writer wins, naturally.
     final cellRender = _evalCellRender(rowIndex, colIndex);
     double? renderSize;
     FontWeight? renderWeight;
@@ -1643,10 +1645,22 @@ class _EpyxGridState extends State<EpyxGrid> {
     bool? renderItalic;
     String? renderTooltip;
     if (cellRender != null) {
-      if (cellRender['bg'] != null) bg = _parseHexColor(cellRender['bg']!) ?? bg;
-      if (cellRender['fg'] != null) fg = _parseHexColor(cellRender['fg']!) ?? fg;
-      if (cellRender['size'] != null) renderSize = double.tryParse(cellRender['size']!);
-      if (cellRender['weight'] != null) {
+      // Helper: merge a property by z-order
+      int _logicZ(String prop) =>
+          int.tryParse(cellStyle?['${prop}_z'] ?? '') ?? -1;
+      int _renderZ(String prop) =>
+          int.tryParse(cellRender['${prop}_z'] ?? '') ?? -1;
+
+      if (cellRender['bg'] != null && _renderZ('bg') >= _logicZ('bg')) {
+        bg = _parseHexColor(cellRender['bg']!) ?? bg;
+      }
+      if (cellRender['fg'] != null && _renderZ('fg') >= _logicZ('fg')) {
+        fg = _parseHexColor(cellRender['fg']!) ?? fg;
+      }
+      if (cellRender['size'] != null && _renderZ('size') >= _logicZ('size')) {
+        renderSize = double.tryParse(cellRender['size']!);
+      }
+      if (cellRender['weight'] != null && _renderZ('weight') >= _logicZ('weight')) {
         final w = cellRender['weight']!;
         renderWeight = w == 'bold' ? FontWeight.bold
             : w == 'w100' ? FontWeight.w100 : w == 'w200' ? FontWeight.w200
@@ -1655,10 +1669,15 @@ class _EpyxGridState extends State<EpyxGrid> {
             : w == 'w700' ? FontWeight.w700 : w == 'w800' ? FontWeight.w800
             : w == 'w900' ? FontWeight.w900 : null;
       }
-      if (cellRender['font'] != null) renderFont = cellRender['font'];
-      if (cellRender['italic'] != null) renderItalic = cellRender['italic'] == 'true';
-      if (cellRender['tooltip'] != null) renderTooltip = cellRender['tooltip'];
-      if (cellRender['display'] != null) cellText = cellRender['display']!;
+      if (cellRender['font'] != null && _renderZ('font') >= _logicZ('font')) {
+        renderFont = cellRender['font'];
+      }
+      if (cellRender['italic'] != null && _renderZ('italic') >= _logicZ('italic')) {
+        renderItalic = cellRender['italic'] == 'true';
+      }
+      if (cellRender['tooltip'] != null && _renderZ('tooltip') >= _logicZ('tooltip')) {
+        renderTooltip = cellRender['tooltip'];
+      }
     }
 
     final textColor = fg ?? _source.cellTextColor;
@@ -3175,14 +3194,15 @@ class _EpyxGridState extends State<EpyxGrid> {
           'cell._to_config()', ctx);
       if (config is Map && config.isNotEmpty) {
         final style = <String, String>{};
-        if (config['bg'] != null) style['bg'] = config['bg'].toString();
-        if (config['color'] != null) style['fg'] = config['color'].toString();
-        if (config['weight'] != null) style['weight'] = config['weight'].toString();
-        if (config['size'] != null) style['size'] = config['size'].toString();
-        if (config['font'] != null) style['font'] = config['font'].toString();
-        if (config['italic'] != null) style['italic'] = config['italic'].toString();
-        if (config['tooltip'] != null) style['tooltip'] = config['tooltip'].toString();
-        if (config['display'] != null) style['display'] = config['display'].toString();
+        // Extract property values + z-levels for cross-plane merge
+        for (final prop in ['bg', 'color', 'weight', 'size', 'font', 'italic', 'tooltip']) {
+          if (config[prop] != null) {
+            final dartKey = prop == 'color' ? 'fg' : prop;
+            style[dartKey] = config[prop].toString();
+            final z = config['${prop}_z'];
+            if (z != null) style['${dartKey}_z'] = z.toString();
+          }
+        }
         _cellRenderCache[key] = style.isEmpty ? null : style;
         return _cellRenderCache[key];
       }

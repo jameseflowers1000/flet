@@ -25,53 +25,82 @@ class CellBridge:
     def _reset(self):
         self._color = None
         self._bg = None
-        self._format = None
         self._size = None
         self._font = None
         self._weight = None
         self._italic = None
         self._tooltip = None
         self._icon = None
+        self._z = 0
+        self._color_z = -1
+        self._bg_z = -1
+        self._size_z = -1
+        self._font_z = -1
+        self._weight_z = -1
+        self._italic_z = -1
+        self._tooltip_z = -1
+        self._icon_z = -1
 
     def color(self, hex_or_name):
         self._color = str(hex_or_name) if hex_or_name is not None else None
+        self._color_z = self._z
 
     def bg(self, hex_or_name):
         self._bg = str(hex_or_name) if hex_or_name is not None else None
+        self._bg_z = self._z
 
     def display(self, text):
-        pass  # no-op on render plane — logic plane (Python) handles display
+        pass  # no-op on render plane — logic plane handles display
     def format(self, text):
-        pass  # legacy alias — use display() instead
+        pass  # legacy alias
 
     def size(self, px):
         self._size = px
+        self._size_z = self._z
 
     def font(self, family):
         self._font = str(family) if family is not None else None
+        self._font_z = self._z
 
     def weight(self, name):
         self._weight = str(name) if name is not None else None
+        self._weight_z = self._z
 
     def italic(self, flag=True):
         self._italic = bool(flag)
+        self._italic_z = self._z
 
     def tooltip(self, text):
         self._tooltip = str(text) if text is not None else None
+        self._tooltip_z = self._z
 
     def icon(self, name):
         self._icon = str(name) if name is not None else None
+        self._icon_z = self._z
 
     def _to_config(self):
         config = {}
-        if self._color is not None: config["color"] = self._color
-        if self._bg is not None: config["bg"] = self._bg
-        # format is handled by logic plane (Python) — not emitted from render plane
-        if self._size is not None: config["size"] = self._size
-        if self._font is not None: config["font"] = self._font
-        if self._weight is not None: config["weight"] = self._weight
-        if self._italic is not None: config["italic"] = self._italic
-        if self._tooltip is not None: config["tooltip"] = self._tooltip
+        if self._color is not None:
+            config["color"] = self._color
+            config["color_z"] = self._color_z
+        if self._bg is not None:
+            config["bg"] = self._bg
+            config["bg_z"] = self._bg_z
+        if self._size is not None:
+            config["size"] = self._size
+            config["size_z"] = self._size_z
+        if self._font is not None:
+            config["font"] = self._font
+            config["font_z"] = self._font_z
+        if self._weight is not None:
+            config["weight"] = self._weight
+            config["weight_z"] = self._weight_z
+        if self._italic is not None:
+            config["italic"] = self._italic
+            config["italic_z"] = self._italic_z
+        if self._tooltip is not None:
+            config["tooltip"] = self._tooltip
+            config["tooltip_z"] = self._tooltip_z
         if self._icon is not None: config["icon"] = self._icon
         return config
 
