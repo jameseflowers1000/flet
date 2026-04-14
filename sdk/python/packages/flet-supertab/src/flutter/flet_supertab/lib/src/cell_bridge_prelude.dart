@@ -39,8 +39,10 @@ class CellBridge:
     def bg(self, hex_or_name):
         self._bg = str(hex_or_name) if hex_or_name is not None else None
 
+    def display(self, text):
+        pass  # no-op on render plane — logic plane (Python) handles display
     def format(self, text):
-        pass  # no-op on render plane — logic plane (Python) handles formatting
+        pass  # legacy alias — use display() instead
 
     def size(self, px):
         self._size = px

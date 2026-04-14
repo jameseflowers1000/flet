@@ -1658,7 +1658,7 @@ class _EpyxGridState extends State<EpyxGrid> {
       if (cellRender['font'] != null) renderFont = cellRender['font'];
       if (cellRender['italic'] != null) renderItalic = cellRender['italic'] == 'true';
       if (cellRender['tooltip'] != null) renderTooltip = cellRender['tooltip'];
-      if (cellRender['format'] != null) cellText = cellRender['format']!;
+      if (cellRender['display'] != null) cellText = cellRender['display']!;
     }
 
     final textColor = fg ?? _source.cellTextColor;
@@ -3182,7 +3182,7 @@ class _EpyxGridState extends State<EpyxGrid> {
         if (config['font'] != null) style['font'] = config['font'].toString();
         if (config['italic'] != null) style['italic'] = config['italic'].toString();
         if (config['tooltip'] != null) style['tooltip'] = config['tooltip'].toString();
-        if (config['format'] != null) style['format'] = config['format'].toString();
+        if (config['display'] != null) style['display'] = config['display'].toString();
         _cellRenderCache[key] = style.isEmpty ? null : style;
         return _cellRenderCache[key];
       }
