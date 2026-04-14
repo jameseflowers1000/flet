@@ -383,7 +383,8 @@ class _EpyxGridState extends State<EpyxGrid> {
         cellStyles = (pd['cell_styles'] as List).map<List<Map<String, String>?>>((row) {
           return (row as List).map<Map<String, String>?>((cell) {
             if (cell == null) return null;
-            return Map<String, String>.from(cell as Map);
+            final m = cell as Map;
+            return m.map((k, v) => MapEntry(k.toString(), v.toString()));
           }).toList();
         }).toList();
       }
