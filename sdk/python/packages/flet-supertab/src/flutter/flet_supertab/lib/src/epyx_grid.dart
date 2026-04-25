@@ -1828,6 +1828,8 @@ class _EpyxGridState extends State<EpyxGrid> {
   void _moveTo(int row, int col, {bool extend = false, bool scroll = true}) {
     final prevRow = _selectedRow;
     final prevCol = _selectedCol;
+    final prevEndRow = _selEndRow;
+    final prevEndCol = _selEndCol;
     // Invalidate render caches for old and new selected rows
     _cellRenderCache.removeWhere((k, _) =>
         k.startsWith('$prevRow:') || k.startsWith('$row:'));
@@ -1843,9 +1845,19 @@ class _EpyxGridState extends State<EpyxGrid> {
       }
     });
     if (scroll) _scrollToAnchor();
-    // Fire selection_change if anchor moved
-    if (!extend && (row != prevRow || col != prevCol)) {
-      _fireSelectionChange();
+    // Fire selection_change whenever (anchor or end) actually changed.
+    // ETB-06 Gap 1: previously the !extend guard suppressed events for
+    // shift-click and shift-arrow paths.  Now both paths fire — but only
+    // when the (row, col) under their respective slot actually moved, so
+    // we don't spam events on shift-arrow against the bound.
+    if (extend) {
+      if (row != prevEndRow || col != prevEndCol) {
+        _fireSelectionChange();
+      }
+    } else {
+      if (row != prevRow || col != prevCol) {
+        _fireSelectionChange();
+      }
     }
   }
 
@@ -1868,32 +1880,46 @@ class _EpyxGridState extends State<EpyxGrid> {
 
   /// Select entire row.
   void _selectRow(int row) {
+    final lastCol = _source.columnCount - 1;
+    final changed = _selectedRow != row || _selectedCol != 0 ||
+                    _selEndRow != row || _selEndCol != lastCol;
     setState(() {
       _selectedRow = row;
       _selectedCol = 0;
       _selEndRow = row;
-      _selEndCol = _source.columnCount - 1;
+      _selEndCol = lastCol;
     });
+    if (changed) _fireSelectionChange();
   }
 
   /// Select entire column.
   void _selectColumn(int col) {
+    final lastRow = _effectiveRowCount - 1;
+    final changed = _selectedRow != 0 || _selectedCol != col ||
+                    _selEndRow != lastRow || _selEndCol != col;
     setState(() {
       _selectedRow = 0;
       _selectedCol = col;
-      _selEndRow = _effectiveRowCount - 1;
+      _selEndRow = lastRow;
       _selEndCol = col;
     });
+    if (changed) _fireSelectionChange();
   }
 
   /// Select all cells.
   void _selectAll() {
+    final lastRow = _effectiveRowCount - 1;
+    final lastCol = _source.columnCount - 1;
+    final changed = _selectedRow != 0 || _selectedCol != 0 ||
+                    _selEndRow != lastRow || _selEndCol != lastCol;
     setState(() {
       _selectedRow = 0;
       _selectedCol = 0;
-      _selEndRow = _effectiveRowCount - 1;
-      _selEndCol = _source.columnCount - 1;
+      _selEndRow = lastRow;
+      _selEndCol = lastCol;
     });
+    // ETB-06 Gap 3: Cmd+A / Ctrl+A must fire selection_change.
+    if (changed) _fireSelectionChange();
   }
 
   /// Get selected text as tab-separated values.
@@ -2772,7 +2798,10 @@ class _EpyxGridState extends State<EpyxGrid> {
           : (isShift ? _selEndRow + 1 : _selectedRow + 1);
       final row = targetRow.clamp(0, maxRow);
       if (isShift) {
+        // ETB-06 Gap 2: shift+arrow must fire selection_change.
+        final changed = row != _selEndRow;
         setState(() => _selEndRow = row);
+        if (changed) _fireSelectionChange();
       } else if (isCtrl) {
         // Ctrl+Down: jump to last row — use display event for cache
         _moveTo(row, _selectedCol, scroll: false);
@@ -2802,7 +2831,10 @@ class _EpyxGridState extends State<EpyxGrid> {
           : (isShift ? _selEndRow - 1 : _selectedRow - 1);
       final row = targetRow.clamp(0, maxRow);
       if (isShift) {
+        // ETB-06 Gap 2: shift+arrow must fire selection_change.
+        final changed = row != _selEndRow;
         setState(() => _selEndRow = row);
+        if (changed) _fireSelectionChange();
       } else if (isCtrl) {
         // Ctrl+Up: jump to first row — use display event for cache
         _moveTo(row, _selectedCol, scroll: false);
@@ -2831,8 +2863,11 @@ class _EpyxGridState extends State<EpyxGrid> {
           : (isShift ? _selEndCol + 1 : _selectedCol + 1);
       final col = targetCol.clamp(0, _source.columnCount - 1);
       if (isShift) {
+        // ETB-06 Gap 2: shift+arrow must fire selection_change.
+        final changed = col != _selEndCol;
         setState(() => _selEndCol = col);
         _ensureColumnVisible(col);
+        if (changed) _fireSelectionChange();
       } else {
         _moveTo(_selectedRow, col);  // scroll: true → _ensureColumnVisible
       }
@@ -2842,8 +2877,11 @@ class _EpyxGridState extends State<EpyxGrid> {
           : (isShift ? _selEndCol - 1 : _selectedCol - 1);
       final col = targetCol.clamp(0, _source.columnCount - 1);
       if (isShift) {
+        // ETB-06 Gap 2: shift+arrow must fire selection_change.
+        final changed = col != _selEndCol;
         setState(() => _selEndCol = col);
         _ensureColumnVisible(col);
+        if (changed) _fireSelectionChange();
       } else {
         _moveTo(_selectedRow, col);  // scroll: true → _ensureColumnVisible
       }
@@ -2864,8 +2902,11 @@ class _EpyxGridState extends State<EpyxGrid> {
       handled = true;
     } else if (key == LogicalKeyboardKey.home) {
       if (isShift) {
+        // ETB-06 Gap 2: shift+Home must fire selection_change.
+        final changed = _selEndCol != 0;
         setState(() => _selEndCol = 0);
         _scrollToSelEnd();
+        if (changed) _fireSelectionChange();
       } else {
         _moveTo(_selectedRow, 0);
       }
@@ -2873,8 +2914,11 @@ class _EpyxGridState extends State<EpyxGrid> {
     } else if (key == LogicalKeyboardKey.end) {
       final lastCol = _source.columnCount - 1;
       if (isShift) {
+        // ETB-06 Gap 2: shift+End must fire selection_change.
+        final changed = _selEndCol != lastCol;
         setState(() => _selEndCol = lastCol);
         _scrollToSelEnd();
+        if (changed) _fireSelectionChange();
       } else {
         _moveTo(_selectedRow, lastCol);
       }
