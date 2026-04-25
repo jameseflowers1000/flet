@@ -1129,12 +1129,18 @@ class _EpyxGridState extends State<EpyxGrid> {
           final frozenWidth = _frozenColumnsWidth(frozenCount);
           final scrollableWidth = _scrollableColumnsWidth(frozenCount);
 
+          // ETB-01: drag-select feature flag (read once per build).
+          final allowDragSelect =
+              widget.control.getBool("allow_drag_select", false) ?? false;
           return Focus(
             focusNode: _focusNode,
             onKeyEvent: _onKeyEvent,
             child: GestureDetector(
               onTapDown: (details) => _onTapDown(details),
               onSecondaryTapDown: (details) => _onSecondaryTapDown(details),
+              onPanStart: allowDragSelect ? _onPanStart : null,
+              onPanUpdate: allowDragSelect ? _onPanUpdate : null,
+              onPanEnd: allowDragSelect ? _onPanEnd : null,
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -1260,6 +1266,9 @@ class _EpyxGridState extends State<EpyxGrid> {
         final frozenRows = widget.control.getInt("frozen_rows_count", 0) ?? 0;
         final scrollableRowCount = itemCount - frozenRows;
 
+        // ETB-01: drag-select feature flag (read once per build).
+        final allowDragSelect =
+            widget.control.getBool("allow_drag_select", false) ?? false;
         return MouseRegion(
           onHover: (event) => _onHover(event.localPosition),
           onExit: (_) => _onHoverExit(),
@@ -1269,6 +1278,9 @@ class _EpyxGridState extends State<EpyxGrid> {
             child: GestureDetector(
               onTapDown: (details) => _onTapDown(details),
               onSecondaryTapDown: (details) => _onSecondaryTapDown(details),
+              onPanStart: allowDragSelect ? _onPanStart : null,
+              onPanUpdate: allowDragSelect ? _onPanUpdate : null,
+              onPanEnd: allowDragSelect ? _onPanEnd : null,
               child: SingleChildScrollView(
               controller: _xController,
               scrollDirection: Axis.horizontal,
@@ -2149,29 +2161,33 @@ class _EpyxGridState extends State<EpyxGrid> {
   // Selection + keyboard (prototype pattern)
   // ────────────────────────────────────────────────────────────────
 
-  void _onTapDown(TapDownDetails details) {
-    // Convert local position to absolute (add scroll offset)
-    // In Natural mode (shrinkWrap), _yController may not be attached
+  /// Hit-test a local pointer position to a (row, col) cell.
+  ///
+  /// Returns null if the position falls in a non-data area (header band,
+  /// checkbox column). Mirrors the math in _onTapDown / _onSecondaryTapDown
+  /// and is used by both tap and drag-select handlers. Frozen-column
+  /// boundary is honored: positions in the frozen panel use no x-scroll
+  /// offset; positions past the frozen panel apply the horizontal scroll.
+  ///
+  /// Out-of-data positions are clamped to data bounds (per ETB-01: drags
+  /// outside data bounds clamp to data bounds, no error).
+  ({int row, int col})? _hitTestCell(Offset localPosition) {
     final yOffset = _yController.hasClients ? _yController.offset : 0.0;
-    // Subtract header height — GestureDetector wraps both header and data
     final headerH = _source.headerRowHeight;
-    final dataY = details.localPosition.dy - headerH;
-    if (dataY < 0) return; // tapped on header, not data
-    final absY = yOffset + dataY;
+    final dataY = localPosition.dy - headerH;
+    if (dataY < 0) return null; // header band
 
-    // Hit test: find column (frozen columns don't scroll horizontally)
     final frozenCount = widget.control.getInt("frozen_columns_count", 0) ?? 0;
     final showCheckbox =
         widget.control.getBool("show_checkbox_column", false) ?? false;
     final cbOffset = showCheckbox ? _checkboxColWidth : 0.0;
-    var localX = details.localPosition.dx;
-    // Skip checkbox column area — taps there handled by Checkbox widget
-    if (showCheckbox && localX < cbOffset) return;
-    localX -= cbOffset; // offset past checkbox for column hit test
+    var localX = localPosition.dx;
+    if (showCheckbox && localX < cbOffset) return null;
+    localX -= cbOffset;
 
     double absX;
     if (frozenCount > 0 && frozenCount < _source.columnCount) {
-      final frozenW = _frozenColumnsWidth(frozenCount) - cbOffset; // data cols only
+      final frozenW = _frozenColumnsWidth(frozenCount) - cbOffset;
       if (localX <= frozenW) {
         absX = localX;
       } else {
@@ -2182,6 +2198,8 @@ class _EpyxGridState extends State<EpyxGrid> {
       final xOffset = _xController.hasClients ? _xController.offset : 0.0;
       absX = xOffset + localX;
     }
+
+    final absY = yOffset + dataY;
 
     int col = 0;
     double cumX = 0;
@@ -2195,6 +2213,14 @@ class _EpyxGridState extends State<EpyxGrid> {
     }
 
     final row = _hitTestRow(absY);
+    return (row: row, col: col);
+  }
+
+  void _onTapDown(TapDownDetails details) {
+    final hit = _hitTestCell(details.localPosition);
+    if (hit == null) return;
+    final row = hit.row;
+    final col = hit.col;
 
     // Click-away while editing: commit if user modified the text,
     // cancel if unchanged (safe for initiate_editing(initial_text=...)
@@ -2213,6 +2239,55 @@ class _EpyxGridState extends State<EpyxGrid> {
     _moveTo(row, col,
         extend: HardwareKeyboard.instance.isShiftPressed, scroll: false);
     _focusNode.requestFocus();
+  }
+
+  // ────────────────────────────────────────────────────────────────
+  // Drag-select (ETB-01) — gated by allow_drag_select feature flag.
+  // ETB-02: pure view-state mutation. No cell values written, no
+  // mark_node_changed, no recalc. _fireSelectionChange() emits one
+  // event per drag (on pan-end), not per pan-update.
+  // ────────────────────────────────────────────────────────────────
+
+  // Track whether a drag is in progress (to suppress redundant work).
+  bool _isDragSelecting = false;
+
+  void _onPanStart(DragStartDetails details) {
+    final hit = _hitTestCell(details.localPosition);
+    if (hit == null) return;
+    _isDragSelecting = true;
+    // Commit/cancel any in-flight edit before starting a drag selection.
+    if (_isEditing) {
+      if (_editController.text != _editValue) {
+        _commitEdit();
+      } else {
+        _cancelEdit();
+      }
+    }
+    setState(() {
+      _selectedRow = hit.row;
+      _selectedCol = hit.col;
+      _selEndRow = hit.row;
+      _selEndCol = hit.col;
+    });
+    _focusNode.requestFocus();
+  }
+
+  void _onPanUpdate(DragUpdateDetails details) {
+    if (!_isDragSelecting) return;
+    final hit = _hitTestCell(details.localPosition);
+    if (hit == null) return;
+    if (hit.row == _selEndRow && hit.col == _selEndCol) return;
+    setState(() {
+      _selEndRow = hit.row;
+      _selEndCol = hit.col;
+    });
+  }
+
+  void _onPanEnd(DragEndDetails details) {
+    if (!_isDragSelecting) return;
+    _isDragSelecting = false;
+    // One selection_change event per drag, on pan-end (not per update).
+    _fireSelectionChange();
   }
 
   /// Right-click: select cell under cursor, then show context menu.
