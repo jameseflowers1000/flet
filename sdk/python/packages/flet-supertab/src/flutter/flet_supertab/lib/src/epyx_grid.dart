@@ -3287,7 +3287,15 @@ class _EpyxGridState extends State<EpyxGrid> {
     // This matches the logic plane which also passes raw values.
     final cellValue = (cached != null && colIndex < cached.rawData.length)
         ? cached.rawData[colIndex] : null;
+    // Merge user-pushed render context (e.g., setup-tier locals from
+    // value_code, doc-level free names from cross-control references)
+    // BEFORE the cell-context vars so cell-context wins on key conflicts.
+    final ctlIdStr = widget.control.id?.toString();
+    final pushedCtx = ctlIdStr == null
+        ? null
+        : RenderPlaneControl.getContext(ctlIdStr);
     final ctx = <String, dynamic>{
+      if (pushedCtx != null) ...pushedCtx,
       'value': cellValue,
       'row': cached?.rawData,
       'col_name': colIndex < _source.columnCount
