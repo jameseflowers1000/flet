@@ -188,6 +188,13 @@ class _EpyxGridState extends State<EpyxGrid> {
     _renderProjection =
         RenderPlaneControl.getProjection(_onKeyHostId, 'render');
     _invalidateRenderCaches();
+    // The listener that calls us doesn't trigger a rebuild on its own;
+    // without a setState the cache clear has no visible effect until the
+    // user scrolls/hovers/clicks. Force a rebuild via post-frame so this
+    // is safe to call from initState too.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) setState(() {});
+    });
   }
 
   void _onControlChanged() {
