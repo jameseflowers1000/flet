@@ -31,6 +31,7 @@ class CellBridge:
         self._italic = None
         self._tooltip = None
         self._icon = None
+        self._display = None
         self._z = 0
         self._color_z = -1
         self._bg_z = -1
@@ -40,6 +41,7 @@ class CellBridge:
         self._italic_z = -1
         self._tooltip_z = -1
         self._icon_z = -1
+        self._display_z = -1
 
     def color(self, hex_or_name):
         self._color = str(hex_or_name) if hex_or_name is not None else None
@@ -50,9 +52,12 @@ class CellBridge:
         self._bg_z = self._z
 
     def display(self, text):
-        pass  # no-op on render plane — logic plane handles display
+        self._display = str(text) if text is not None else None
+        self._display_z = self._z
     def format(self, text):
-        pass  # legacy alias
+        # legacy alias for display()
+        self._display = str(text) if text is not None else None
+        self._display_z = self._z
 
     def size(self, px):
         self._size = px
@@ -102,6 +107,9 @@ class CellBridge:
             config["tooltip"] = self._tooltip
             config["tooltip_z"] = self._tooltip_z
         if self._icon is not None: config["icon"] = self._icon
+        if self._display is not None:
+            config["display"] = self._display
+            config["display_z"] = self._display_z
         return config
 
 cell = CellBridge()

@@ -1691,6 +1691,13 @@ class _EpyxGridState extends State<EpyxGrid> {
       if (cellRender['tooltip'] != null && _renderZ('tooltip') >= _logicZ('tooltip')) {
         renderTooltip = cellRender['tooltip'];
       }
+      // Render plane's `display` (from cell.format / cell.display) overrides
+      // the raw cellText. Pending edits and explicit display overrides
+      // already applied above still win because cellText was set first.
+      if (cellRender['display'] != null
+          && _pendingEdits[pendingKey] == null) {
+        cellText = cellRender['display']!;
+      }
     }
 
     final textColor = fg ?? _source.cellTextColor;
@@ -3322,8 +3329,12 @@ class _EpyxGridState extends State<EpyxGrid> {
           'cell._to_config()', ctx);
       if (config is Map && config.isNotEmpty) {
         final style = <String, String>{};
-        // Extract property values + z-levels for cross-plane merge
-        for (final prop in ['bg', 'color', 'weight', 'size', 'font', 'italic', 'tooltip']) {
+        // Extract property values + z-levels for cross-plane merge.
+        // 'display' is the formatted cell text (cell.format / cell.display
+        // on the prelude). It rides through the same map and overrides
+        // the raw value when consumed by the cell builder.
+        for (final prop in ['bg', 'color', 'weight', 'size', 'font',
+                            'italic', 'tooltip', 'display']) {
           if (config[prop] != null) {
             final dartKey = prop == 'color' ? 'fg' : prop;
             style[dartKey] = config[prop].toString();
