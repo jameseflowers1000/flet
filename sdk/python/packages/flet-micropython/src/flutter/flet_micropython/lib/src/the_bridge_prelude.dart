@@ -22,7 +22,8 @@ class _Symbolic:
         return _Symbolic._MAP.get(name, name)
 
 class _Bag:
-    pass
+    def __init__(self):
+        self.value = ""
 
 class _Chain:
     def __init__(self, the_ref):
@@ -44,11 +45,9 @@ class The:
     def __init__(self):
         self.cell = _Bag()
         self.field = _Bag()
-        self.cell.value = ""
-        self.field.value = ""
         self.keys = _Symbolic()
         self.mods = _Symbolic()
-        self.modifiers = set()
+        self.modifiers = []
         self.key = ""
         self._commands = []
         self._chain = _Chain(self)

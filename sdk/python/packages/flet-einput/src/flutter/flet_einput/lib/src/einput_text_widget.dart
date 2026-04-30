@@ -1,12 +1,25 @@
 import 'dart:convert';
+import 'dart:io' show File, Platform;
 
 import 'package:flet/flet.dart';
 import 'package:flet_micropython/flet_micropython.dart';
-import 'package:flutter/foundation.dart' show defaultTargetPlatform, TargetPlatform;
+import 'package:flutter/foundation.dart' show defaultTargetPlatform, TargetPlatform, kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'input_command_executor.dart';
+
+void _einputDiag(String msg) {
+  if (kIsWeb) return;
+  try {
+    final stamp = DateTime.now().toIso8601String();
+    File('/tmp/einput_keys.log').writeAsStringSync(
+      '[$stamp] $msg\n',
+      mode: FileMode.append,
+      flush: true,
+    );
+  } catch (_) {}
+}
 
 /// Custom Flet input widget — Flutter TextField with spreadsheet-grade
 /// focus model and on_key_code scripting via the canonical render plane.
@@ -32,6 +45,8 @@ class EInputTextWidget extends StatefulWidget {
   @override
   State<EInputTextWidget> createState() => _EInputTextWidgetState();
 }
+
+bool _globalKeyListenerInstalled = false;
 
 class _EInputTextWidgetState extends State<EInputTextWidget> {
   late final TextEditingController _controller;
@@ -85,6 +100,20 @@ class _EInputTextWidgetState extends State<EInputTextWidget> {
     widget.control.addListener(_onControlChanged);
     _refreshOnKeyProjection();
     _subscribeRenderPlane();
+    _einputDiag('mount ctrl=${widget.control.id} hostId=${widget.control.getString("host_control_id") ?? ""}');
+    // One-shot global keyboard listener (registered once for the whole app
+    // — first widget to mount installs it). Logs every hardware key event
+    // before any focus dispatch, so we can tell on desktop whether keys
+    // reach Flutter at all even when the field is focused.
+    if (!_globalKeyListenerInstalled) {
+      _globalKeyListenerInstalled = true;
+      HardwareKeyboard.instance.addHandler((KeyEvent event) {
+        _einputDiag('HardwareKeyboard event=${event.runtimeType} '
+            'key=${event.logicalKey.debugName} '
+            'focusedNode=${FocusManager.instance.primaryFocus?.debugLabel ?? "<none>"}');
+        return false;  // don't claim — let normal dispatch proceed
+      });
+    }
     print('[EInputText] mount id=${widget.control.id} text="${_controller.text}" hostId=${widget.control.getString("host_control_id") ?? ""}');
   }
 
@@ -166,6 +195,8 @@ class _EInputTextWidgetState extends State<EInputTextWidget> {
 
   void _onFocusChanged() {
     final hasFocus = _focusNode.hasFocus;
+    _einputDiag('focus changed: ctrl=${widget.control.id} hasFocus=$hasFocus '
+        'hostId=${widget.control.getString("host_control_id") ?? ""}');
     print('[EInputText] focus changed: hasFocus=$hasFocus text="${_controller.text}"');
     if (hasFocus) {
       _userIsEditing = true;
@@ -293,6 +324,9 @@ class _EInputTextWidgetState extends State<EInputTextWidget> {
   bool _enterHandledThisFrame = false;
 
   KeyEventResult _onKeyEvent(FocusNode node, KeyEvent event) {
+    _einputDiag('FocusNode.onKeyEvent FIRED ctrl=${widget.control.id} '
+        'evt=${event.runtimeType} key=${event.logicalKey.debugName} '
+        'hasFocus=${node.hasFocus} hostId=${widget.control.getString("host_control_id") ?? ""}');
     if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
       return KeyEventResult.ignored;
     }
@@ -418,13 +452,22 @@ class _EInputTextWidgetState extends State<EInputTextWidget> {
 
   bool _evalOnKey(KeyEvent event) {
     final proj = _onKeyProjection;
-    if (proj == null) return false;
+    if (proj == null) {
+      _einputDiag('_evalOnKey: proj=null, returning false');
+      return false;
+    }
     final execBody = proj['exec'] as String? ?? '';
     final evalExpr = proj['eval'] as String?;
-    if (evalExpr == null || evalExpr.isEmpty) return false;
+    if (evalExpr == null || evalExpr.isEmpty) {
+      _einputDiag('_evalOnKey: evalExpr empty, returning false');
+      return false;
+    }
 
     final keyName = _logicalKeyName(event);
     final mods = _buildModifiers();
+    _einputDiag('_evalOnKey: keyName="$keyName" mods=$mods '
+        'mpReady=${MicroPythonService.isReady} '
+        'execBody.len=${execBody.length} evalExpr.len=${evalExpr.length}');
 
     final selection = _controller.selection;
     final selectionState = !selection.isValid
@@ -447,6 +490,8 @@ class _EInputTextWidgetState extends State<EInputTextWidget> {
 
     try {
       final result = MicroPythonService.execEval(execBody, evalExpr, ctx);
+      _einputDiag('_evalOnKey result type=${result.runtimeType} '
+          'value=${result.toString().substring(0, result.toString().length.clamp(0, 200))}');
       if (result == null) return false;
       if (result is! List) return false;
       if (result.isEmpty) return false;
@@ -464,8 +509,11 @@ class _EInputTextWidgetState extends State<EInputTextWidget> {
         onCancel: _cancel,
         onBanner: _fireBanner,
       );
-      return InputCommandExecutor.execute(result, target);
-    } catch (e) {
+      final executed = InputCommandExecutor.execute(result, target);
+      _einputDiag('_evalOnKey: InputCommandExecutor.execute returned $executed');
+      return executed;
+    } catch (e, st) {
+      _einputDiag('_evalOnKey EXCEPTION: $e\n$st');
       print('[EInputText] on_key eval error: $e');
       return false;
     }

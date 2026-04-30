@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:ffi';
 import 'dart:io' show Platform;
+import 'dart:io' as io;
 
 import 'package:ffi/ffi.dart';
 
@@ -85,9 +86,20 @@ class MicroPythonService {
     for (final entry in _preludes.entries) {
       try {
         exec(entry.value);
-      } catch (_) {
-        // Best effort — failures don't block other preludes
+        _diagExecEval('prelude "${entry.key}" exec OK (len=${entry.value.length})');
+      } catch (e) {
+        _diagExecEval('prelude "${entry.key}" exec FAILED: $e');
       }
+      // Independently verify the prelude actually registered itself by
+      // probing _epyx_user_preludes — execing a prelude can succeed but
+      // its `try: _epyx_user_preludes['x'] = ... except: pass` block can
+      // silently swallow errors that prevent registration.
+      try {
+        final probe = _execCapture(
+          "print('PROBE_PRELUDE', '${entry.key}', "
+          "'${entry.key}' in _epyx_user_preludes)");
+        _diagExecEval('prelude "${entry.key}" registry probe: ${probe?.trim() ?? "<null>"}');
+      } catch (_) {}
     }
     _preludesLoaded = true;
   }
@@ -426,11 +438,27 @@ class MicroPythonService {
 
     try {
       final decoded = jsonDecode(trimmed);
-      if (decoded is Map && decoded.containsKey('__error__')) return null;
+      if (decoded is Map && decoded.containsKey('__error__')) {
+        // Only emit error path to /tmp diag — happy path is hot, don't log.
+        _diagExecEval('__error__: ${decoded['__error__']}');
+        return null;
+      }
       return decoded;
-    } catch (_) {
+    } catch (e) {
+      _diagExecEval('jsonDecode threw on output="${trimmed.substring(0, trimmed.length.clamp(0, 200))}"');
       return null;
     }
+  }
+
+  static void _diagExecEval(String msg) {
+    try {
+      final stamp = DateTime.now().toIso8601String();
+      io.File('/tmp/einput_keys.log').writeAsStringSync(
+        '[$stamp] [execEval] $msg\n',
+        mode: io.FileMode.append,
+        flush: true,
+      );
+    } catch (_) {}
   }
 
   /// Execute Python statements (define functions, load modules, etc.).
