@@ -3308,12 +3308,14 @@ class _EpyxGridState extends State<EpyxGrid> {
     final pushedCtx = ctlIdStr == null
         ? null
         : RenderPlaneControl.getContext(ctlIdStr);
+    final isAnchorCell = _isAnchor(rowIndex, colIndex);
+    final colNameForCtx = colIndex < _source.columnCount
+        ? _source.columnName(colIndex) : '';
     final ctx = <String, dynamic>{
       if (pushedCtx != null) ...pushedCtx,
       'value': cellValue,
       'row': cached?.rawData,
-      'col_name': colIndex < _source.columnCount
-          ? _source.columnName(colIndex) : '',
+      'col_name': colNameForCtx,
       'col_index': colIndex,
       'row_index': rowIndex,
       'is_selected': _isInSelection(rowIndex, colIndex),
@@ -3326,6 +3328,11 @@ class _EpyxGridState extends State<EpyxGrid> {
       'viewport_count': _yController.hasClients
           ? (_yController.position.viewportDimension / _cache.defaultRowHeight).ceil()
           : 20,
+      // E12 — symmetric interaction-state flags. Match the cell ctx
+      // surface that EScalar / EInk also provide to render snippets.
+      'is_editing': _isEditing && isAnchorCell,
+      'is_focused': isAnchorCell,
+      'is_overridden': _cache.hasOverride(rowIndex, colNameForCtx),
     };
     try {
       // Exec the function def + call together (f-strings with format specs
