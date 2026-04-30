@@ -2,6 +2,7 @@ import 'package:flet/flet.dart';
 import 'package:flutter/widgets.dart';
 
 import 'field_bridge_prelude.dart';
+import 'the_bridge_prelude.dart';
 import 'micropython_eval_control.dart';
 import 'render_plane_control.dart';
 import 'micropython_service.dart'
@@ -13,6 +14,9 @@ class Extension extends FletExtension {
     // in the MicroPython global namespace, available to EScalar's
     // def render() function for setting display/color/size/etc.
     MicroPythonService.registerPrelude('field', fieldBridgePrelude);
+    // Register the `the` namespace prelude — used by α on_key
+    // projections (the.keys, the.mods, the.replace, etc.).
+    MicroPythonService.registerPrelude('the', theBridgePrelude);
   }
 
   @override
