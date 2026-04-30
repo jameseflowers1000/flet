@@ -26,17 +26,24 @@ class AutoRange(Enum):
 class NumericAxis:
     """
     Numeric axis - equivalent to SciChart's NumericAxis.
-    
+
     Supports linear scaling with configurable range, labels, and styling.
+    Set ``axis_type='datetime'`` to make the Dart side treat values as
+    epoch-millisecond timestamps and format ticks as readable dates.
     """
-    
+
+    # Axis type — 'numeric' (default) or 'datetime'. Datetime axes
+    # interpret numeric values as ms-since-epoch and use date-aware tick
+    # selection + formatting on the Dart side.
+    axis_type: str = "numeric"
+
     # Title displayed along the axis
     axis_title: Optional[str] = None
-    
+
     # Visible range (if None, auto-range is used)
     visible_range_min: Optional[float] = None
     visible_range_max: Optional[float] = None
-    
+
     # Auto-range behavior
     auto_range: AutoRange = AutoRange.ALWAYS
     
@@ -75,7 +82,7 @@ class NumericAxis:
     def to_dict(self) -> Dict[str, Any]:
         """Serialize to dictionary for JSON encoding."""
         return {
-            "type": "numeric",
+            "type": self.axis_type if self.axis_type in ("numeric", "datetime") else "numeric",
             "axis_title": self.axis_title,
             "visible_range_min": self.visible_range_min,
             "visible_range_max": self.visible_range_max,
