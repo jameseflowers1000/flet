@@ -60,6 +60,7 @@ class EInputText(ft.LayoutControl):
     font_family: Optional[str] = field(default=None, metadata={"data_field": "font_family"})
     font_weight: Optional[str] = field(default=None, metadata={"data_field": "font_weight"})
     italic: bool = field(default=False, metadata={"data_field": "italic"})
+    underline: bool = field(default=False, metadata={"data_field": "underline"})
 
     # ─── Render plane integration ─────────────────────────────────────────
     # The control id (Flet UID as a string) of the host EScalar — the Dart

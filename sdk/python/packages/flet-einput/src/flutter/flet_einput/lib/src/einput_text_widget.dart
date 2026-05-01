@@ -595,6 +595,7 @@ class _EInputTextWidgetState extends State<EInputTextWidget> {
     final fontFamily = widget.control.getString("font_family");
     final fontWeightStr = widget.control.getString("font_weight");
     final italic = widget.control.getBool("italic", false) ?? false;
+    final underline = widget.control.getBool("underline", false) ?? false;
 
     final textStyle = TextStyle(
       color: textColor,
@@ -602,6 +603,7 @@ class _EInputTextWidgetState extends State<EInputTextWidget> {
       fontFamily: fontFamily,
       fontWeight: _parseFontWeight(fontWeightStr),
       fontStyle: italic ? FontStyle.italic : FontStyle.normal,
+      decoration: underline ? TextDecoration.underline : TextDecoration.none,
     );
 
     // Key interception:
