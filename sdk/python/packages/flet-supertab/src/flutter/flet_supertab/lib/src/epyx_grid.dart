@@ -13,7 +13,8 @@ import 'package:flet/flet.dart';
 import 'package:flet_micropython/flet_micropython.dart' show RenderPlaneControl;
 import 'package:flet_micropython/src/micropython_service.dart'
     if (dart.library.io) 'package:flet_micropython/src/micropython_service_native.dart';
-import 'package:flutter/foundation.dart' show defaultTargetPlatform, TargetPlatform;
+import 'package:flutter/foundation.dart' show defaultTargetPlatform, TargetPlatform, kIsWeb;
+import 'dart:io' show File, FileMode;
 import 'package:flutter/material.dart';
 import 'package:super_sliver_list/super_sliver_list.dart';
 import 'package:flutter/services.dart';
@@ -22,6 +23,28 @@ import 'package:flutter/services.dart';
 import 'epyx_grid_cache.dart';
 import 'epyx_grid_source.dart';
 import 'epyx_grid_test_api.dart';
+
+/// Diagnostic write-through used by the on_key path. Mirrors
+/// `_einputDiag` in flet-einput so both ETab and EInput keystroke
+/// flows surface in the same /tmp/einput_keys.log file.
+/// On web the file API throws; gate with kIsWeb.
+void _etabKeyDiag(String msg) {
+  final stamp = DateTime.now().toIso8601String();
+  if (kIsWeb) {
+    print('[etab_key] $stamp $msg');
+    return;
+  }
+  try {
+    File('/tmp/einput_keys.log').writeAsStringSync(
+      '[$stamp] [etab] $msg\n',
+      mode: FileMode.append,
+      flush: true,
+    );
+  } catch (_) {
+    print('[etab_key] $stamp $msg');
+  }
+}
+
 
 /// The main EpyxGrid widget. Reads Flet control properties and renders
 /// a virtualized grid using SliverList.
@@ -187,6 +210,9 @@ class _EpyxGridState extends State<EpyxGrid> {
         RenderPlaneControl.getProjection(_onKeyHostId, 'on_key');
     _renderProjection =
         RenderPlaneControl.getProjection(_onKeyHostId, 'render');
+    _etabKeyDiag('refreshOnKeyProjection hostId=$_onKeyHostId '
+        'on_key=${_onKeyProjection != null} '
+        'render=${_renderProjection != null}');
     _invalidateRenderCaches();
     // The listener that calls us doesn't trigger a rebuild on its own;
     // without a setState the cache clear has no visible effect until the
@@ -2056,7 +2082,8 @@ class _EpyxGridState extends State<EpyxGrid> {
     return true;
   }
 
-  void _startEditing({String? initialText, bool codeMode = false, String? prompt}) {
+  void _startEditing({String? initialText, bool codeMode = false,
+      String? prompt, String? cursor}) {
     if (!_canEdit) return;
 
     // Get raw value for editing (not display-formatted)
@@ -2081,9 +2108,29 @@ class _EpyxGridState extends State<EpyxGrid> {
       _editOriginalValue = rawValue;
       _editValue = initialText ?? rawValue;
       _editController.text = _editValue;
-      // Cursor at end of text (F2 or type-to-replace)
-      _editController.selection = TextSelection.collapsed(
-          offset: _editController.text.length);
+      // Selection model:
+      //   cursor == 'end'           → cursor at end, no selection
+      //                                (F2 convention: extend existing text)
+      //   cursor == 'start'         → cursor at position 0
+      //   cursor == 'all' / null    → select all (default — typing replaces;
+      //                                spreadsheet convention for type-to-edit
+      //                                via Enter / printable key)
+      // initial_text is treated as already-replaced content, so cursor
+      // lands at end when initial_text was supplied (caller deliberately
+      // injected a value).
+      if (initialText != null) {
+        _editController.selection = TextSelection.collapsed(
+            offset: _editController.text.length);
+      } else if (cursor == 'end') {
+        _editController.selection = TextSelection.collapsed(
+            offset: _editController.text.length);
+      } else if (cursor == 'start') {
+        _editController.selection = const TextSelection.collapsed(offset: 0);
+      } else {
+        // Default: select all (cursor == 'all' or unspecified).
+        _editController.selection = TextSelection(
+            baseOffset: 0, extentOffset: _editController.text.length);
+      }
     });
 
     // Focus the TextField on next frame
@@ -2588,7 +2635,9 @@ class _EpyxGridState extends State<EpyxGrid> {
           final mode = cmd['mode'] as String?;
           final initialText = cmd['initial_text'] as String?;
           final prompt = cmd['prompt'] as String?;
-          _startEditing(codeMode: mode == 'code', initialText: initialText, prompt: prompt);
+          final cursor = cmd['cursor'] as String?;
+          _startEditing(codeMode: mode == 'code', initialText: initialText,
+              prompt: prompt, cursor: cursor);
           break;
         case 'cancel_editing':
           if (_isEditing) _cancelEdit();
@@ -2658,6 +2707,10 @@ class _EpyxGridState extends State<EpyxGrid> {
     if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
       return KeyEventResult.ignored;
     }
+    _etabKeyDiag('FIRED key=${event.logicalKey.debugName} '
+        'editing=$_isEditing srcInit=$_sourceInitialized '
+        'projLoaded=${_onKeyProjection != null} '
+        'mpReady=${MicroPythonService.isReady}');
     if (!_sourceInitialized) return KeyEventResult.ignored;
 
     final key = event.logicalKey;
@@ -2695,15 +2748,24 @@ class _EpyxGridState extends State<EpyxGrid> {
           'modifiers': mods,
           'row': _selectedRow,
           'col': _selectedCol,
+          // Aliases — the α on_key wrapper reads `row_index` / `col_index`
+          // (matches the.cell.row_index / .col_index spelling); supply both
+          // forms so user code can use either.
+          'row_index': _selectedRow,
+          'col_index': _selectedCol,
           'col_name': _selectedCol < _source.columnCount
               ? _source.columnName(_selectedCol) : '',
           'editing': _isEditing,
+          'is_editing': _isEditing,
           'value': _cachedCellText(_selectedRow, _selectedCol),
           'total_rows': _effectiveRowCount,
           'total_cols': _source.columnCount,
         };
         try {
           final result = MicroPythonService.execEval(execBody, evalExpr, ctx);
+          _etabKeyDiag('execEval result type=${result.runtimeType} '
+              'value=${result.toString().substring(0, result.toString().length.clamp(0, 200))} '
+              'keyName=$keyName editing=$_isEditing');
           if (result != null && result is List && result.isNotEmpty) {
             setState(() {
               _executeCommandChain(result);
@@ -2712,13 +2774,19 @@ class _EpyxGridState extends State<EpyxGrid> {
           }
           // result null / non-list / empty → fall through to baseline
         } catch (e) {
+          _etabKeyDiag('execEval EXCEPTION: $e');
           widget.control.updateProperties(
               {'error_message': '[on_key] ERROR: $e'},
               python: false, notify: false);
           setState(() {});
           // MicroPython error → fall through to baseline
         }
+      } else {
+        _etabKeyDiag('skip: evalExpr empty');
       }
+    } else {
+      _etabKeyDiag('skip: projLoaded=${_onKeyProjection != null} '
+          'mpReady=${MicroPythonService.isReady}');
     }
 
     // When editing, the TextField handles most keys.

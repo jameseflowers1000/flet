@@ -33,7 +33,12 @@ class MarkdownWidget extends StatelessWidget {
       control: control,
       child: SingleChildScrollView(
         child: SelectionArea(
+          // ValueKey on the markdown content forces Flutter to remount
+          // the GptMarkdown subtree on every value change. Without this
+          // key, gpt_markdown caches its parsed AST and doesn't repaint
+          // when the parent rebuilds with a new `value` string.
           child: GptMarkdown(
+            key: ValueKey(value),
             value,
             style: baseStyle,
             useDollarSignsForLatex: true,

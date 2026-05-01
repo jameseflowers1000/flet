@@ -383,7 +383,19 @@ class MicroPythonService {
       '            "banner": banner,\n'
       '        }\n'
       '        _g.update(_epyx_user_preludes)\n'
-      '        _g.update(ctx)\n'
+      '        # Wrap top-level dict ctx values via _DotDict (defined in\n'
+      '        # the `the` prelude) so cross-doclet namespaces like\n'
+      '        # `bigpush.tasks.Stage` work via attribute syntax. Plain\n'
+      '        # values (lists, strings, etc.) pass through unchanged.\n'
+      '        try:\n'
+      '            _Wrap = _DotDict\n'
+      '        except NameError:\n'
+      '            _Wrap = None\n'
+      '        for _k, _v in ctx.items():\n'
+      '            if _Wrap is not None and isinstance(_v, dict):\n'
+      '                _g[_k] = _Wrap(_v)\n'
+      '            else:\n'
+      '                _g[_k] = _v\n'
       '        # Use _g as BOTH globals and locals so any function defined\n'
       '        # by exec_code captures _g as its __globals__. project_render_funcs\n'
       '        # wraps render/on_key bodies as callables, and free names like\n'
@@ -451,14 +463,18 @@ class MicroPythonService {
   }
 
   static void _diagExecEval(String msg) {
+    final stamp = DateTime.now().toIso8601String();
     try {
-      final stamp = DateTime.now().toIso8601String();
       io.File('/tmp/einput_keys.log').writeAsStringSync(
         '[$stamp] [execEval] $msg\n',
         mode: io.FileMode.append,
         flush: true,
       );
-    } catch (_) {}
+    } catch (_) {
+      // dart:io is sandboxed on web — fall back to print so the
+      // line surfaces in the browser console.
+      print('[$stamp] [execEval] $msg');
+    }
   }
 
   /// Execute Python statements (define functions, load modules, etc.).
