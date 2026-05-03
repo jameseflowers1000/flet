@@ -83,3 +83,7 @@ class EInputText(ft.LayoutControl):
 
     # Fired when focus state changes. Event data: JSON {"focused": bool}
     on_focus_change: Optional[ft.ControlEventHandler["EInputText"]] = None
+
+    # Fired when the user (or a render-plane command) cancels the edit.
+    # Event data: JSON {} (no payload — cancel is identity-only).
+    on_cancel: Optional[ft.ControlEventHandler["EInputText"]] = None

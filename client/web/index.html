@@ -260,6 +260,90 @@
         if (!allowed) blurIframe(controlId);
       };
 
+      // Banner DOM mirror — Dart calls _epyxSetBanner(message, level) when
+      // a banner command fires. Tests read window._epyxLastBanner OR the
+      // hidden DIV `#epyx-last-banner` (so document.body.innerText finds it).
+      window._epyxLastBanner = null;
+      window._epyxSetBanner = function(message, level) {
+        try {
+          window._epyxLastBanner = { message: String(message || ''),
+                                     level: String(level || 'info'),
+                                     ts: Date.now() };
+          var div = document.getElementById('epyx-last-banner');
+          if (!div) {
+            div = document.createElement('div');
+            div.id = 'epyx-last-banner';
+            // Visible to innerText scans but not to users (off-screen).
+            div.style.position = 'absolute';
+            div.style.left = '-9999px';
+            div.style.top = '-9999px';
+            div.style.width = '1px';
+            div.style.height = '1px';
+            div.style.overflow = 'hidden';
+            div.setAttribute('data-testid', 'epyx-banner');
+            document.body.appendChild(div);
+          }
+          div.textContent = String(message || '');
+          div.setAttribute('data-banner-level', String(level || 'info'));
+        } catch (e) {}
+      };
+      // ETab grid selection mirror — Dart calls _epyxSetGridSelection(
+      // controlId, row, col) when the focused cell changes. Tests poll
+      // window._epyxLastGridSelection or read the data-* attributes on
+      // the hidden #epyx-last-grid-sel div.
+      window._epyxLastGridSelection = null;
+      window._epyxSetGridSelection = function(controlId, row, col) {
+        try {
+          window._epyxLastGridSelection = {
+            controlId: String(controlId || ''),
+            row: Number(row),
+            col: Number(col),
+            ts: Date.now(),
+          };
+          var div = document.getElementById('epyx-last-grid-sel');
+          if (!div) {
+            div = document.createElement('div');
+            div.id = 'epyx-last-grid-sel';
+            div.style.position = 'absolute';
+            div.style.left = '-9999px';
+            div.style.top = '-9999px';
+            div.style.width = '1px';
+            div.style.height = '1px';
+            div.style.overflow = 'hidden';
+            div.setAttribute('data-testid', 'epyx-grid-sel');
+            document.body.appendChild(div);
+          }
+          div.setAttribute('data-grid-row', String(row));
+          div.setAttribute('data-grid-col', String(col));
+          div.setAttribute('data-grid-control', String(controlId || ''));
+          div.textContent = 'grid_sel ' + controlId + ' ' + row + ' ' + col;
+        } catch (e) {}
+      };
+
+      // Beep DOM mirror — increments a counter on each beep so tests can
+      // poll for it.
+      window._epyxBeepCount = 0;
+      window._epyxBeep = function() {
+        try {
+          window._epyxBeepCount = (window._epyxBeepCount || 0) + 1;
+          var div = document.getElementById('epyx-last-beep');
+          if (!div) {
+            div = document.createElement('div');
+            div.id = 'epyx-last-beep';
+            div.style.position = 'absolute';
+            div.style.left = '-9999px';
+            div.style.top = '-9999px';
+            div.style.width = '1px';
+            div.style.height = '1px';
+            div.style.overflow = 'hidden';
+            div.setAttribute('data-testid', 'epyx-beep');
+            document.body.appendChild(div);
+          }
+          div.setAttribute('data-beep-count', String(window._epyxBeepCount));
+          div.textContent = 'beep ' + window._epyxBeepCount;
+        } catch (e) {}
+      };
+
       // Focus a specific iframe by controlId for keyboard input.
       // Backward compat: if no args, focus first iframe found.
       window._epyxFocusIframe = function(controlId) {

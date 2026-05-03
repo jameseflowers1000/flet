@@ -1,5 +1,7 @@
 import 'dart:convert';
 import 'dart:io' show File, Platform;
+import 'dom_helpers_stub.dart'
+    if (dart.library.js_interop) 'dom_helpers_web.dart' as dom;
 
 import 'package:flet/flet.dart';
 import 'package:flet_micropython/flet_micropython.dart';
@@ -200,12 +202,17 @@ class _EInputTextWidgetState extends State<EInputTextWidget> {
     print('[EInputText] focus changed: hasFocus=$hasFocus text="${_controller.text}"');
     if (hasFocus) {
       _userIsEditing = true;
-      // Snapshot the (formatted) display so we can restore on Escape.
-      _savedValueBeforeEdit = _controller.text;
+      // Snapshot the RAW pre-edit value (not the formatted display) so
+      // the.cancel restores something the user can re-edit. Subsequent
+      // command-list operations (replace/insert/...) mutate the
+      // controller but never touch _savedValueBeforeEdit, so a chained
+      // `the.replace('SCRATCH').cancel()` reverts to this snapshot.
+      final rawValue = widget.control.getString("value") ?? '';
+      _savedValueBeforeEdit =
+          rawValue.isNotEmpty ? rawValue : _controller.text;
       // Swap from the formatted display to the RAW value for editing.
       // Python pushes both `value` (raw) and `display` (formatted); when
       // not focused we show display, when focused we show value.
-      final rawValue = widget.control.getString("value") ?? '';
       if (rawValue.isNotEmpty && _controller.text != rawValue) {
         _controller.value = TextEditingValue(
           text: rawValue,
@@ -238,14 +245,20 @@ class _EInputTextWidgetState extends State<EInputTextWidget> {
         _commit('blur');
       }
       _userIsEditing = false;
-      // Restore the formatted display so the field shows the idle text
-      // again until the next recalc pushes a fresh display.
-      final display = widget.control.getString("display") ?? '';
-      if (display.isNotEmpty && _controller.text != display) {
-        _controller.value = TextEditingValue(
-          text: display,
-          selection: TextSelection.collapsed(offset: display.length),
-        );
+      if (_suppressDisplayRestoreOnNextBlur) {
+        // Cancel just fired and put the saved raw value into the
+        // controller. Don't clobber it with the formatted display.
+        _suppressDisplayRestoreOnNextBlur = false;
+      } else {
+        // Restore the formatted display so the field shows the idle text
+        // again until the next recalc pushes a fresh display.
+        final display = widget.control.getString("display") ?? '';
+        if (display.isNotEmpty && _controller.text != display) {
+          _controller.value = TextEditingValue(
+            text: display,
+            selection: TextSelection.collapsed(offset: display.length),
+          );
+        }
       }
       _fireFocusChange(false);
     }
@@ -286,14 +299,29 @@ class _EInputTextWidgetState extends State<EInputTextWidget> {
   }
 
   void _cancel() {
-    // Cancel restores the pre-edit text and unfocuses. _onFocusChanged
-    // will see the unfocus and clear _userIsEditing.
+    // Cancel restores the pre-edit text and unfocuses. We clear the
+    // editing flag BEFORE unfocusing so the blur-side branch in
+    // _onFocusChanged doesn't fire a phantom commit with the restored
+    // value (cancel is the opposite of commit; the value should not
+    // round-trip back to Python). Also: don't let the unfocus branch
+    // overwrite the controller with the formatted display — keep the
+    // raw saved value visible. We DO NOT call _commit here.
+    _userIsEditing = false;
     _controller.value = TextEditingValue(
       text: _savedValueBeforeEdit,
       selection: TextSelection.collapsed(offset: _savedValueBeforeEdit.length),
     );
+    // Stash a sentinel so _onFocusChanged knows we just cancelled and
+    // should not overwrite controller text with the formatted display.
+    _suppressDisplayRestoreOnNextBlur = true;
+    // Fire cancel event so the Python side can re-run the α snippet
+    // with `the.cancel == True` for branchy snippets like
+    // `if the.cancel: the.field.color('#FF00FF')`.
+    widget.control.triggerEventWithoutSubscribers('cancel', '{}');
     if (_focusNode.hasFocus) _focusNode.unfocus();
   }
+
+  bool _suppressDisplayRestoreOnNextBlur = false;
 
   void _fireFocusChange(bool focused) {
     widget.control.triggerEventWithoutSubscribers(
@@ -307,6 +335,19 @@ class _EInputTextWidgetState extends State<EInputTextWidget> {
       'banner',
       jsonEncode({'message': message, 'level': level}),
     );
+    // Surface the banner in the DOM so headless tests can read it via
+    // innerText. Flutter web with canvaskit renders all text on canvas,
+    // so a Text widget alone wouldn't be findable. We mirror the latest
+    // banner into a hidden DOM div via dart:js_interop for test visibility.
+    _publishLastBannerToDom(message, level);
+  }
+
+  void _publishLastBannerToDom(String message, String level) {
+    dom.publishBanner(message, level);
+  }
+
+  void _publishBeepToDom() {
+    dom.publishBeep();
   }
 
   // ─── Key handling ────────────────────────────────────────────────────────
@@ -442,6 +483,7 @@ class _EInputTextWidgetState extends State<EInputTextWidget> {
         },
         onCancel: _cancel,
         onBanner: _fireBanner,
+        onBeep: _publishBeepToDom,
       );
       return InputCommandExecutor.execute(result, target);
     } catch (e) {
@@ -508,6 +550,7 @@ class _EInputTextWidgetState extends State<EInputTextWidget> {
         },
         onCancel: _cancel,
         onBanner: _fireBanner,
+        onBeep: _publishBeepToDom,
       );
       final executed = InputCommandExecutor.execute(result, target);
       _einputDiag('_evalOnKey: InputCommandExecutor.execute returned $executed');

@@ -113,6 +113,16 @@ class _Bag:
         the._commands.append({"cmd": "insert", "text": str(text)})
         return the
 
+    def edit(self, **kw):
+        # Schema action: the.cell.edit(row=..., col_index=...). Routes
+        # through the master `the._commands` so the Dart-side dispatcher
+        # picks it up. The grid's command handler initiates editing on
+        # the targeted (row, col_index) cell.
+        d = {"cmd": "cell_edit"}
+        d.update(kw)
+        the._commands.append(d)
+        return the
+
 class The:
     def __init__(self):
         self.cell = _Bag()

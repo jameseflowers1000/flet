@@ -10,6 +10,7 @@ class InputCommandTarget {
   final void Function(String reason) onCommit;
   final VoidCallback onCancel;
   final void Function(String message, String level) onBanner;
+  final VoidCallback? onBeep;
 
   InputCommandTarget({
     required this.controller,
@@ -17,6 +18,7 @@ class InputCommandTarget {
     required this.onCommit,
     required this.onCancel,
     required this.onBanner,
+    this.onBeep,
   });
 }
 
@@ -163,8 +165,10 @@ class InputCommandExecutor {
           break;
 
         case 'beep':
-          // Absorbs the key, no action.
+          // Absorbs the key, plays a system sound, AND notifies the host
+          // so it can publish a DOM signal (for headless tests).
           SystemSound.play(SystemSoundType.alert);
+          target.onBeep?.call();
           any = true;
           break;
 

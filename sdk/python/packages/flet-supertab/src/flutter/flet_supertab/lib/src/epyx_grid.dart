@@ -23,6 +23,8 @@ import 'package:flutter/services.dart';
 import 'epyx_grid_cache.dart';
 import 'epyx_grid_source.dart';
 import 'epyx_grid_test_api.dart';
+import 'epyx_grid_dom_stub.dart'
+    if (dart.library.js_interop) 'epyx_grid_dom_web.dart' as epyx_grid_dom;
 
 /// Diagnostic write-through used by the on_key path. Mirrors
 /// `_einputDiag` in flet-einput so both ETab and EInput keystroke
@@ -1690,6 +1692,7 @@ class _EpyxGridState extends State<EpyxGrid> {
     String? renderFont;
     bool? renderItalic;
     String? renderTooltip;
+    String? renderIcon;
     if (cellRender != null) {
       // Helper: merge a property by z-order
       int _logicZ(String prop) =>
@@ -1723,6 +1726,9 @@ class _EpyxGridState extends State<EpyxGrid> {
       }
       if (cellRender['tooltip'] != null && _renderZ('tooltip') >= _logicZ('tooltip')) {
         renderTooltip = cellRender['tooltip'];
+      }
+      if (cellRender['icon'] != null && _renderZ('icon') >= _logicZ('icon')) {
+        renderIcon = cellRender['icon'];
       }
       // Render plane's `display` (from cell.format / cell.display) overrides
       // the raw cellText. Pending edits and explicit display overrides
@@ -1820,7 +1826,7 @@ class _EpyxGridState extends State<EpyxGrid> {
                     ),
                     onSubmitted: (_) => _commitEdit(moveDown: true),
                   )
-                : _wrapTooltip(renderTooltip, Text(
+                : _wrapTooltip(renderTooltip, _wrapIcon(renderIcon, Text(
                     cellText,
                     style: TextStyle(
                       color: textColor == Colors.transparent ? null : textColor,
@@ -1830,7 +1836,7 @@ class _EpyxGridState extends State<EpyxGrid> {
                       fontStyle: renderItalic == true ? FontStyle.italic : null,
                     ),
                     overflow: TextOverflow.ellipsis,
-                  )),
+                  ), textColor, renderSize ?? _source.cellFontSize)),
           ),
         ),
       ),
@@ -1885,6 +1891,9 @@ class _EpyxGridState extends State<EpyxGrid> {
       }
     });
     if (scroll) _scrollToAnchor();
+    // Mirror selection to the DOM for headless tests (web only).
+    epyx_grid_dom.publishGridSelection(
+        widget.control.id.toString(), row, col);
     // Fire selection_change whenever (anchor or end) actually changed.
     // ETB-06 Gap 1: previously the !extend guard suppressed events for
     // shift-click and shift-arrow paths.  Now both paths fire — but only
@@ -2624,11 +2633,27 @@ class _EpyxGridState extends State<EpyxGrid> {
           if (_isEditing) _commitEdit();
           break;
         case 'move':
-          final r = (cmd['row'] as num?)?.toInt() ?? _selectedRow;
-          final c = (cmd['col'] as num?)?.toInt() ?? _selectedCol;
+          // Two forms: explicit (row=, col=) or relative (direction=
+          // 'up'/'down'/'left'/'right' with optional `steps`).
+          int targetR = (cmd['row'] as num?)?.toInt() ?? _selectedRow;
+          int targetC = (cmd['col'] as num?)?.toInt() ?? _selectedCol;
+          final direction = cmd['direction'] as String?;
+          final dr = (cmd['delta_row'] as num?)?.toInt();
+          final dc = (cmd['delta_col'] as num?)?.toInt();
+          final steps = (cmd['steps'] as num?)?.toInt() ?? 1;
+          if (direction != null) {
+            switch (direction) {
+              case 'up':    targetR = _selectedRow - steps; break;
+              case 'down':  targetR = _selectedRow + steps; break;
+              case 'left':  targetC = _selectedCol - steps; break;
+              case 'right': targetC = _selectedCol + steps; break;
+            }
+          }
+          if (dr != null) targetR = _selectedRow + dr;
+          if (dc != null) targetC = _selectedCol + dc;
           _moveTo(
-            r.clamp(0, _effectiveRowCount - 1),
-            c.clamp(0, _source.columnCount - 1),
+            targetR.clamp(0, _effectiveRowCount - 1),
+            targetC.clamp(0, _source.columnCount - 1),
           );
           break;
         case 'initiate_editing':
@@ -2638,6 +2663,22 @@ class _EpyxGridState extends State<EpyxGrid> {
           final cursor = cmd['cursor'] as String?;
           _startEditing(codeMode: mode == 'code', initialText: initialText,
               prompt: prompt, cursor: cursor);
+          break;
+        case 'cell_edit':
+          // the.cell.edit(row=, col_index=) — move focus to that cell
+          // and initiate editing on it. Defaults to current selection.
+          final r = (cmd['row'] as num?)?.toInt() ?? _selectedRow;
+          final ci = (cmd['col_index'] as num?)?.toInt() ?? _selectedCol;
+          final mode = cmd['mode'] as String?;
+          final initialText = cmd['initial_text'] as String?;
+          final prompt = cmd['prompt'] as String?;
+          final cursor = cmd['cursor'] as String?;
+          if (r >= 0 && r < _effectiveRowCount &&
+              ci >= 0 && ci < _source.columnCount) {
+            _moveTo(r, ci);
+            _startEditing(codeMode: mode == 'code',
+                initialText: initialText, prompt: prompt, cursor: cursor);
+          }
           break;
         case 'cancel_editing':
           if (_isEditing) _cancelEdit();
@@ -3441,6 +3482,57 @@ class _EpyxGridState extends State<EpyxGrid> {
   Widget _wrapTooltip(String? tooltip, Widget child) {
     if (tooltip == null || tooltip.isEmpty) return child;
     return Tooltip(message: tooltip, child: child);
+  }
+
+  /// Prepend an Icon (Material name) to a cell's text, sized to match the
+  /// cell font. Falls through unchanged when [iconName] is null/empty.
+  Widget _wrapIcon(String? iconName, Widget textChild,
+                   Color? color, double size) {
+    if (iconName == null || iconName.isEmpty) return textChild;
+    final iconData = _resolveIcon(iconName);
+    if (iconData == null) return textChild;
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(iconData, size: size, color: color),
+        const SizedBox(width: 4),
+        Flexible(child: textChild),
+      ],
+    );
+  }
+
+  /// Map a string name to a Material IconData. Names match common Material
+  /// icon identifiers ('star', 'check', 'warning', etc.). Unknown names
+  /// return null so the cell renders text-only.
+  IconData? _resolveIcon(String name) {
+    switch (name.toLowerCase()) {
+      case 'star':       return Icons.star;
+      case 'star_border': return Icons.star_border;
+      case 'check':      return Icons.check;
+      case 'check_circle': return Icons.check_circle;
+      case 'close':      return Icons.close;
+      case 'cancel':     return Icons.cancel;
+      case 'warning':    return Icons.warning;
+      case 'error':      return Icons.error;
+      case 'info':       return Icons.info;
+      case 'help':       return Icons.help;
+      case 'add':        return Icons.add;
+      case 'remove':     return Icons.remove;
+      case 'arrow_up':
+      case 'up':         return Icons.arrow_upward;
+      case 'arrow_down':
+      case 'down':       return Icons.arrow_downward;
+      case 'flag':       return Icons.flag;
+      case 'lock':       return Icons.lock;
+      case 'unlock':     return Icons.lock_open;
+      case 'edit':       return Icons.edit;
+      case 'delete':     return Icons.delete;
+      case 'search':     return Icons.search;
+      case 'refresh':    return Icons.refresh;
+      case 'visibility': return Icons.visibility;
+      case 'visibility_off': return Icons.visibility_off;
+      default: return null;
+    }
   }
 
   /// Pixel offset of column [col] within the scrollable region.
