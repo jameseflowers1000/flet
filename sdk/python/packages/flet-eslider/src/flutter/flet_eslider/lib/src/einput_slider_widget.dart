@@ -10,9 +10,11 @@
 import 'dart:convert';
 
 import 'package:flet/flet.dart';
-import 'package:flet_einput/src/input_command_executor.dart';
+import 'package:flet_einput/flet_einput.dart'
+    show InputCommandExecutor, InputCommandTarget;
 import 'package:flet_micropython/flet_micropython.dart';
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart'
+    show kIsWeb, defaultTargetPlatform, TargetPlatform;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -30,10 +32,10 @@ class _EInputSliderWidgetState extends State<EInputSliderWidget> {
   late final TextEditingController _typingController;
   late final FocusNode _typingFocusNode;
 
-  /// Saved value at focus time, restored on Escape during type-to-replace.
-  double _savedValueBeforeEdit = 0.0;
-
   /// True while the user is actively typing a replacement value.
+  /// During typing the slider's actual value is NOT mutated — only the
+  /// transient text buffer is — so there's no "saved value to restore"
+  /// on cancel; cancel simply clears the buffer.
   bool _typing = false;
 
   /// True when this slider is the focus target (drives the focus border).
@@ -77,12 +79,14 @@ class _EInputSliderWidgetState extends State<EInputSliderWidget> {
       _onKeyProjection = null;
       return;
     }
-    final rp = RenderPlaneControl.maybeGetInstance();
-    if (rp == null) return;
-    _onKeyProjection = (rp.getProjection(hostId, 'on_key')) as Map<String, dynamic>?;
-    _renderPlaneUnsubscribe = rp.subscribeProjection(hostId, 'on_key',
-        (proj) {
-      _onKeyProjection = proj as Map<String, dynamic>?;
+    // Pull current projection (static API; the registry is a class-level
+    // singleton on RenderPlaneControl).
+    _onKeyProjection = RenderPlaneControl.getProjection(hostId, 'on_key');
+    // Subscribe for future updates — re-fetch when notified.
+    _renderPlaneUnsubscribe =
+        RenderPlaneControl.addListener(hostId, () {
+      _onKeyProjection =
+          RenderPlaneControl.getProjection(hostId, 'on_key');
     });
   }
 
@@ -101,14 +105,10 @@ class _EInputSliderWidgetState extends State<EInputSliderWidget> {
     if (hasFocus == _hasFocus) return;
     setState(() {
       _hasFocus = hasFocus;
-      if (hasFocus) {
-        _savedValueBeforeEdit = _currentValue();
-      } else {
+      if (!hasFocus && _typing) {
         // Lost focus — drop any in-flight type-to-replace.
-        if (_typing) {
-          _typing = false;
-          _typingController.clear();
-        }
+        _typing = false;
+        _typingController.clear();
       }
     });
     widget.control.triggerEventWithoutSubscribers(
