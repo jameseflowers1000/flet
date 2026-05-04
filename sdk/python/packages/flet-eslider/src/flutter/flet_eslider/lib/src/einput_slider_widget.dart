@@ -111,6 +111,7 @@ class _EInputSliderWidgetState extends State<EInputSliderWidget> {
         _typingController.clear();
       }
     });
+    debugPrint('[eslider id=${widget.control.id}] focus=$hasFocus');
     widget.control.triggerEventWithoutSubscribers(
         'focus_change', jsonEncode({'focused': hasFocus}));
   }
@@ -430,8 +431,14 @@ class _EInputSliderWidgetState extends State<EInputSliderWidget> {
         min: min,
         max: max,
         divisions: divisions,
+        // CRITICAL: share the FocusNode with our outer Focus wrapper.
+        // Flutter's Slider creates its OWN FocusNode when tapped if
+        // none is provided — that captures the click but never reaches
+        // our keyboard handler / focus border. Sharing the node means
+        // a track/thumb tap focuses *us*, lighting the border and
+        // routing arrow keys through onKeyEvent.
+        focusNode: _focusNode,
         onChanged: (v) {
-          // Drag updates — request focus so subsequent keys land here.
           if (!_focusNode.hasFocus) _focusNode.requestFocus();
           _setValue(v, reason: "drag");
         },
@@ -457,10 +464,34 @@ class _EInputSliderWidgetState extends State<EInputSliderWidget> {
       );
     } else {
       final shown = display.isNotEmpty ? display : _formatValue(value);
-      bottomLabel = Text(
-        shown,
-        style: TextStyle(color: textColor, fontSize: fontSize),
-        textAlign: TextAlign.center,
+      // Prefix a ▶ marker on the value label when this slider has focus
+      // — duplicate signal in addition to the border + glow + bg tint.
+      // Especially useful in the terminal/web stack where shadows can
+      // be subtle. Marker color matches the focus border so it's
+      // unmistakably an "I am focused" cue.
+      bottomLabel = Row(
+        mainAxisSize: MainAxisSize.min,
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          if (_hasFocus)
+            Padding(
+              padding: const EdgeInsets.only(right: 4),
+              child: Text('▶',
+                  style: TextStyle(
+                      color: focusColor,
+                      fontSize: fontSize,
+                      fontWeight: FontWeight.bold)),
+            ),
+          Text(
+            shown,
+            style: TextStyle(
+              color: textColor,
+              fontSize: fontSize,
+              fontWeight: _hasFocus ? FontWeight.bold : FontWeight.normal,
+            ),
+            textAlign: TextAlign.center,
+          ),
+        ],
       );
     }
 
@@ -486,23 +517,35 @@ class _EInputSliderWidgetState extends State<EInputSliderWidget> {
       ],
     );
 
-    return Focus(
-      focusNode: _focusNode,
-      child: GestureDetector(
-        onTap: () => _focusNode.requestFocus(),
-        behavior: HitTestBehavior.translucent,
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 80),
-          padding: EdgeInsets.all(focusWidth),
-          decoration: BoxDecoration(
-            border: Border.all(
-              color: _hasFocus ? focusColor : Colors.transparent,
-              width: focusWidth,
-            ),
-            borderRadius: BorderRadius.circular(4),
+    return GestureDetector(
+      onTap: () => _focusNode.requestFocus(),
+      behavior: HitTestBehavior.translucent,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 80),
+        padding: EdgeInsets.all(focusWidth),
+        decoration: BoxDecoration(
+          // Tinted background when focused — much more visible than a
+          // bare border in this terminal/composited stack. Plus a thick
+          // outer border in the focus color, plus a subtle glow.
+          color: _hasFocus
+              ? focusColor.withValues(alpha: 0.10)
+              : Colors.transparent,
+          border: Border.all(
+            color: _hasFocus ? focusColor : Colors.transparent,
+            width: focusWidth,
           ),
-          child: body,
+          borderRadius: BorderRadius.circular(6),
+          boxShadow: _hasFocus
+              ? [
+                  BoxShadow(
+                    color: focusColor.withValues(alpha: 0.45),
+                    blurRadius: 8,
+                    spreadRadius: 1,
+                  ),
+                ]
+              : null,
         ),
+        child: body,
       ),
     );
   }
