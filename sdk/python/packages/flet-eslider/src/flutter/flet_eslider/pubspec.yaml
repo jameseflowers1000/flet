@@ -1,0 +1,26 @@
+name: flet_eslider
+description: Custom Flet slider with focus + type-to-replace + on_key scripting
+version: 0.1.0
+publish_to: none
+
+environment:
+  sdk: '>=3.3.0 <4.0.0'
+  flutter: ">=1.17.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  flet:
+    path: ../../../../../../../packages/flet
+
+  flet_micropython:
+    path: ../../../../flet-micropython/src/flutter/flet_micropython
+
+  flet_einput:
+    path: ../../../../flet-einput/src/flutter/flet_einput
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0

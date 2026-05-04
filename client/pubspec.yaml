@@ -94,6 +94,9 @@ dependencies:
   flet_einput:
     path: ../sdk/python/packages/flet-einput/src/flutter/flet_einput
 
+  flet_eslider:
+    path: ../sdk/python/packages/flet-eslider/src/flutter/flet_eslider
+
   flet_supertab:
     path: ../sdk/python/packages/flet-supertab/src/flutter/flet_supertab
 
