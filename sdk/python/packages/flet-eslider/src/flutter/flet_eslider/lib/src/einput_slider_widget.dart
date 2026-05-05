@@ -118,7 +118,7 @@ class _EInputSliderWidgetState extends State<EInputSliderWidget> {
         _typingController.clear();
       }
     });
-    debugPrint('[eslider id=${widget.control.id}] focus=$hasFocus');
+    print('[eslider id=${widget.control.id}] focus=$hasFocus');
     widget.control.triggerEventWithoutSubscribers(
         'focus_change', jsonEncode({'focused': hasFocus}));
   }
@@ -240,7 +240,7 @@ class _EInputSliderWidgetState extends State<EInputSliderWidget> {
 
     // First: try the α `if the.key == ...:` projection if any.
     final hostId = widget.control.getString("host_control_id") ?? '';
-    debugPrint('[eslider id=${widget.control.id}] key=${key.debugName} '
+    print('[eslider id=${widget.control.id}] key=${key.debugName} '
         'hostId=$hostId proj=${_onKeyProjection != null} '
         'mpReady=${MicroPythonService.isReady}');
     // Late-bind the projection in case it got registered between
@@ -251,7 +251,7 @@ class _EInputSliderWidgetState extends State<EInputSliderWidget> {
     }
     if (_onKeyProjection != null && MicroPythonService.isReady) {
       final handled = _evalOnKey(event);
-      debugPrint('[eslider id=${widget.control.id}] '
+      print('[eslider id=${widget.control.id}] '
           'projection result handled=$handled');
       if (handled) return KeyEventResult.handled;
     }
