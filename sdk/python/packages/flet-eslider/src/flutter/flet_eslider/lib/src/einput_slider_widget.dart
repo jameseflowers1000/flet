@@ -1,12 +1,17 @@
 /// EInputSlider — slider with focus, keyboard step, type-to-replace, and
-/// `def on_key(key, modifiers, value, ...)` render-plane projection eval.
+/// α-snippet keystroke scripting.
 ///
 /// Architectural twin of flet-einput's EInputTextWidget. Both widgets
-/// implement the same on_key model: a baseline (arrow keys, Enter, Esc,
-/// printable chars enter type-to-replace mode); on top of that, an α
-/// `def on_key` snippet projected to the render plane runs first and
-/// can intercept any key — its returned command list is dispatched via
-/// the shared InputCommandExecutor (replace/insert/commit/cancel/...).
+/// implement the same model: a built-in baseline (arrow keys → step,
+/// Enter/Esc, printable chars enter type-to-replace mode); on top of
+/// that, the α `code` on the hosting EScalar can include
+/// `if the.key == ...:` blocks. The static analyzer extracts those
+/// blocks into a render-plane projection (registry key 'on_key' —
+/// implementation detail; users write inline if-statements, not a
+/// `def on_key(...)` function). On every keystroke we eval the
+/// projection; if it returns a command list, the commands are
+/// dispatched through the shared InputCommandExecutor
+/// (replace/insert/commit/cancel/banner/beep/...).
 import 'dart:convert';
 
 import 'package:flet/flet.dart';
@@ -49,9 +54,11 @@ class _EInputSliderWidgetState extends State<EInputSliderWidget> {
   @override
   void initState() {
     super.initState();
+    // onKeyEvent is wired on the parent Focus widget below in build(),
+    // not on the FocusNode itself, to avoid double-firing when the
+    // node sits inside a Focus widget that also has an onKeyEvent.
     _focusNode = FocusNode(
       debugLabel: 'eslider_${widget.control.id}',
-      onKeyEvent: _onKeyEvent,
     );
     _focusNode.addListener(_onFocusChanged);
     _typingController = TextEditingController();
@@ -420,6 +427,17 @@ class _EInputSliderWidgetState extends State<EInputSliderWidget> {
     final display = widget.control.getString("display") ?? '';
     final label = widget.control.getString("label") ?? '';
 
+    // We deliberately do NOT pass our FocusNode to Slider here.
+    // When Slider has a focusNode, its internal Focus wrapper installs
+    // its own onKeyEvent that fires BEFORE ours, intercepting digits
+    // and other keys we want to handle. Slider also competes for focus
+    // with the surrounding Focus widget, leading to flaky tap-to-focus
+    // behavior (the amplitude/frequency divergence). With no focusNode
+    // passed, Slider's keyboard step disables — but we re-implement it
+    // ourselves in _onKeyEvent (and add Shift×10 + Home/End on top), so
+    // the user-visible behavior is the same. The trade-off is unambig-
+    // uously worth it: our outer Focus owns the keyboard input lane,
+    // and the focus border lights up on every tap.
     final slider = SliderTheme(
       data: SliderTheme.of(context).copyWith(
         activeTrackColor: activeColor,
@@ -431,14 +449,9 @@ class _EInputSliderWidgetState extends State<EInputSliderWidget> {
         min: min,
         max: max,
         divisions: divisions,
-        // CRITICAL: share the FocusNode with our outer Focus wrapper.
-        // Flutter's Slider creates its OWN FocusNode when tapped if
-        // none is provided — that captures the click but never reaches
-        // our keyboard handler / focus border. Sharing the node means
-        // a track/thumb tap focuses *us*, lighting the border and
-        // routing arrow keys through onKeyEvent.
-        focusNode: _focusNode,
         onChanged: (v) {
+          // Drag updates — make sure our FocusNode owns focus so
+          // subsequent keys come to us, not to Slider's internal node.
           if (!_focusNode.hasFocus) _focusNode.requestFocus();
           _setValue(v, reason: "drag");
         },
@@ -517,35 +530,48 @@ class _EInputSliderWidgetState extends State<EInputSliderWidget> {
       ],
     );
 
-    return GestureDetector(
-      onTap: () => _focusNode.requestFocus(),
-      behavior: HitTestBehavior.translucent,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 80),
-        padding: EdgeInsets.all(focusWidth),
-        decoration: BoxDecoration(
-          // Tinted background when focused — much more visible than a
-          // bare border in this terminal/composited stack. Plus a thick
-          // outer border in the focus color, plus a subtle glow.
-          color: _hasFocus
-              ? focusColor.withValues(alpha: 0.10)
-              : Colors.transparent,
-          border: Border.all(
-            color: _hasFocus ? focusColor : Colors.transparent,
-            width: focusWidth,
+    // Outer structure:
+    //   Focus(focusNode, onKeyEvent)         ← owns keyboard input
+    //     Listener(onPointerDown → focus)    ← any tap focuses us first
+    //       AnimatedContainer(border/glow)   ← visible focus state
+    //         Column(slider, label, …)
+    //
+    // The Listener sees pointer events without consuming them; Slider
+    // also receives them and handles drag correctly. The Focus widget
+    // installs onKeyEvent at our node, which fires BEFORE any Slider-
+    // internal handler (no Slider focusNode → no internal handler).
+    return Focus(
+      focusNode: _focusNode,
+      onKeyEvent: _onKeyEvent,
+      child: Listener(
+        behavior: HitTestBehavior.translucent,
+        onPointerDown: (_) {
+          if (!_focusNode.hasFocus) _focusNode.requestFocus();
+        },
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 80),
+          padding: EdgeInsets.all(focusWidth),
+          decoration: BoxDecoration(
+            color: _hasFocus
+                ? focusColor.withValues(alpha: 0.10)
+                : Colors.transparent,
+            border: Border.all(
+              color: _hasFocus ? focusColor : Colors.transparent,
+              width: focusWidth,
+            ),
+            borderRadius: BorderRadius.circular(6),
+            boxShadow: _hasFocus
+                ? [
+                    BoxShadow(
+                      color: focusColor.withValues(alpha: 0.45),
+                      blurRadius: 8,
+                      spreadRadius: 1,
+                    ),
+                  ]
+                : null,
           ),
-          borderRadius: BorderRadius.circular(6),
-          boxShadow: _hasFocus
-              ? [
-                  BoxShadow(
-                    color: focusColor.withValues(alpha: 0.45),
-                    blurRadius: 8,
-                    spreadRadius: 1,
-                  ),
-                ]
-              : null,
+          child: body,
         ),
-        child: body,
       ),
     );
   }
