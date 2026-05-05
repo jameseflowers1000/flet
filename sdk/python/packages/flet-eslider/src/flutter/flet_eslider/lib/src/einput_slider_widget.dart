@@ -163,9 +163,13 @@ class _EInputSliderWidgetState extends State<EInputSliderWidget> {
   void _setValue(double v, {String reason = "command"}) {
     final coerced = _coerce(v);
     if ((coerced - _currentValue()).abs() < 1e-12) return;
+    // python: true so the property tree on the Python side learns the
+    // new value. Without this, escalar.on_slider_change reads
+    // self.control.slider.value (= the Python-side EInputSlider.value)
+    // and gets the OLD value, so o.amplitude.value never updates.
     widget.control.updateProperties(
       {'value': coerced},
-      python: false,
+      python: true,
       notify: true,
     );
     widget.control.triggerEventWithoutSubscribers(
@@ -234,9 +238,21 @@ class _EInputSliderWidgetState extends State<EInputSliderWidget> {
     final key = event.logicalKey;
     final shift = HardwareKeyboard.instance.isShiftPressed;
 
-    // First: try the on_key projection if any.
+    // First: try the α `if the.key == ...:` projection if any.
+    final hostId = widget.control.getString("host_control_id") ?? '';
+    debugPrint('[eslider id=${widget.control.id}] key=${key.debugName} '
+        'hostId=$hostId proj=${_onKeyProjection != null} '
+        'mpReady=${MicroPythonService.isReady}');
+    // Late-bind the projection in case it got registered between
+    // initState (when host_control_id might've been empty) and now.
+    if (_onKeyProjection == null && hostId.isNotEmpty) {
+      _onKeyProjection =
+          RenderPlaneControl.getProjection(hostId, 'on_key');
+    }
     if (_onKeyProjection != null && MicroPythonService.isReady) {
       final handled = _evalOnKey(event);
+      debugPrint('[eslider id=${widget.control.id}] '
+          'projection result handled=$handled');
       if (handled) return KeyEventResult.handled;
     }
 
@@ -482,29 +498,10 @@ class _EInputSliderWidgetState extends State<EInputSliderWidget> {
       // Especially useful in the terminal/web stack where shadows can
       // be subtle. Marker color matches the focus border so it's
       // unmistakably an "I am focused" cue.
-      bottomLabel = Row(
-        mainAxisSize: MainAxisSize.min,
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          if (_hasFocus)
-            Padding(
-              padding: const EdgeInsets.only(right: 4),
-              child: Text('▶',
-                  style: TextStyle(
-                      color: focusColor,
-                      fontSize: fontSize,
-                      fontWeight: FontWeight.bold)),
-            ),
-          Text(
-            shown,
-            style: TextStyle(
-              color: textColor,
-              fontSize: fontSize,
-              fontWeight: _hasFocus ? FontWeight.bold : FontWeight.normal,
-            ),
-            textAlign: TextAlign.center,
-          ),
-        ],
+      bottomLabel = Text(
+        shown,
+        style: TextStyle(color: textColor, fontSize: fontSize),
+        textAlign: TextAlign.center,
       );
     }
 
@@ -552,23 +549,13 @@ class _EInputSliderWidgetState extends State<EInputSliderWidget> {
           duration: const Duration(milliseconds: 80),
           padding: EdgeInsets.all(focusWidth),
           decoration: BoxDecoration(
-            color: _hasFocus
-                ? focusColor.withValues(alpha: 0.10)
-                : Colors.transparent,
+            // Only the outline — no background tint (user feedback:
+            // "the bright blue background is horrible").
             border: Border.all(
               color: _hasFocus ? focusColor : Colors.transparent,
               width: focusWidth,
             ),
             borderRadius: BorderRadius.circular(6),
-            boxShadow: _hasFocus
-                ? [
-                    BoxShadow(
-                      color: focusColor.withValues(alpha: 0.45),
-                      blurRadius: 8,
-                      spreadRadius: 1,
-                    ),
-                  ]
-                : null,
           ),
           child: body,
         ),
