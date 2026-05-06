@@ -292,9 +292,15 @@ class _EInputSliderWidgetState extends State<EInputSliderWidget> {
       return KeyEventResult.handled;
     }
     if (key == LogicalKeyboardKey.tab) {
+      // Commit any active type-to-replace buffer before the framework
+      // traverses focus away. Then return ignored so Flutter's default
+      // Tab handler walks the focus tree — calling _focusNode.nextFocus()
+      // ourselves AND returning handled bypasses Flutter's traversal,
+      // which left focus in an unset state when ExcludeFocus removed
+      // Slider's internal node from the tree (only target was our outer
+      // Focus, manual nextFocus didn't find a sibling cleanly).
       if (_typing) _commitTypedBuffer(reason: "tab");
-      shift ? _focusNode.previousFocus() : _focusNode.nextFocus();
-      return KeyEventResult.handled;
+      return KeyEventResult.ignored;
     }
     // Type-to-replace trigger: digit, '+', '-', '.'  (case sensitive,
     // no shifted variants).
@@ -492,26 +498,35 @@ class _EInputSliderWidgetState extends State<EInputSliderWidget> {
     // behavior (the amplitude/frequency divergence). With no focusNode
     // passed, Slider's keyboard step disables — but we re-implement it
     // ourselves in _onKeyEvent (and add Shift×10 + Home/End on top), so
-    // the user-visible behavior is the same. The trade-off is unambig-
-    // uously worth it: our outer Focus owns the keyboard input lane,
-    // and the focus border lights up on every tap.
-    final slider = SliderTheme(
-      data: SliderTheme.of(context).copyWith(
-        activeTrackColor: activeColor,
-        inactiveTrackColor: inactiveColor,
-        thumbColor: activeColor,
-      ),
-      child: Slider(
-        value: value.clamp(min, max),
-        min: min,
-        max: max,
-        divisions: divisions,
-        onChanged: (v) {
-          // Drag updates — make sure our FocusNode owns focus so
-          // subsequent keys come to us, not to Slider's internal node.
-          if (!_focusNode.hasFocus) _focusNode.requestFocus();
-          _setValue(v, reason: "drag");
-        },
+    // the user-visible behavior is the same.
+    //
+    // ExcludeFocus around the Slider drops its internal default
+    // FocusNode out of the focus traversal tree. Without this, Tab
+    // requires TWO presses to advance off a slider: the first press
+    // moves focus from Slider's internal node back to our outer Focus
+    // (or wherever default traversal sends it), the second press
+    // actually advances. With ExcludeFocus, Slider's internal node is
+    // unreachable by Tab — only our outer Focus is in the traversal
+    // tree per slider — so a single Tab advances cleanly.
+    final slider = ExcludeFocus(
+      child: SliderTheme(
+        data: SliderTheme.of(context).copyWith(
+          activeTrackColor: activeColor,
+          inactiveTrackColor: inactiveColor,
+          thumbColor: activeColor,
+        ),
+        child: Slider(
+          value: value.clamp(min, max),
+          min: min,
+          max: max,
+          divisions: divisions,
+          onChanged: (v) {
+            // Drag updates — make sure our FocusNode owns focus so
+            // subsequent keys come to us, not to Slider's internal node.
+            if (!_focusNode.hasFocus) _focusNode.requestFocus();
+            _setValue(v, reason: "drag");
+          },
+        ),
       ),
     );
 
