@@ -331,17 +331,36 @@ class _EInputSliderWidgetState extends State<EInputSliderWidget> {
   }
 
   bool _evalOnKey(KeyEvent event) {
+    return _tryRunOnKeyProjection(_logicalKeyName(event));
+  }
+
+  /// Run the on_key projection for the given keyName.
+  ///
+  /// Shared between the slider's outer Focus.onKeyEvent (real KeyEvent
+  /// path) and the inner type-to-replace TextField's onSubmitted (Enter
+  /// inside an active typed buffer). Without this shared path, the
+  /// TextField's onSubmitted would call `_commitTypedBuffer` directly,
+  /// bypassing user `if the.key == the.keys.enter:` handlers on
+  /// platforms where onSubmitted intercepts before the parent Focus
+  /// sees the KeyEvent (notably macOS desktop). Same fix shape as
+  /// epyx_grid's _tryRunOnKeyProjection.
+  bool _tryRunOnKeyProjection(String keyName) {
     final proj = _onKeyProjection;
     if (proj == null) return false;
     final execBody = proj['exec'] as String? ?? '';
     final evalExpr = proj['eval'] as String?;
     if (evalExpr == null || evalExpr.isEmpty) return false;
-    final keyName = _logicalKeyName(event);
     final mods = _buildModifiers();
     final ctx = <String, dynamic>{
       'key': keyName,
       'modifiers': mods,
       'value': _currentValue(),
+      // Symmetry with EInputText: `buffer` is the live text buffer when
+      // the slider is in type-to-replace mode, empty otherwise. Slider's
+      // `value` is always already typed so callers usually only read
+      // value, but buffer is here for snippets that want to inspect
+      // mid-edit state during type-to-replace.
+      'buffer': _typing ? _typingController.text : '',
       'cursor': 0,
       'selection': 'none',
       'selection_start': 0,
@@ -352,6 +371,27 @@ class _EInputSliderWidgetState extends State<EInputSliderWidget> {
       if (result == null) return false;
       if (result is! List) return false;
       if (result.isEmpty) return false;
+
+      // Slider-targeted set_value commands are handled inline here —
+      // the shared text-field executor doesn't know about slider state.
+      // Any non-set_value commands fall through to InputCommandExecutor.
+      final remaining = <dynamic>[];
+      bool didSet = false;
+      for (final cmd in result) {
+        if (cmd is Map && cmd['cmd'] == 'set_value') {
+          final raw = cmd['value'];
+          double? v;
+          if (raw is num) v = raw.toDouble();
+          else if (raw is String) v = double.tryParse(raw);
+          if (v != null) {
+            _setValue(v, reason: "command");
+            didSet = true;
+          }
+        } else {
+          remaining.add(cmd);
+        }
+      }
+      if (remaining.isEmpty) return didSet;
       final target = InputCommandTarget(
         controller: _typingController,
         focusNode: _focusNode,
@@ -379,7 +419,8 @@ class _EInputSliderWidgetState extends State<EInputSliderWidget> {
           // bridge already publishes beep counts. Sliders share that.
         },
       );
-      return InputCommandExecutor.execute(result, target);
+      final ranOthers = InputCommandExecutor.execute(remaining, target);
+      return didSet || ranOthers;
     } catch (_) {
       return false;
     }
@@ -487,7 +528,18 @@ class _EInputSliderWidgetState extends State<EInputSliderWidget> {
           contentPadding: EdgeInsets.symmetric(vertical: 2),
           border: OutlineInputBorder(),
         ),
-        onSubmitted: (_) => _commitTypedBuffer(reason: "enter"),
+        onSubmitted: (_) {
+          // Try the on_key projection first so user
+          // `if the.key == the.keys.enter:` handlers fire even when
+          // Enter is pressed inside the type-to-replace TextField (the
+          // TextField captures Enter via onSubmitted on platforms that
+          // route through TextInputAction, bypassing the parent Focus's
+          // onKeyEvent — notably macOS desktop). If the projection
+          // didn't return commands, fall back to the baseline
+          // commit-typed-buffer.
+          if (_tryRunOnKeyProjection('Enter')) return;
+          _commitTypedBuffer(reason: "enter");
+        },
         keyboardType: const TextInputType.numberWithOptions(
             signed: true, decimal: true),
       );

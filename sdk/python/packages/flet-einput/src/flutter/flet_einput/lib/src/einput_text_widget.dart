@@ -443,6 +443,57 @@ class _EInputTextWidgetState extends State<EInputTextWidget> {
     return true;
   }
 
+  /// Canonicalize a `set_value` command's payload to its shortest
+  /// round-trip decimal string.
+  ///
+  /// Why: MicroPython's float-to-string emits fixed precision (e.g.
+  /// `"6.0000000000000000"` for an exact 6.0), so values that are
+  /// IEEE-clean show up in the buffer as noisy strings. Round-tripping
+  /// through `double.parse` + `toString()` re-canonicalizes via Dart's
+  /// shortest round-trip algorithm: lossless (every distinguishable
+  /// double survives, including high-precision scientific values like
+  /// `1.0000000000000125`) but strips the spurious extra digits MP
+  /// added.
+  ///
+  /// Genuinely noisy doubles (e.g. `0.1 + 0.2`) stay noisy by design —
+  /// that's the actual stored value; the way to hide it is per-control
+  /// `display_code` formatting, not lossy rounding here.
+  String _canonicalizeForBuffer(dynamic raw) {
+    if (raw == null) return '';
+    if (raw is num) return raw.toString();
+    final s = raw.toString();
+    final v = double.tryParse(s);
+    if (v == null) return s;
+    return v.toString();
+  }
+
+  /// Read the host EScalar's *committed* value, parsed per ptype.
+  ///
+  /// `the.field.value` in α on_key blocks should always be the typed,
+  /// committed scalar value — never the half-typed buffer. This helper
+  /// looks up the `host_value` + `ptype` properties pushed down by the
+  /// host EScalar and coerces. On parse failure (rare; the server sends
+  /// a stringified typed value) it falls back to the raw string so user
+  /// code at least sees something rather than crashing.
+  dynamic _typedHostValue() {
+    final raw = widget.control.getString('host_value') ?? '';
+    final pt = widget.control.getString('ptype') ?? 'str';
+    if (pt == 'int') {
+      final v = int.tryParse(raw);
+      if (v != null) return v;
+      // Try float-then-truncate: server might have sent "5.0" for int.
+      final f = double.tryParse(raw);
+      if (f != null) return f.toInt();
+      return raw;
+    }
+    if (pt == 'float') {
+      final v = double.tryParse(raw);
+      if (v != null) return v;
+      return raw;
+    }
+    return raw;
+  }
+
   /// Like `_evalOnKey(event)` but takes the key name directly. Used by
   /// `_handleEnter` since the desktop path doesn't have a real KeyEvent.
   bool _evalOnKeyForName(String keyName, {bool shiftDown = false}) {
@@ -464,7 +515,8 @@ class _EInputTextWidgetState extends State<EInputTextWidget> {
     final ctx = <String, dynamic>{
       'key': keyName,
       'modifiers': mods,
-      'value': _controller.text,
+      'value': _typedHostValue(),
+      'buffer': _controller.text,
       'cursor': selection.isValid ? selection.baseOffset : 0,
       'selection': selectionState,
       'selection_start': selection.isValid ? selection.start : 0,
@@ -475,6 +527,24 @@ class _EInputTextWidgetState extends State<EInputTextWidget> {
       if (result == null) return false;
       if (result is! List) return false;
       if (result.isEmpty) return false;
+
+      // Same set_value sugar as _evalOnKey (KeyEvent path). Keeps the
+      // synthetic-Enter path in lockstep with real key events.
+      final remaining = <dynamic>[];
+      bool didSet = false;
+      for (final cmd in result) {
+        if (cmd is Map && cmd['cmd'] == 'set_value') {
+          final text = _canonicalizeForBuffer(cmd['value']);
+          _controller.text = text;
+          _controller.selection = TextSelection.collapsed(offset: text.length);
+          _commit('command');
+          didSet = true;
+        } else {
+          remaining.add(cmd);
+        }
+      }
+      if (remaining.isEmpty) return didSet;
+
       final target = InputCommandTarget(
         controller: _controller,
         focusNode: _focusNode,
@@ -485,7 +555,7 @@ class _EInputTextWidgetState extends State<EInputTextWidget> {
         onBanner: _fireBanner,
         onBeep: _publishBeepToDom,
       );
-      return InputCommandExecutor.execute(result, target);
+      return didSet || InputCommandExecutor.execute(remaining, target);
     } catch (e) {
       print('[EInputText] on_key eval error (name path): $e');
       return false;
@@ -523,7 +593,8 @@ class _EInputTextWidgetState extends State<EInputTextWidget> {
     final ctx = <String, dynamic>{
       'key': keyName,
       'modifiers': mods,
-      'value': _controller.text,
+      'value': _typedHostValue(),
+      'buffer': _controller.text,
       'cursor': selection.isValid ? selection.baseOffset : 0,
       'selection': selectionState,
       'selection_start': selection.isValid ? selection.start : 0,
@@ -537,6 +608,26 @@ class _EInputTextWidgetState extends State<EInputTextWidget> {
       if (result == null) return false;
       if (result is! List) return false;
       if (result.isEmpty) return false;
+
+      // `the.field.set(value)` lowers to a `set_value` command. For text
+      // fields, this is sugar for replace+commit: stuff the controller
+      // with str(value), fire submit. Strip handled set_value cmds and
+      // pass remaining commands through to the shared executor.
+      final remaining = <dynamic>[];
+      bool didSet = false;
+      for (final cmd in result) {
+        if (cmd is Map && cmd['cmd'] == 'set_value') {
+          final text = _canonicalizeForBuffer(cmd['value']);
+          _controller.text = text;
+          _controller.selection = TextSelection.collapsed(offset: text.length);
+          _commit('command');
+          didSet = true;
+        } else {
+          remaining.add(cmd);
+        }
+      }
+      if (remaining.isEmpty) return didSet;
+
       final target = InputCommandTarget(
         controller: _controller,
         focusNode: _focusNode,
@@ -552,7 +643,7 @@ class _EInputTextWidgetState extends State<EInputTextWidget> {
         onBanner: _fireBanner,
         onBeep: _publishBeepToDom,
       );
-      final executed = InputCommandExecutor.execute(result, target);
+      final executed = didSet || InputCommandExecutor.execute(remaining, target);
       _einputDiag('_evalOnKey: InputCommandExecutor.execute returned $executed');
       return executed;
     } catch (e, st) {

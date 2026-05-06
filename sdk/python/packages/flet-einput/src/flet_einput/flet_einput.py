@@ -68,6 +68,19 @@ class EInputText(ft.LayoutControl):
     # When empty, the Dart widget falls back to its hardcoded baseline only.
     host_control_id: str = field(default="", metadata={"data_field": "host_control_id"})
 
+    # ─── Typed value bridge (α `the.field.value`) ─────────────────────────
+    # `host_value` is the *committed* scalar value, kept in sync with the
+    # server-side EScalar. The on_key ctx seeds `the.field.value` from
+    # this — already typed per `ptype` — so user code never has to
+    # `float(...)` and never reads a half-typed buffer like "1.5e".
+    # `the.field.buffer` exposes the raw text controller content for
+    # snippets that genuinely care about mid-edit state.
+    host_value: str = field(default="", metadata={"data_field": "host_value"})
+
+    # `'int' | 'float' | 'str'` — drives the host_value parse on the
+    # Dart side. Default 'str' = bypass; behaves as before.
+    ptype: str = field(default="str", metadata={"data_field": "ptype"})
+
     # ─── Events ───────────────────────────────────────────────────────────
     # Fired on every keystroke (after the Dart widget has updated its
     # internal text). Event data: JSON {"value": str}

@@ -446,6 +446,13 @@ packages:
       relative: true
     source: path
     version: "0.1.0"
+  flet_eslider:
+    dependency: "direct main"
+    description:
+      path: "../sdk/python/packages/flet-eslider/src/flutter/flet_eslider"
+      relative: true
+    source: path
+    version: "0.1.0"
   flet_flashlight:
     dependency: "direct main"
     description:

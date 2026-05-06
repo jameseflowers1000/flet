@@ -54,39 +54,74 @@ class _Symbolic:
         return _Symbolic._MAP.get(name, name)
 
 class _Bag:
+    # __setattr__ — runtime hook for α `the.field.value = X` sugar.
+    #
+    # When user code writes `the.field.value = X`, this emits a
+    # `set_value` command on the master `the._commands` list (the same
+    # vocabulary the explicit `.set(X)` form uses). The Dart-side
+    # widgets (EInputSlider / EInputText) intercept set_value and apply
+    # the new value via the existing `_setValue(...)` path.
+    #
+    # Framework-side seeding (the wrapper assigning ctx → bridge) goes
+    # through `_seed()` instead, which bypasses command emission so the
+    # per-keypress ctx refresh doesn't spam set_value commands with
+    # the *current* value at the start of every projection eval.
+    #
+    # Other attribute writes (`the.field.bg = '#fff'`, etc.) are NOT
+    # routed through __setattr__ — those are still rewritten at α-compile
+    # time by `_SetterToCallRewriter` in alpha/analyzer.py, dispatching
+    # to existing bridge_setter methods (`bg`, `color`, `size`, …).
+    # Only `value` has this runtime path; AST rewrite stays as
+    # belt-and-suspenders for the rest.
+    def __setattr__(self, name, value):
+        if name == "value":
+            the._commands.append({"cmd": "set_value", "value": value})
+        object.__setattr__(self, name, value)
+
+    def _seed(self, name, value):
+        """Framework-side assignment that bypasses __setattr__'s command
+        emission. Called by the projection wrapper to refresh ctx state
+        each keypress without emitting spurious set_value commands."""
+        object.__setattr__(self, name, value)
+
     def __init__(self):
         # Pre-allocate every ETab cell ctx + EScalar field ctx attribute
-        # the projection wrappers might assign. MicroPython silently drops
-        # attribute writes on instances that don't have a pre-allocated
-        # slot for that name (see feedback_micropython_setattr.md), so the
-        # later read raises `'_Bag' object has no attribute X`. Listing
-        # them here gives the slot.
-        self.value = ""
-        self.row = None
-        self.row_index = 0
-        self.col_index = 0
-        self.col_name = ""
-        self.is_selected = False
-        self.is_hovered = False
-        self.is_hovered_cell = False
-        self.is_focused = False
-        self.is_editing = False
-        self.is_overridden = False
-        self.editing = False  # legacy alias for is_editing
-        self.hovered_col = -1
-        self.total_rows = 0
-        self.total_cols = 0
-        self.viewport_pos = 0
-        self.viewport_count = 0
+        # the projection wrappers might assign. Use object.__setattr__
+        # directly so __init__ doesn't trigger the command-emitting path
+        # above (which would also fail because `the` isn't fully built
+        # at __init__ time on the very first instance).
+        _set = object.__setattr__
+        _set(self, "value", "")
+        _set(self, "row", None)
+        _set(self, "row_index", 0)
+        _set(self, "col_index", 0)
+        _set(self, "col_name", "")
+        _set(self, "is_selected", False)
+        _set(self, "is_hovered", False)
+        _set(self, "is_hovered_cell", False)
+        _set(self, "is_focused", False)
+        _set(self, "is_editing", False)
+        _set(self, "is_overridden", False)
+        _set(self, "editing", False)  # legacy alias for is_editing
+        _set(self, "hovered_col", -1)
+        _set(self, "total_rows", 0)
+        _set(self, "total_cols", 0)
+        _set(self, "viewport_pos", 0)
+        _set(self, "viewport_count", 0)
         # EScalar field-ctx
-        self.raw = ""
-        self.min = None
-        self.max = None
-        self.ctype = ""
-        self.cursor = 0
-        self.selection = None
-        self.selection_start = 0
-        self.selection_end = 0
+        _set(self, "raw", "")
+        # `buffer` is the live text-controller content (text fields) or
+        # the type-to-replace buffer (sliders). Distinct from `value`,
+        # which is the *committed*, typed scalar value. Use buffer when
+        # you need to inspect mid-edit state; use value otherwise.
+        _set(self, "buffer", "")
+        _set(self, "min", None)
+        _set(self, "max", None)
+        _set(self, "ctype", "")
+        _set(self, "cursor", 0)
+        _set(self, "selection", None)
+        _set(self, "selection_start", 0)
+        _set(self, "selection_end", 0)
 
     # Field actions per schema (`the.field.replace`, `.clear`, `.commit`,
     # `.select_all`, `.cancel`). These forward into the master `the._commands`
@@ -113,6 +148,15 @@ class _Bag:
         the._commands.append({"cmd": "insert", "text": str(text)})
         return the
 
+    def set(self, value):
+        # Slider-targeted setter: emits a `set_value` command that the
+        # ESlider widget intercepts (text-field hosts ignore it). Lets
+        # α on_key blocks set the slider directly:
+        #     if the.key == the.keys.up:
+        #         the.field.set(the.field.value + 1.0)
+        the._commands.append({"cmd": "set_value", "value": float(value)})
+        return the
+
     def edit(self, **kw):
         # Schema action: the.cell.edit(row=..., col_index=...). Routes
         # through the master `the._commands` so the Dart-side dispatcher
@@ -124,14 +168,53 @@ class _Bag:
         return the
 
 class The:
+    # Master-owned attribute names — these are read/written on `the`
+    # itself, never forwarded to a sub-bridge. Includes the sub-bridges,
+    # event/key state, command list, and master action methods.
+    _OWN_NAMES = ('cell', 'field', 'keys', 'mods', 'modifiers', 'key',
+                   '_commands', '_primary', '_version')
+
+    def __setattr__(self, name, value):
+        # Internal/dunder names go straight to self.
+        if name.startswith('_') or name in The._OWN_NAMES:
+            object.__setattr__(self, name, value)
+            return
+        # Forward bare-attribute writes (the.value = X, the.color = X) to
+        # the primary sub-bridge. EScalar/EInputText/ESlider contexts
+        # default to `the.field`; ETab contexts can re-point _primary.
+        primary = self.__dict__.get("_primary")
+        if primary is not None:
+            setattr(primary, name, value)
+            return
+        object.__setattr__(self, name, value)
+
+    def __getattr__(self, name):
+        # Only fires when normal lookup misses. Look up on the primary
+        # sub-bridge so `the.value`, `the.buffer`, `the.is_editing` etc.
+        # read through transparently.
+        if name.startswith('_') or name in The._OWN_NAMES:
+            raise AttributeError(name)
+        primary = self.__dict__.get("_primary")
+        if primary is not None:
+            try:
+                return getattr(primary, name)
+            except AttributeError:
+                pass
+        raise AttributeError(name)
+
     def __init__(self):
-        self.cell = _Bag()
-        self.field = _Bag()
-        self.keys = _Symbolic()
-        self.mods = _Symbolic()
-        self.modifiers = []
-        self.key = ""
-        self._commands = []
+        _set = object.__setattr__
+        _set(self, "cell", _Bag())
+        _set(self, "field", _Bag())
+        _set(self, "keys", _Symbolic())
+        _set(self, "mods", _Symbolic())
+        _set(self, "modifiers", [])
+        _set(self, "key", "")
+        _set(self, "_commands", [])
+        # Primary sub-bridge — defaults to `field` (EScalar/EInputText/
+        # ESlider, the most common host). Cell-context handlers (ETab)
+        # can point this to `cell` via `the._primary = the.cell`.
+        _set(self, "_primary", self.field)
 
     def _reset_actions(self):
         self._commands = []
@@ -237,6 +320,11 @@ class The:
         return None
 
 the = The()
+# Version sentinel — bumped whenever the prelude's surface changes
+# (new methods, new __setattr__ semantics, etc.). User code can read
+# `the._version` to confirm which prelude generation is loaded; tests
+# can assert the expected version. Bump on every change to this file.
+the._version = "alpha-collapse-v2"
 try:
     _epyx_user_preludes['the'] = the
 except NameError:

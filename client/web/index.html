@@ -264,11 +264,32 @@
       // a banner command fires. Tests read window._epyxLastBanner OR the
       // hidden DIV `#epyx-last-banner` (so document.body.innerText finds it).
       window._epyxLastBanner = null;
+      // Rolling history of the last 50 banners — survives DevTools page
+      // reloads of the console, lets users debug α on_key handlers
+      // without trying to read the truncated on-canvas toast UI.
+      // Read with `window._epyxBannerLog` in DevTools console; clear
+      // with `window._epyxClearBannerLog()`.
+      window._epyxBannerLog = [];
+      window._epyxClearBannerLog = function() { window._epyxBannerLog = []; };
       window._epyxSetBanner = function(message, level) {
         try {
-          window._epyxLastBanner = { message: String(message || ''),
-                                     level: String(level || 'info'),
-                                     ts: Date.now() };
+          var msg = String(message || '');
+          var lvl = String(level || 'info');
+          var ts = Date.now();
+          window._epyxLastBanner = { message: msg, level: lvl, ts: ts };
+          // Append to rolling log; cap at 50 entries.
+          window._epyxBannerLog.push({ message: msg, level: lvl, ts: ts });
+          if (window._epyxBannerLog.length > 50) {
+            window._epyxBannerLog.shift();
+          }
+          // Mirror to console for live tail — DevTools shows the FULL
+          // message, no truncation. Tag with 🔔 so it's easy to filter.
+          try {
+            var fn = (lvl === 'error') ? console.error
+                   : (lvl === 'warn')  ? console.warn
+                                       : console.log;
+            fn.call(console, '🔔 [α banner ' + lvl + ']', msg);
+          } catch (e) {}
           var div = document.getElementById('epyx-last-banner');
           if (!div) {
             div = document.createElement('div');
@@ -283,8 +304,8 @@
             div.setAttribute('data-testid', 'epyx-banner');
             document.body.appendChild(div);
           }
-          div.textContent = String(message || '');
-          div.setAttribute('data-banner-level', String(level || 'info'));
+          div.textContent = msg;
+          div.setAttribute('data-banner-level', lvl);
         } catch (e) {}
       };
       // ETab grid selection mirror — Dart calls _epyxSetGridSelection(

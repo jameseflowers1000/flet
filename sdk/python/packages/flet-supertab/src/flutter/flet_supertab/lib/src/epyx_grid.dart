@@ -1824,7 +1824,17 @@ class _EpyxGridState extends State<EpyxGrid> {
                         ),
                       ) : null,
                     ),
-                    onSubmitted: (_) => _commitEdit(moveDown: true),
+                    // Route Enter through the on_key projection first so user α
+                    // code's `if the.key == the.keys.enter:` handlers fire even
+                    // when Enter is pressed inside the inner TextField (i.e.
+                    // edit mode entered via type-to-replace, where the TextField
+                    // gets focus directly and the grid's outer onKeyEvent never
+                    // sees the Enter). Falls back to the baseline commit-and-
+                    // move-down on no projection / empty result.
+                    onSubmitted: (_) {
+                      if (_tryRunOnKeyProjection('Enter')) return;
+                      _commitEdit(moveDown: true);
+                    },
                   )
                 : _wrapTooltip(renderTooltip, _wrapIcon(renderIcon, Text(
                     cellText,
@@ -2623,6 +2633,62 @@ class _EpyxGridState extends State<EpyxGrid> {
     return mods;
   }
 
+  /// Try to run the user's on_key projection for a given keyName and
+  /// execute the resulting command list. Returns true if commands ran
+  /// (i.e., projection took ownership of this key event), false if the
+  /// caller should fall back to baseline behavior.
+  ///
+  /// Shared between the grid's outer Focus.onKeyEvent (real KeyEvent
+  /// path) and the inner TextField's onSubmitted (Enter inside an
+  /// active edit, where the grid never sees the raw KeyEvent because
+  /// the TextField captures it). Without this shared path, type-to-
+  /// replace + Enter bypassed the projection on platforms where
+  /// onSubmitted intercepts (notably macOS desktop).
+  bool _tryRunOnKeyProjection(String keyName) {
+    if (_onKeyProjection == null || !MicroPythonService.isReady) {
+      return false;
+    }
+    final proj = _onKeyProjection!;
+    final execBody = proj['exec'] as String? ?? '';
+    final evalExpr = proj['eval'] as String? ?? '';
+    if (evalExpr.isEmpty) return false;
+    final mods = _buildModifiers();
+    final ctx = <String, dynamic>{
+      'key': keyName,
+      'modifiers': mods,
+      'row': _selectedRow,
+      'col': _selectedCol,
+      'row_index': _selectedRow,
+      'col_index': _selectedCol,
+      'col_name': _selectedCol < _source.columnCount
+          ? _source.columnName(_selectedCol) : '',
+      'editing': _isEditing,
+      'is_editing': _isEditing,
+      'value': _isEditing
+          ? _editController.text
+          : _cachedCellText(_selectedRow, _selectedCol),
+      'total_rows': _effectiveRowCount,
+      'total_cols': _source.columnCount,
+    };
+    try {
+      final result = MicroPythonService.execEval(execBody, evalExpr, ctx);
+      _etabKeyDiag('tryRunOnKeyProjection result type=${result.runtimeType} '
+          'value=${result.toString().substring(0, result.toString().length.clamp(0, 200))} '
+          'keyName=$keyName editing=$_isEditing');
+      if (result != null && result is List && result.isNotEmpty) {
+        setState(() { _executeCommandChain(result); });
+        return true;
+      }
+    } catch (e) {
+      _etabKeyDiag('tryRunOnKeyProjection EXCEPTION: $e');
+      widget.control.updateProperties(
+          {'error_message': '[on_key] ERROR: $e'},
+          python: false, notify: false);
+      setState(() {});
+    }
+    return false;
+  }
+
   /// Execute a command chain from on_key evaluation.
   void _executeCommandChain(List<dynamic> commands) {
     for (final cmd in commands) {
@@ -2777,58 +2843,13 @@ class _EpyxGridState extends State<EpyxGrid> {
     // literal modifiers; `cmd` is a derived alias for the platform-
     // conventional shortcut key (meta on macOS, ctrl elsewhere). Users
     // should reach for `"cmd" in modifiers` for cross-platform shortcuts.
-    if (_onKeyProjection != null && MicroPythonService.isReady) {
-      final proj = _onKeyProjection!;
-      final execBody = proj['exec'] as String? ?? '';
-      final evalExpr = proj['eval'] as String? ?? '';
-      if (evalExpr.isNotEmpty) {
-        final keyName = _logicalKeyName(key, event);
-        final mods = _buildModifiers();
-        final ctx = <String, dynamic>{
-          'key': keyName,
-          'modifiers': mods,
-          'row': _selectedRow,
-          'col': _selectedCol,
-          // Aliases — the α on_key wrapper reads `row_index` / `col_index`
-          // (matches the.cell.row_index / .col_index spelling); supply both
-          // forms so user code can use either.
-          'row_index': _selectedRow,
-          'col_index': _selectedCol,
-          'col_name': _selectedCol < _source.columnCount
-              ? _source.columnName(_selectedCol) : '',
-          'editing': _isEditing,
-          'is_editing': _isEditing,
-          'value': _cachedCellText(_selectedRow, _selectedCol),
-          'total_rows': _effectiveRowCount,
-          'total_cols': _source.columnCount,
-        };
-        try {
-          final result = MicroPythonService.execEval(execBody, evalExpr, ctx);
-          _etabKeyDiag('execEval result type=${result.runtimeType} '
-              'value=${result.toString().substring(0, result.toString().length.clamp(0, 200))} '
-              'keyName=$keyName editing=$_isEditing');
-          if (result != null && result is List && result.isNotEmpty) {
-            setState(() {
-              _executeCommandChain(result);
-            });
-            return KeyEventResult.handled;
-          }
-          // result null / non-list / empty → fall through to baseline
-        } catch (e) {
-          _etabKeyDiag('execEval EXCEPTION: $e');
-          widget.control.updateProperties(
-              {'error_message': '[on_key] ERROR: $e'},
-              python: false, notify: false);
-          setState(() {});
-          // MicroPython error → fall through to baseline
-        }
-      } else {
-        _etabKeyDiag('skip: evalExpr empty');
-      }
-    } else {
-      _etabKeyDiag('skip: projLoaded=${_onKeyProjection != null} '
-          'mpReady=${MicroPythonService.isReady}');
+    final keyName = _logicalKeyName(key, event);
+    if (_tryRunOnKeyProjection(keyName)) {
+      return KeyEventResult.handled;
     }
+    // Projection null / not ready / returned empty / threw — fall
+    // through to baseline below. _tryRunOnKeyProjection has already
+    // logged the cause via _etabKeyDiag.
 
     // When editing, the TextField handles most keys.
     // We intercept: Enter, Tab, Shift+Tab, Escape, arrow up/down
