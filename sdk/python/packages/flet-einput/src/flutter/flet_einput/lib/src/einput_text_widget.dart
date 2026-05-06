@@ -71,6 +71,14 @@ class _EInputTextWidgetState extends State<EInputTextWidget> {
   /// from clobbering the in-flight text.
   bool _userIsEditing = false;
 
+  /// True after the user has typed at least one character in the current
+  /// edit session. Distinct from `_userIsEditing` (which goes true on
+  /// any focus gain): we want α-computed display pushes to land *while
+  /// focused but pristine* (so `if the.is_focused: the.display = ...`
+  /// works), and only block them once the user starts typing (so the
+  /// typed buffer isn't clobbered). Reset to false on focus change.
+  bool _userHasTyped = false;
+
   /// Unregister callback for the render plane listener.
   VoidCallback? _renderPlaneUnsubscribe;
 
@@ -179,9 +187,12 @@ class _EInputTextWidgetState extends State<EInputTextWidget> {
     _lastPushedValue = newValue;
     _lastPushedDisplay = newDisplay;
 
-    // Don't clobber the user's in-flight typing — they own the controller
-    // while focused. The next focus loss will pick up whatever's current.
-    if (_userIsEditing) return;
+    // Don't clobber the user's in-flight typing — but only once they've
+    // actually started typing in this edit session. While focused but
+    // pristine (just clicked, no keystroke yet), Python's focus-driven
+    // recalc may push a new α-computed `display` (e.g. higher precision
+    // because `the.is_focused` flipped True), and we want that to land.
+    if (_userHasTyped) return;
 
     // When idle, prefer the formatted display; fall back to the raw value.
     final showText = newDisplay.isNotEmpty ? newDisplay : newValue;
@@ -202,6 +213,7 @@ class _EInputTextWidgetState extends State<EInputTextWidget> {
     print('[EInputText] focus changed: hasFocus=$hasFocus text="${_controller.text}"');
     if (hasFocus) {
       _userIsEditing = true;
+      _userHasTyped = false;
       // Snapshot the RAW pre-edit value (not the formatted display) so
       // the.cancel restores something the user can re-edit. Subsequent
       // command-list operations (replace/insert/...) mutate the
@@ -210,16 +222,13 @@ class _EInputTextWidgetState extends State<EInputTextWidget> {
       final rawValue = widget.control.getString("value") ?? '';
       _savedValueBeforeEdit =
           rawValue.isNotEmpty ? rawValue : _controller.text;
-      // Swap from the formatted display to the RAW value for editing.
-      // Python pushes both `value` (raw) and `display` (formatted); when
-      // not focused we show display, when focused we show value.
-      if (rawValue.isNotEmpty && _controller.text != rawValue) {
-        _controller.value = TextEditingValue(
-          text: rawValue,
-          selection: TextSelection.collapsed(offset: rawValue.length),
-        );
-        print('[EInputText] swapped to raw value: "$rawValue"');
-      }
+      // No automatic swap-to-raw-value-on-focus: α code may set a
+      // distinct focused-mode display via `if the.is_focused: the.display
+      // = ...`, and the focus-driven Python recalc will push it through
+      // _onControlChanged (allowed because _userHasTyped is False).
+      // Type-to-replace still works — the next printable key clears the
+      // selection (set up by the postFrameCallback below) and starts the
+      // typed buffer. Cancel still restores _savedValueBeforeEdit.
       // Spreadsheet feel: select all so the next printable char replaces.
       // Deferred to after the current frame because Flutter's TextField
       // tap handler sets the cursor to a collapsed position at the tap
@@ -245,6 +254,7 @@ class _EInputTextWidgetState extends State<EInputTextWidget> {
         _commit('blur');
       }
       _userIsEditing = false;
+      _userHasTyped = false;
       if (_suppressDisplayRestoreOnNextBlur) {
         // Cancel just fired and put the saved raw value into the
         // controller. Don't clobber it with the formatted display.
@@ -287,6 +297,10 @@ class _EInputTextWidgetState extends State<EInputTextWidget> {
   }
 
   void _onChange(String value) {
+    // First actual keystroke in this edit session: the user has taken
+    // ownership of the controller. _onControlChanged now declines to
+    // overwrite display until next focus change.
+    _userHasTyped = true;
     // Stash locally so _onControlChanged doesn't fight us if Python re-pushes
     // the same string. The per-keystroke value_change event carries the
     // value in its payload — ETextField._handle_value_change reads it from
@@ -307,6 +321,7 @@ class _EInputTextWidgetState extends State<EInputTextWidget> {
     // overwrite the controller with the formatted display — keep the
     // raw saved value visible. We DO NOT call _commit here.
     _userIsEditing = false;
+    _userHasTyped = false;
     _controller.value = TextEditingValue(
       text: _savedValueBeforeEdit,
       selection: TextSelection.collapsed(offset: _savedValueBeforeEdit.length),
@@ -324,6 +339,17 @@ class _EInputTextWidgetState extends State<EInputTextWidget> {
   bool _suppressDisplayRestoreOnNextBlur = false;
 
   void _fireFocusChange(bool focused) {
+    // E12: push state flags as Python props so the host EScalar's α
+    // code can read `the.field.is_focused` / `the.field.is_editing`
+    // and pivot display formatting on interaction state. Edit and
+    // focus are coupled here (edit starts on focus, ends on blur)
+    // — same lifecycle, two names for symmetry with ETab's per-cell
+    // ctx where the distinction matters more.
+    widget.control.updateProperties(
+      {'is_focused': focused, 'is_editing': focused},
+      python: true,
+      notify: false,
+    );
     widget.control.triggerEventWithoutSubscribers(
       'focus_change',
       jsonEncode({'focused': focused}),

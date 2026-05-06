@@ -81,6 +81,17 @@ class EInputText(ft.LayoutControl):
     # Dart side. Default 'str' = bypass; behaves as before.
     ptype: str = field(default="str", metadata={"data_field": "ptype"})
 
+    # ─── E12: symmetric interaction-state flags ───────────────────────────
+    # The Dart widget pushes these on state change so the host EScalar's
+    # α code can read `the.field.is_focused` / `the.field.is_editing` /
+    # `the.field.is_hovered` and pivot display formatting on interaction
+    # state. Mirrors the equivalent flags ETab already supplies to its
+    # def render(...) per cell. These are Dart-authoritative — Python
+    # never writes them.
+    is_focused: bool = field(default=False, metadata={"data_field": "is_focused"})
+    is_editing: bool = field(default=False, metadata={"data_field": "is_editing"})
+    is_hovered: bool = field(default=False, metadata={"data_field": "is_hovered"})
+
     # ─── Events ───────────────────────────────────────────────────────────
     # Fired on every keystroke (after the Dart widget has updated its
     # internal text). Event data: JSON {"value": str}
