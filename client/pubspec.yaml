@@ -124,6 +124,9 @@ dependencies:
   flet_markdown:
     path: ../sdk/python/packages/flet-markdown/src/flutter/flet_markdown
 
+  flet_vim_editor:
+    path: ../sdk/python/packages/flet-vim-editor/src/flutter/flet_vim_editor
+
   flet_window_manager:
     path: ../sdk/python/packages/flet-window-manager/src/flutter/flet_window_manager
 

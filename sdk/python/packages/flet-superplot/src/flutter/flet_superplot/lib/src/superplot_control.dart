@@ -367,27 +367,56 @@ class _SuperPlotControlState extends State<SuperPlotControl> {
       superplotLog('[SuperPlot] BUILD: NO SERIES — chart will be blank');
     }
 
+    // Chart title — Python's `title` property was a write-only field
+    // until now (Dart never read it, the chart painter only handled axis
+    // titles). Render it as a Text widget above the chart so a doclet
+    // author writing `the.title = '...'` actually sees the result.
+    final titleText = (widget.control.getString("title") ?? '').trim();
+    final hasTitle = titleText.isNotEmpty;
+
+    Widget chart = ClipRect(
+      child: InteractiveChart(
+        xAxis: _xAxis,
+        yAxis: _yAxis,
+        yAxis2: _yAxis2,
+        series: _allSeries,
+        dataBuffers: _dataBuffers,
+        backgroundColor: _backgroundColor,
+        showMajorGridLines: _showMajorGridLines,
+        showMinorGridLines: _showMinorGridLines,
+        majorGridLineColor: _majorGridLineColor,
+        minorGridLineColor: _minorGridLineColor,
+        annotations: _allAnnotations,
+        renderState: _renderState,
+        onRenderStateChanged: () {
+          if (mounted) setState(() {});
+        },
+      ),
+    );
+
     return LayoutControl(
       control: widget.control,
-      child: ClipRect(
-        child: InteractiveChart(
-          xAxis: _xAxis,
-          yAxis: _yAxis,
-          yAxis2: _yAxis2,
-          series: _allSeries,
-          dataBuffers: _dataBuffers,
-          backgroundColor: _backgroundColor,
-          showMajorGridLines: _showMajorGridLines,
-          showMinorGridLines: _showMinorGridLines,
-          majorGridLineColor: _majorGridLineColor,
-          minorGridLineColor: _minorGridLineColor,
-          annotations: _allAnnotations,
-          renderState: _renderState,
-          onRenderStateChanged: () {
-            if (mounted) setState(() {});
-          },
-        ),
-      ),
+      child: hasTitle
+          ? Column(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 6),
+                  child: Text(
+                    titleText,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                ),
+                Expanded(child: chart),
+              ],
+            )
+          : chart,
     );
   }
 }

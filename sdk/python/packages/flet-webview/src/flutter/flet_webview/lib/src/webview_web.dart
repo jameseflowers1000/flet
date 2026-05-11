@@ -35,10 +35,24 @@ class _WebviewWebState extends State<WebviewWeb> {
         LoadRequestParams(uri: Uri.parse(_currentUrl)),
       );
 
-    // Set initial iframe interactive state via JS bridge (per-control)
-    _setIframeInteractive(_currentInteractive);
-    // Tag the iframe with data-flet-id after build
-    WidgetsBinding.instance.addPostFrameCallback((_) => _tagIframe());
+    // Tag the iframe AFTER the platform view is in the DOM, then apply
+    // the interactive state — order matters: the JS bridge selects by
+    // data-flet-id, so the tag must exist before the state apply.
+    //
+    // CRITICAL retry loop: platform views in Flutter web are inserted
+    // into the DOM asynchronously by Flutter's renderer, often AFTER
+    // the first frame's PostFrameCallback fires. A single tag attempt
+    // can race the iframe creation, fail to find anything, and leave
+    // the iframe forever `pointer-events: auto` — which then captures
+    // every click on widgets layered over its rect (the orchestrator's
+    // vim editor sits over the Python WebView; before this fix every
+    // save click hit the underlying ttyd iframe instead of the
+    // editor's save button).
+    //
+    // Try every 100ms for up to 3 seconds, and ALSO call the JS bridge
+    // each iteration so that once the tag lands the per-iframe state
+    // immediately picks up. Stops early when the iframe is found.
+    _tagAndSyncInteractiveWithRetry();
   }
 
   @override
@@ -56,6 +70,33 @@ class _WebviewWebState extends State<WebviewWeb> {
       _currentInteractive = newInteractive;
       _setIframeInteractive(newInteractive);
     }
+  }
+
+  /// Retry-tagging loop: every 100ms try to find and tag the iframe,
+  /// then re-apply the interactive state. Stops when the iframe is
+  /// tagged or after ~3s. See the long comment in initState.
+  void _tagAndSyncInteractiveWithRetry() {
+    var attempts = 0;
+    void tick() {
+      if (!mounted) return;
+      attempts += 1;
+      _tagIframe();
+      _setIframeInteractive(_currentInteractive);
+      final tagged = _isIframeTagged();
+      if (tagged || attempts >= 30) return;
+      Future.delayed(const Duration(milliseconds: 100), tick);
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) => tick());
+  }
+
+  /// Check via JS whether an iframe with our controlId is in the DOM.
+  bool _isIframeTagged() {
+    final evalFn = globalContext['eval'];
+    if (evalFn == null || !evalFn.isA<JSFunction>()) return false;
+    final js =
+        "(function(){return !!document.querySelector('[data-flet-id=\"$_controlId\"]');})()";
+    final res = (evalFn as JSFunction).callAsFunction(null, js.toJS);
+    return res != null && res.dartify() == true;
   }
 
   /// Tag the iframe element with data-flet-id so the JS bridge can target it.
@@ -95,6 +136,27 @@ class _WebviewWebState extends State<WebviewWeb> {
     final fn = globalContext['_epyxSetIframeInteractive'];
     if (fn != null && fn.isA<JSFunction>()) {
       (fn as JSFunction).callAsFunction(null, _controlId.toJS, interactive.toJS);
+    }
+    // Belt-and-suspenders: also directly set pointer-events on any
+    // iframe with this control's `data-flet-id`. The bridge call above
+    // is supposed to do this, but if the iframe was added after the
+    // iframeStates entry, the bridge's `applyIframeState` may have
+    // run before the tag landed and missed the iframe. A direct DOM
+    // mutation here is idempotent and immediate.
+    final evalFn = globalContext['eval'];
+    if (evalFn != null && evalFn.isA<JSFunction>()) {
+      final pe = interactive ? 'auto' : 'none';
+      final js = """
+        (function(){
+          var el = document.querySelector('[data-flet-id="$_controlId"]');
+          if (el) {
+            el.style.setProperty('pointer-events', '$pe', 'important');
+            var ifr = el.tagName === 'IFRAME' ? el : el.querySelector('iframe');
+            if (ifr) ifr.style.setProperty('pointer-events', '$pe', 'important');
+          }
+        })();
+      """;
+      (evalFn as JSFunction).callAsFunction(null, js.toJS);
     }
     // When becoming interactive, also focus this specific iframe
     if (interactive) {
