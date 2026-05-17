@@ -46,6 +46,11 @@ class UnifiedEditor extends StatefulWidget {
   /// preference (persistence is a v1 concern).
   final EditorMode initialMode;
 
+  /// Called whenever the user toggles between EZ and Vim. Receives
+  /// the new mode as a string (`'native'` or `'nvim'`). The host uses
+  /// this to persist the user's preference between `/edit` sessions.
+  final ValueChanged<String>? onModeChange;
+
   /// Theme + font + popup geometry + key bindings + hover-doc
   /// fallbacks. Defaults match the lab's shipped behavior; main-repo
   /// integrators pass an `EditorConfig` to retheme/resize/rebind
@@ -59,6 +64,7 @@ class UnifiedEditor extends StatefulWidget {
     this.onCancel,
     this.lsp,
     this.initialMode = EditorMode.native,
+    this.onModeChange,
     this.config = const EditorConfig(),
   });
 
@@ -183,6 +189,30 @@ class _UnifiedEditorState extends State<UnifiedEditor> {
     super.didUpdateWidget(oldWidget);
     if (!identical(oldWidget.lsp, widget.lsp)) {
       _bindLspDiagnostics(widget.lsp);
+    }
+    // Session swap (e.g., second `/edit <name>` from the orchestrator
+    // built a fresh EditSession with a different URI / initial text).
+    // Without this branch, the inner nvim buffer stays on the prior
+    // session's content even though the chrome (label/URI) updates to
+    // reflect the new target — the bug where editing `principal` and
+    // then `years` showed `principal.code` content under a `years.code`
+    // title bar.
+    if (!identical(oldWidget.session, widget.session)) {
+      final oldUri = oldWidget.session.lspUri;
+      final newUri = widget.session.lspUri;
+      labLog('[unified] didUpdateWidget: session swap '
+          'oldUri="$oldUri" newUri="$newUri" '
+          'newLen=${widget.session.text.length}');
+      // Diagnostics from the previous session don't apply.
+      setState(() => _diagnostics = []);
+      // Push fresh buffer into nvim. Skips when not in vim mode; we'll
+      // hit it on the next mode toggle. Also fire when mode is native
+      // so nvim is primed if the user toggles to Vim.
+      _pushSessionToNvim();
+      // The native CodeEditor's State watches widget.session.text via
+      // Flutter's normal rebuild path — the build() below re-creates
+      // CodeEditor with the new session, so EZ mode picks up the new
+      // content automatically.
     }
   }
 
@@ -501,6 +531,11 @@ return {
     if (mode == _mode) return;
     final prev = _mode;
     labLog('[lab] _setMode: $prev -> $mode');
+    // Notify the host so it can persist the user's preference and
+    // open the next `/edit` in the same mode. Done before the actual
+    // swap so the host sees the intended state immediately, even if
+    // the buffer transfer below fails mid-way.
+    widget.onModeChange?.call(mode == EditorMode.nvim ? 'nvim' : 'native');
     // Tear down any open completion / hover popups before swapping
     // bodies — re_editor's CodeAutocomplete keeps its OverlayEntry in
     // the root overlay, and our VimCompletionPopup does the same, so
@@ -747,6 +782,15 @@ return {
   /// Handles `the.cell.bg = f'##` (cursor at end) by skipping `f`,
   /// the inside-string position, etc., and landing on `bg`.
   Future<void> _doShowHover() async {
+    // Cmd-K is a toggle: if the hover popup is already open, dismiss
+    // it (same affordance as Esc). Without this, pressing Cmd-K twice
+    // is a no-op — the second show() finds an open panel and either
+    // ignores it or refetches at the same location. Toggling is the
+    // mental model users expect from "open docs / now hide docs".
+    if (HoverPopup.isOpen) {
+      HoverPopup.dismiss();
+      return;
+    }
     final candidates = _hoverCandidates();
     final lsp = widget.lsp;
     final uri = widget.session.lspUri;

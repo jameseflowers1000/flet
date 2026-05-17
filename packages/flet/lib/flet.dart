@@ -71,3 +71,5 @@ export 'src/utils/uri.dart';
 export 'src/utils/widget_state.dart';
 export 'src/widgets/error.dart';
 export 'src/widgets/flet_store_mixin.dart';
+export 'src/widgets/tab_group_controller.dart';
+export 'src/widgets/epyx_focusable.dart';

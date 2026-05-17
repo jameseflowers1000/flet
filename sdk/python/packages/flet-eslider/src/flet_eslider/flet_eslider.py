@@ -30,6 +30,12 @@ class EInputSlider(ft.LayoutControl):
     the EScalar wrapper, which adds the property machinery on top.
     """
 
+    # ─── Tab-navigation metadata ──────────────────────────────────────────
+    tab_group: Optional[int] = field(default=None, metadata={"data_field": "tab_group"})
+    tab_order: Optional[int] = field(default=None, metadata={"data_field": "tab_order"})
+    tab_skip: bool = field(default=False, metadata={"data_field": "tab_skip"})
+    tab_name: str = field(default="", metadata={"data_field": "tab_name"})
+
     # ─── Slider state ─────────────────────────────────────────────────────
     value: float = field(default=0.0, metadata={"data_field": "value"})
     min_value: float = field(default=0.0, metadata={"data_field": "min_value"})

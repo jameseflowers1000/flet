@@ -89,8 +89,23 @@ class _VimEditorFletWidgetState extends State<VimEditorFletWidget> {
   Future<void> _maybeStartLsp() async {
     final url = widget.control.getString('lsp_ws_url');
     if (url == null || url.isEmpty) return;
-    if (_readyLsp == url && _lsp != null) return;
+    // Skip only when we already have a HEALTHY client on this URL.
+    // Without the health check, a previous LspClient that died (WS
+    // dropped, container restarted, transient network blip) sticks
+    // around as a zombie — `widget.lsp != null` masks the failure and
+    // the "LSP DOWN" banner persists forever because the retry loop
+    // short-circuits on null-check alone. Re-running the connect path
+    // when the existing client isn't healthy gives us auto-recovery.
+    if (_readyLsp == url && _lsp != null && _lsp!.isHealthy) return;
     if (_lspConnecting) return;
+    // Tear down a stale client before reconnecting so we don't leak
+    // its stream subscription / WebSocket. `stop()` is best-effort.
+    if (_lsp != null && !_lsp!.isHealthy) {
+      try {
+        await _lsp!.stop();
+      } catch (_) {}
+      if (mounted) setState(() => _lsp = null);
+    }
     _lspConnecting = true;
     _readyLsp = url;
     try {
@@ -120,8 +135,13 @@ class _VimEditorFletWidgetState extends State<VimEditorFletWidget> {
   Future<void> _maybeStartNvim() async {
     final url = widget.control.getString('nvim_ws_url');
     if (url == null || url.isEmpty) return;
-    if (_readyNvim == url && _nvim != null) return;
+    // Same health-aware reconnect logic as the LSP path — null-only
+    // check leaves a dead nvim manager pinned and the editor unusable.
+    if (_readyNvim == url && _nvim != null && (_nvim!.isHealthy)) return;
     if (_nvimConnecting) return;
+    if (_nvim != null && !_nvim!.isHealthy) {
+      if (mounted) setState(() => _nvim = null);
+    }
     _nvimConnecting = true;
     _readyNvim = url;
     try {
@@ -153,14 +173,23 @@ class _VimEditorFletWidgetState extends State<VimEditorFletWidget> {
     // content. Without this, when Flet recycles the State across a
     // control-prop diff the editor would keep the original session
     // (and the user would see the prior control's code).
+    // Compare new prop values against OLD prop values, NOT the live
+    // session. The live session reflects the user's in-progress edits;
+    // after save, Python's prop._code advances but the Flet control's
+    // `initial_text` prop is NOT re-pushed to Dart (it still holds the
+    // value from the original /edit call). If we compared against
+    // _session.text, any unrelated didUpdateWidget tick would detect
+    // "newInitial != session.text" and revert the editor to the stale
+    // prop value. Diff against oldWidget's prop so we only re-init
+    // when Python actually pushes a *new* initial_text.
     final newUri = widget.control.getString('uri') ?? '';
     final newInitial = widget.control.getString('initial_text') ?? '';
-    final curUri = _session?.lspUri ?? '';
-    final curInitial = _session?.text ?? '';
-    if (newUri != curUri || newInitial != curInitial) {
+    final oldUri = oldWidget.control.getString('uri') ?? '';
+    final oldInitial = oldWidget.control.getString('initial_text') ?? '';
+    if (newUri != oldUri || newInitial != oldInitial) {
       print('[vim_editor] didUpdateWidget: prop change — '
-          'oldUri="$curUri" newUri="$newUri" '
-          'oldLen=${curInitial.length} newLen=${newInitial.length} — '
+          'oldUri="$oldUri" newUri="$newUri" '
+          'oldLen=${oldInitial.length} newLen=${newInitial.length} — '
           're-initializing session');
       _initSession();
       // setState so the build() below picks up the new _session.
@@ -192,6 +221,12 @@ class _VimEditorFletWidgetState extends State<VimEditorFletWidget> {
       onCancel: () {
         // Same rationale as save: bypass the on_$event flag gate.
         widget.control.triggerEventWithoutSubscribers('cancel', null);
+      },
+      onModeChange: (modeStr) {
+        // Forward mode toggles to Python so the orchestrator can
+        // persist the preference (next `/edit` reopens in the same
+        // mode). Bare-string payload — same reason as `save`.
+        widget.control.triggerEventWithoutSubscribers('mode_change', modeStr);
       },
     );
   }

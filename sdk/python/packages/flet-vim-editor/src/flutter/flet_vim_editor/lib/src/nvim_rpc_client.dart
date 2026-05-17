@@ -260,6 +260,31 @@ end)
     final lines = text.split('\n');
     await request('nvim_buf_set_lines', [0, 0, -1, false, lines]);
     await request('nvim_buf_set_option', [0, 'modified', false]);
+    // Clear undo history so the empty→loaded transition isn't the
+    // top of the stack. Without this, the user's first `u` in vim
+    // wipes the buffer — a great way to lose all your code. The
+    // standard `:h clear-undo` recipe: under undolevels=-1, edits
+    // aren't recorded but the undo tree gets reset, so a no-op
+    // edit + restore drops history. Idempotent and instant.
+    try {
+      await request('nvim_exec_lua', [
+        r'''
+local old_ul = vim.bo.undolevels
+vim.bo.undolevels = -1
+-- A no-op edit under undolevels=-1 clears the undo history.
+-- `keepjumps` keeps the cursor where it was; we append a line and
+-- immediately delete it to the black-hole register.
+vim.cmd('keepjumps normal! Go')
+vim.cmd('keepjumps normal! "_dd')
+vim.bo.undolevels = old_ul
+vim.api.nvim_buf_set_option(0, 'modified', false)
+''',
+        [],
+      ]);
+    } catch (_) {
+      // Best effort — even if this fails the buffer text is still
+      // correct; only the undo-clear is skipped.
+    }
   }
 
   /// Read the entire buffer back as a single string (lines joined by \n).

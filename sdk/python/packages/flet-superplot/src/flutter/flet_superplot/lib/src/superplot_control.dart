@@ -394,29 +394,49 @@ class _SuperPlotControlState extends State<SuperPlotControl> {
       ),
     );
 
+    final body = hasTitle
+        ? Column(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 6),
+                child: Text(
+                  titleText,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+              ),
+              Expanded(child: chart),
+            ],
+          )
+        : chart;
+    // Tab-nav participation: read tab_group/order/skip/name from the
+    // host EInk Property (mirrored to this control's props via
+    // _push_tab_meta_to_widget). EpyxFocusable registers a FocusNode
+    // with TabGroupController so the plot can be focused via Tab /
+    // Cmd-; / click and shows a blue border when focused.
+    final tabGroup = widget.control.getInt("tab_group");
+    final tabOrder = widget.control.getInt("tab_order");
+    final tabSkip = widget.control.getBool("tab_skip", false) ?? false;
+    final tabName = widget.control.getString("tab_name", "") ?? "";
     return LayoutControl(
       control: widget.control,
-      child: hasTitle
-          ? Column(
-              crossAxisAlignment: CrossAxisAlignment.center,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 6),
-                  child: Text(
-                    titleText,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 14,
-                      fontWeight: FontWeight.w600,
-                    ),
-                    textAlign: TextAlign.center,
-                  ),
-                ),
-                Expanded(child: chart),
-              ],
-            )
-          : chart,
+      child: EpyxFocusable(
+        name: tabName.isEmpty ? "superplot:${widget.control.id}" : tabName,
+        group: tabGroup,
+        order: tabOrder,
+        skip: tabSkip,
+        onFocusChange: (focused) {
+          widget.control.triggerEventWithoutSubscribers(
+              "focus_change", focused.toString());
+        },
+        child: body,
+      ),
     );
   }
 }

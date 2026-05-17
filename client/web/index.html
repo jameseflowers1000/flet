@@ -260,6 +260,103 @@
         if (!allowed) blurIframe(controlId);
       };
 
+      // Host-app shortcuts: intercept at document capture so an iframe
+      // (ttyd / WebView) with focus doesn't swallow them and the system
+      // doesn't beep "unhandled key". Cmd-E (editor) / Cmd-Z (undo) /
+      // Cmd-; (next pane) / Cmd-Shift-; (prev pane) / Cmd-Backspace
+      // (prev pane) all fire host-side handlers in
+      // epyx.core.main:_on_keyboard via the Flutter page-key path. We
+      // stop the browser default (Cmd-J would open Downloads, etc.)
+      // and clear iframe focus so HardwareKeyboard sees the event.
+      function _epyxShouldHandleHostShortcut(ev) {
+        if (!ev) return false;
+        if (!(ev.metaKey || ev.ctrlKey)) return false;
+        if (ev.altKey) return false;
+        var key = ev.key || '';
+        var ku = key.toUpperCase();
+        var isPaneNav = (key === ';' || key === ':' || key === 'Backspace');
+        var isEditor = (ku === 'E') && !ev.shiftKey;
+        return isPaneNav || isEditor;
+      }
+      function _epyxHandleHostShortcut(ev) {
+        if (!_epyxShouldHandleHostShortcut(ev)) return;
+        try {
+          if (window.parent && window.parent !== window
+              && window.parent._epyxDispatchSyntheticKey) {
+            // We're inside an iframe — forward the keystroke up to the
+            // parent (Flet page) so its HardwareKeyboard handler can
+            // route it to the Python `_on_keyboard`. parent.focus() is
+            // not enough because Flutter's keyboard listener is at
+            // document level, not window-focus level.
+            window.parent._epyxDispatchSyntheticKey({
+              key: ev.key, code: ev.code,
+              metaKey: ev.metaKey, ctrlKey: ev.ctrlKey,
+              shiftKey: ev.shiftKey, altKey: ev.altKey
+            });
+          }
+        } catch (e) {}
+        try { ev.preventDefault(); } catch (e) {}
+        try { ev.stopPropagation(); } catch (e) {}
+      }
+      document.addEventListener('keydown', function(ev) {
+        if (!_epyxShouldHandleHostShortcut(ev)) return;
+        if (document.activeElement && document.activeElement.tagName === 'IFRAME') {
+          try { document.activeElement.blur(); } catch (e) {}
+        }
+        try { ev.preventDefault(); } catch (e) {}
+        try { ev.stopPropagation(); } catch (e) {}
+      }, true);
+
+      // Synthesize a KeyboardEvent on the top document so Flutter's
+      // HardwareKeyboard listener picks it up. Called from inside same-
+      // origin iframes via window.parent._epyxDispatchSyntheticKey.
+      window._epyxDispatchSyntheticKey = function(detail) {
+        try {
+          var ev = new KeyboardEvent('keydown', {
+            key: detail.key, code: detail.code,
+            metaKey: !!detail.metaKey, ctrlKey: !!detail.ctrlKey,
+            shiftKey: !!detail.shiftKey, altKey: !!detail.altKey,
+            bubbles: true, cancelable: true
+          });
+          document.dispatchEvent(ev);
+        } catch (e) {}
+      };
+
+      // Install the same capture listener inside every same-origin
+      // iframe's contentDocument. Without this, a keystroke that
+      // originates inside the iframe (xterm.js in ttyd, WebView pages)
+      // never reaches the parent document's keydown — system beeps
+      // and we can't preventDefault. Re-install on load events as
+      // iframes refresh.
+      function _epyxInjectIframeListener(iframe) {
+        try {
+          var idoc = iframe.contentDocument;
+          if (!idoc) return;
+          if (idoc._epyxHostShortcutsInstalled) return;
+          idoc._epyxHostShortcutsInstalled = true;
+          idoc.addEventListener('keydown', _epyxHandleHostShortcut, true);
+        } catch (e) {
+          // cross-origin iframe — can't inject. Best we can do is
+          // preventDefault at parent level when focus returns.
+        }
+      }
+      function _epyxScanIframes() {
+        function scan(root) {
+          root.querySelectorAll('iframe').forEach(_epyxInjectIframeListener);
+        }
+        try {
+          scan(document);
+          document.querySelectorAll('flutter-view, flt-glass-pane').forEach(function(el) {
+            if (el.shadowRoot) scan(el.shadowRoot);
+          });
+        } catch (e) {}
+      }
+      // Scan now, on every DOM mutation, and periodically as a fallback.
+      _epyxScanIframes();
+      new MutationObserver(_epyxScanIframes).observe(document.documentElement,
+          { childList: true, subtree: true });
+      setInterval(_epyxScanIframes, 2000);
+
       // Banner DOM mirror — Dart calls _epyxSetBanner(message, level) when
       // a banner command fires. Tests read window._epyxLastBanner OR the
       // hidden DIV `#epyx-last-banner` (so document.body.innerText finds it).

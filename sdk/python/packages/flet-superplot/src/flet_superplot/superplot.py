@@ -60,6 +60,14 @@ class SuperPlot(ft.LayoutControl):
         ```
     """
     
+    # Tab-navigation metadata mirrored from the host EInk Property's
+    # tab_group / tab_order / tab_skip. Consumed by the Dart widget's
+    # EpyxFocusable wrapper.
+    tab_group: Optional[int] = None
+    tab_order: Optional[int] = None
+    tab_skip: bool = False
+    tab_name: str = ""
+
     # JSON-encoded axis configuration - field names must match Flutter property names
     x_axis: Optional[str] = None
     y_axis: Optional[str] = None

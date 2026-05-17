@@ -20,6 +20,10 @@ class MarkdownWidget extends StatelessWidget {
     final value = control.getString("value", "")!;
     final darkMode = control.getBool("dark_mode", true)!;
     final codeThemeName = control.getString("code_theme", "atom-one-dark")!;
+    final tabGroup = control.getInt("tab_group");
+    final tabOrder = control.getInt("tab_order");
+    final tabSkip = control.getBool("tab_skip", false) ?? false;
+    final tabName = control.getString("tab_name", "") ?? "";
 
     final codeTheme = _getCodeTheme(codeThemeName, darkMode);
 
@@ -29,9 +33,7 @@ class MarkdownWidget extends StatelessWidget {
       height: 1.6,
     );
 
-    return LayoutControl(
-      control: control,
-      child: SingleChildScrollView(
+    final inner = SingleChildScrollView(
         child: SelectionArea(
           // ValueKey on the markdown content forces Flutter to remount
           // the GptMarkdown subtree on every value change. Without this
@@ -83,6 +85,23 @@ class MarkdownWidget extends StatelessWidget {
             },
           ),
         ),
+      );
+
+    // Wrap in EpyxFocusable so the markdown panel participates in
+    // Tab / Cmd-; navigation. Renders a 2px blue border around the
+    // panel when focused. tab_group=null leaves it out of nav entirely.
+    return LayoutControl(
+      control: control,
+      child: EpyxFocusable(
+        name: tabName.isEmpty ? "emarkdown:${control.id}" : tabName,
+        group: tabGroup,
+        order: tabOrder,
+        skip: tabSkip,
+        onFocusChange: (focused) {
+          control.triggerEventWithoutSubscribers(
+              "focus_change", focused.toString());
+        },
+        child: inner,
       ),
     );
   }

@@ -1060,14 +1060,39 @@ class _PaneWidgetState extends State<PaneWidget>
       );
     }
 
+    // OrderedTraversalPolicy honors EpyxFocusable's FocusTraversalOrder
+    // (= `the.tab.order`) for the controls inside this pane. Group
+    // containment is NOT done here — it's done by EpyxFocusable gating
+    // `canRequestFocus` so only the active group's nodes are focusable;
+    // native Tab then cycles exactly those.
+    // Pane-level focus indicator. The host (orchestrator) flips
+    // `focused` on whichever PaneControl contains the currently
+    // UI-focused control so the user can see at a glance which pane
+    // Tab is cycling within. 2px blue overrides the rounded clip
+    // visually; we re-clip the content inside.
+    final paneFocused = widget.control.getBool("focused", false) ?? false;
+    final clipped = ClipRRect(
+      borderRadius: BorderRadius.circular(_borderRadius),
+      child: Container(
+        color: _bgColor,
+        child: content,
+      ),
+    );
+    final framed = paneFocused
+        ? Container(
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(_borderRadius + 2),
+              border: Border.all(color: const Color(0xFF0066FF), width: 2),
+            ),
+            padding: const EdgeInsets.all(0),
+            child: clipped,
+          )
+        : clipped;
     return LayoutControl(
       control: widget.control,
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(_borderRadius),
-        child: Container(
-          color: _bgColor,
-          child: content,
-        ),
+      child: FocusTraversalGroup(
+        policy: OrderedTraversalPolicy(),
+        child: framed,
       ),
     );
   }

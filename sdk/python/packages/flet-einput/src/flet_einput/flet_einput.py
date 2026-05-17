@@ -31,6 +31,15 @@ class EInputText(ft.LayoutControl):
     _refresh_spec sets this to the EScalar control's id when projecting.
     """
 
+    # ─── Tab-navigation metadata ──────────────────────────────────────────
+    # Mirrored from the host EScalar Property's tab_group / tab_order /
+    # tab_skip by escalar.py's _push_tab_meta_to_widget. Consumed by the
+    # Dart widget's EpyxFocusable wrapper.
+    tab_group: Optional[int] = field(default=None, metadata={"data_field": "tab_group"})
+    tab_order: Optional[int] = field(default=None, metadata={"data_field": "tab_order"})
+    tab_skip: bool = field(default=False, metadata={"data_field": "tab_skip"})
+    tab_name: str = field(default="", metadata={"data_field": "tab_name"})
+
     # ─── Text content ─────────────────────────────────────────────────────
     # `value` is the RAW editable string — what the user actually types and
     # what gets shown while the field is focused. `display` is the FORMATTED

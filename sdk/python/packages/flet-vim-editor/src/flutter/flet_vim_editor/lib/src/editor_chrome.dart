@@ -23,8 +23,18 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 
 import 'edit_session.dart';
+
+/// Asset path prefix for the curated toolbar SVGs bundled with this
+/// extension (`packages/flet-vim-editor/.../assets/icons/`). Mirrors
+/// the original orchestrator's `_build_nvim_toolbar` which loaded
+/// `save.svg`, `dismiss-neo.svg`, `defaults-neo.svg`, `neo.svg` via
+/// `get_cached_image_resource` from the Python `epyx/assets/` dir.
+/// Shipping the same artwork inside the extension keeps the look-
+/// and-feel identical to what the tmux+ttyd path used to render.
+const String _kIconPkg = 'packages/flet_vim_editor/assets/icons';
 
 const Color _kBg = Color(0xFF1A191F);
 const Color _kBgPanel = Color(0xFF1E1E2E); // BAR_BG in orch
@@ -166,18 +176,19 @@ class _Toolbar extends StatelessWidget {
       height: 36,
       child: Row(
         children: [
-          // Left action cluster: Save / Close / divider / Undo / Redo.
-          // Save uses the active-green color when enabled (dirty),
-          // matching the orch's "Apply" button affordance.
-          _IconBtn(
-            icon: Icons.save_outlined,
+          // Left action cluster: Save / Close / divider / Undo / Redo /
+          // divider / Help. Save and Close use the curated SVG assets
+          // bundled with this extension (artwork ported from the
+          // original orchestrator's `_build_nvim_toolbar` so the new
+          // editor feels like the same product). Undo/Redo/Help stay
+          // on Material icons — those were Material in the orch too.
+          _SvgBtn(
+            assetName: 'save.svg',
             tooltip: 'Save  •  ⌘S',
             onTap: actions.save,
-            colorOverride:
-                actions.save != null && session.dirty ? _kActive : null,
           ),
-          _IconBtn(
-            icon: Icons.close,
+          _SvgBtn(
+            assetName: 'dismiss-neo.svg',
             tooltip: 'Close  •  Esc',
             onTap: actions.cancel,
           ),
@@ -228,6 +239,9 @@ class _Toolbar extends StatelessWidget {
               ],
             ),
           ),
+          // Neo brand mark (matches the orch's right-side cluster).
+          const _BrandSvg(assetName: 'neo.svg', size: 22),
+          const SizedBox(width: 8),
           // Mode toggle on the right.
           _ModeSwitch(mode: mode, onChange: onModeChange),
         ],
@@ -471,6 +485,65 @@ class _IconBtn extends StatelessWidget {
       ),
     );
   }
+}
+
+/// SVG-asset toolbar button. Used for the curated orchestrator-style
+/// icons (save / dismiss-neo / defaults-neo) that ship with this
+/// extension under `assets/icons/`. Same hit-target + tooltip
+/// affordances as `_IconBtn`; no color tint is applied (the SVGs
+/// are pre-tinted in their painted form), but `disabled` reduces
+/// opacity to match `_IconBtn`'s faint-when-disabled treatment.
+class _SvgBtn extends StatelessWidget {
+  final String assetName;          // file name only, e.g. 'save.svg'
+  final String tooltip;
+  final VoidCallback? onTap;
+  final double size;
+  const _SvgBtn({
+    required this.assetName,
+    required this.tooltip,
+    required this.onTap,
+    this.size = 24,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final enabled = onTap != null;
+    return Tooltip(
+      message: tooltip,
+      waitDuration: const Duration(milliseconds: 400),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(4),
+        child: Container(
+          width: 36,
+          height: 32,
+          alignment: Alignment.center,
+          child: Opacity(
+            opacity: enabled ? 1.0 : 0.35,
+            child: SvgPicture.asset(
+              '$_kIconPkg/$assetName',
+              width: size,
+              height: size,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Pure-display SVG (no hit target). For the Neo brand mark on the
+/// right side of the toolbar.
+class _BrandSvg extends StatelessWidget {
+  final String assetName;
+  final double size;
+  const _BrandSvg({required this.assetName, this.size = 22});
+  @override
+  Widget build(BuildContext context) => SvgPicture.asset(
+        '$_kIconPkg/$assetName',
+        width: size,
+        height: size,
+      );
 }
 
 class _VBar extends StatelessWidget {

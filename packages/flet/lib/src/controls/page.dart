@@ -23,6 +23,7 @@ import '../routing/route_parser.dart';
 import '../routing/route_state.dart';
 import '../routing/router_delegate.dart';
 import '../services/service_binding.dart';
+import '../widgets/tab_group_controller.dart';
 import '../services/service_registry.dart';
 import '../utils/device_info.dart';
 import '../utils/locale.dart';
@@ -396,6 +397,55 @@ class _PageControlState extends State<PageControl> with WidgetsBindingObserver {
                     isShiftPressed: HardwareKeyboard.instance.isShiftPressed,
                     isMetaPressed: HardwareKeyboard.instance.isMetaPressed)
                 .toMap());
+        // Claim host-app shortcuts so focused TextFields/iframes
+        // don't ALSO see the keystroke and beep "unhandled key" /
+        // type a stray character. Epyx's host (`epyx.core.main:
+        // _on_keyboard`) handles Cmd-E (open editor) and Cmd-Z /
+        // Cmd-Shift-Z (undo/redo) — returning `true` here tells
+        // Flutter "consumed, stop propagating".
+        final cmdOrCtrl = HardwareKeyboard.instance.isMetaPressed ||
+            HardwareKeyboard.instance.isControlPressed;
+        if (cmdOrCtrl) {
+          if (k == LogicalKeyboardKey.keyE &&
+              !HardwareKeyboard.instance.isAltPressed &&
+              !HardwareKeyboard.instance.isShiftPressed) {
+            return true;
+          }
+          if (k == LogicalKeyboardKey.keyZ &&
+              !HardwareKeyboard.instance.isAltPressed) {
+            return true;
+          }
+          // Pane nav: Cmd-; forward, Cmd-Shift-; / Cmd-Backspace back.
+          // Both `semicolon` (no shift) and `colon` (with shift) hit
+          // here because Flutter remaps the logical key when shift is
+          // held on US layout — we accept either. We drive the
+          // TabGroupController directly here (Dart-side) so focus
+          // moves to the next group's first focusable node with zero
+          // Python roundtrip; the Python `_on_keyboard` Cmd-; handler
+          // is now redundant for the focus move but still fires
+          // (harmless — it's a no-op when no groups exist on the
+          // logic plane, and the logic plane gets focus_change events
+          // from the now-focused widget to update its records).
+          if ((k == LogicalKeyboardKey.semicolon ||
+                  k == LogicalKeyboardKey.colon) &&
+              !HardwareKeyboard.instance.isAltPressed) {
+            TabGroupController.instance
+                .cycle(HardwareKeyboard.instance.isShiftPressed ? -1 : 1);
+            return true;
+          }
+          if (k == LogicalKeyboardKey.backspace &&
+              !HardwareKeyboard.instance.isAltPressed &&
+              !HardwareKeyboard.instance.isShiftPressed) {
+            TabGroupController.instance.cycle(-1);
+            return true;
+          }
+        }
+        // Tab / Shift-Tab are deliberately NOT intercepted. Group focus
+        // nav works by gating `canRequestFocus` per group (see
+        // EpyxFocusable) — inactive groups' nodes are unfocusable and
+        // skipTraversal, so Flutter's own FocusTraversalPolicy already
+        // cycles Tab within the active group. Driving a parallel
+        // traversal here fought Flutter's and broke within-group Tab.
       }
     }
     return false;

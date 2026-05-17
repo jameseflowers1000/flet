@@ -65,3 +65,8 @@ class VimEditor(ft.LayoutControl):
 
     on_cancel: Optional[ft.ControlEventHandler["VimEditor"]] = None
     """Fired when the user dismisses the editor without saving."""
+
+    on_mode_change: Optional[ft.ControlEventHandler["VimEditor"]] = None
+    """Fired when the user toggles between EZ and Vim. The new mode
+    string (`'native'` or `'nvim'`) is in `event.data`. The host can
+    persist this so the next `/edit` opens in the same mode."""

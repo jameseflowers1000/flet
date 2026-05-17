@@ -861,6 +861,14 @@ class _EpyxGridState extends State<EpyxGrid> {
       _lastSummaryJson = widget.control.getString("summary_row") ?? '';
       _sourceInitialized = true;
     }
+    // Tab-nav metadata mirrored from the host ETab Property. The whole
+    // grid is a single focus stop within the group — once focused, the
+    // grid's own arrow-key navigation moves between cells.
+    final tabGroup = widget.control.getInt("tab_group");
+    final tabOrder = widget.control.getInt("tab_order");
+    final tabSkip = widget.control.getBool("tab_skip", false) ?? false;
+    final tabName = widget.control.getString("tab_name", "") ?? "";
+
     final totalRows = widget.control.getInt("total_rows", 0) ?? 0;
     final label = widget.control.getString("label") ?? "";
     final ctype = widget.control.getString("ctype") ?? "";
@@ -933,7 +941,15 @@ class _EpyxGridState extends State<EpyxGrid> {
     // Use LayoutBuilder to handle bounded vs unbounded height.
     // Bounded (Gallery/Fit): Expanded fills available space.
     // Unbounded (Natural mode): grid body determines own height (no Expanded).
-    return LayoutControl(
+    return EpyxFocusable(
+      name: tabName.isEmpty ? "etab:${widget.control.id}" : tabName,
+      group: tabGroup,
+      order: tabOrder,
+      skip: tabSkip,
+      isProxy: true,
+      proxyToFocusNode: _focusNode,
+      drawFocusBorder: true,
+      child: LayoutControl(
       control: widget.control,
       child: LayoutBuilder(
         builder: (context, constraints) {
@@ -975,6 +991,7 @@ class _EpyxGridState extends State<EpyxGrid> {
             ],
           );
         },
+      ),
       ),
     );
   }
@@ -3117,14 +3134,19 @@ class _EpyxGridState extends State<EpyxGrid> {
       _startEditing();
       handled = true;
     } else {
-      // Character keys: check event.character for printable input
+      // Character keys: check event.character for printable input.
+      // Skip when Ctrl/Meta/Alt is held — a modified combo like Cmd+;
+      // still reports event.character == ';', and treating it as
+      // type-to-replace stole Cmd+; (group switch) into a cell edit.
       final char = event.character;
-      if (char != null && char.length == 1) {
-        if (char.codeUnitAt(0) >= 0x20) {
-          // Any printable character (>= space): type-to-replace
-          _startEditing(initialText: char);
-          handled = true;
-        }
+      if (char != null &&
+          char.length == 1 &&
+          char.codeUnitAt(0) >= 0x20 &&
+          !isCtrl &&
+          !HardwareKeyboard.instance.isAltPressed) {
+        // Any printable character (>= space): type-to-replace
+        _startEditing(initialText: char);
+        handled = true;
       }
     }
 

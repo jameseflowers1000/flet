@@ -13,6 +13,16 @@ class SuperTab(ft.LayoutControl):
     Supports inline cell editing when `editable=True`.
     """
 
+    # ─── Tab-navigation metadata ──────────────────────────────────────────
+    # Mirrored from the host ETab Property's tab_group / tab_order /
+    # tab_skip by etab.py's _push_tab_meta_to_widget. Consumed by the
+    # Dart widget's EpyxFocusable wrapper — the whole grid is one focus
+    # stop in the group; cell-level arrow navigation happens once focused.
+    tab_group: Optional[int] = field(default=None, metadata={"data_field": "tab_group"})
+    tab_order: Optional[int] = field(default=None, metadata={"data_field": "tab_order"})
+    tab_skip: bool = field(default=False, metadata={"data_field": "tab_skip"})
+    tab_name: str = field(default="", metadata={"data_field": "tab_name"})
+
     # JSON-encoded column definitions
     columns: Optional[str] = field(default=None, metadata={"data_field": "columns"})
     # JSON-encoded rows

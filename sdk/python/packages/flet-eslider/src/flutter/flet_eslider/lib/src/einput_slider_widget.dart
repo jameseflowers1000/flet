@@ -604,7 +604,16 @@ class _EInputSliderWidgetState extends State<EInputSliderWidget> {
     // also receives them and handles drag correctly. The Focus widget
     // installs onKeyEvent at our node, which fires BEFORE any Slider-
     // internal handler (no Slider focusNode → no internal handler).
-    return Focus(
+    // Tab-nav participation — wrap the existing Focus(...) in
+    // EpyxFocusable's proxy mode so the existing _focusNode stays the
+    // real focus target and we just contribute registration with the
+    // TabGroupController. The slider's own border-on-focus stays as
+    // the visual feedback (drawFocusBorder=false).
+    final tabGroup = widget.control.getInt("tab_group");
+    final tabOrder = widget.control.getInt("tab_order");
+    final tabSkip = widget.control.getBool("tab_skip", false) ?? false;
+    final tabName = widget.control.getString("tab_name", "") ?? "";
+    final inner = Focus(
       focusNode: _focusNode,
       onKeyEvent: _onKeyEvent,
       child: Listener(
@@ -616,8 +625,6 @@ class _EInputSliderWidgetState extends State<EInputSliderWidget> {
           duration: const Duration(milliseconds: 80),
           padding: EdgeInsets.all(focusWidth),
           decoration: BoxDecoration(
-            // Only the outline — no background tint (user feedback:
-            // "the bright blue background is horrible").
             border: Border.all(
               color: _hasFocus ? focusColor : Colors.transparent,
               width: focusWidth,
@@ -627,6 +634,17 @@ class _EInputSliderWidgetState extends State<EInputSliderWidget> {
           child: body,
         ),
       ),
+    );
+    return EpyxFocusable(
+      name: tabName.isEmpty ? "eslider:${widget.control.id}" : tabName,
+      group: tabGroup,
+      order: tabOrder,
+      skip: tabSkip,
+      isProxy: true,
+      proxyToFocusNode: _focusNode,
+      drawFocusBorder: false,
+      onFocusChange: (_) {},
+      child: inner,
     );
   }
 }

@@ -59,6 +59,12 @@ class PaneControl(ft.LayoutControl):
     # Indexed by position matching controls list order.
     gutter_metadata: Optional[str] = None
 
+    # When True, the Dart side paints a 2px blue border around the pane.
+    # Driven by orchestrator.mark_ui_focus → focus_visuals: whichever pane
+    # currently contains the UI-focused control becomes "focused" so the
+    # user can see at a glance which pane Tab is cycling within.
+    focused: bool = False
+
     # MicroPython formula strings — evaluated client-side at 60fps.
     # Each formula receives a context dict with the item's metadata fields.
     # Use Python f-string syntax: f"#FF0000" or f"#{r:02x}{g:02x}{b:02x}"

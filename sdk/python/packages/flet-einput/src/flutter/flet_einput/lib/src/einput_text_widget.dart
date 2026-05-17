@@ -778,7 +778,17 @@ class _EInputTextWidgetState extends State<EInputTextWidget> {
     //   - We provide `onEditingComplete` (overriding Flutter's default
     //     unfocus on done) so Enter doesn't blow our focus away on desktop.
     //   - `onSubmitted` is also set, but only as a redundant safety net.
-    return TextField(
+    // Tab-nav metadata mirrored from host EScalar Property. Wrap the
+    // TextField in EpyxFocusable in proxy mode so the existing
+    // _focusNode is the actual focus target; the wrapper contributes
+    // only registration with TabGroupController. The TextField's own
+    // focused border (focusedBorderColor on the InputDecoration)
+    // doubles as visual feedback — drawFocusBorder=false here.
+    final tabGroup = widget.control.getInt("tab_group");
+    final tabOrder = widget.control.getInt("tab_order");
+    final tabSkip = widget.control.getBool("tab_skip", false) ?? false;
+    final tabName = widget.control.getString("tab_name", "") ?? "";
+    final textField = TextField(
         controller: _controller,
         focusNode: _focusNode,
         readOnly: readOnly,
@@ -823,6 +833,22 @@ class _EInputTextWidgetState extends State<EInputTextWidget> {
           ),
         ),
       );
+    return EpyxFocusable(
+      name: tabName.isEmpty ? "einput:${widget.control.id}" : tabName,
+      group: tabGroup,
+      order: tabOrder,
+      skip: tabSkip,
+      isProxy: true,
+      proxyToFocusNode: _focusNode,
+      drawFocusBorder: false,
+      onFocusChange: (focused) {
+        // Already wired via _focusNode.addListener(_onFocusChanged) →
+        // existing focus_change event; EpyxFocusable's callback is a
+        // duplicate here, but harmless (Python receives two events on
+        // focus change). Keep for symmetry with display-only widgets.
+      },
+      child: textField,
+    );
   }
 
   static Color? _parseColor(String? value) {

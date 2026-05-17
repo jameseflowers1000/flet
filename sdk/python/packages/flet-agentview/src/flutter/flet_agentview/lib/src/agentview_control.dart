@@ -220,7 +220,15 @@ class _AgentViewControlState extends State<AgentViewControl> {
       });
     }
 
-    return LayoutControl(
+    // The orchestrator keeps the AgentView MOUNTED even when hidden
+    // (opacity=0, to preserve chat state) — so its composer TextField
+    // + send button stay in Flutter's focus tree and would capture Tab
+    // while the user navigates a doclet. While a doclet focus group is
+    // active, ExcludeFocus removes the whole AgentView from traversal.
+    // A pointer-down anywhere in the AgentView clears the active group
+    // ("free" mode) so clicking into the agent un-excludes it and the
+    // click can focus the input normally.
+    final inner = LayoutControl(
       control: widget.control,
       child: Container(
         color: _bgColor,
@@ -246,6 +254,31 @@ class _AgentViewControlState extends State<AgentViewControl> {
             ),
           ],
         ),
+      ),
+    );
+    return Listener(
+      behavior: HitTestBehavior.translucent,
+      onPointerDown: (_) {
+        final wasExcluded =
+            TabGroupController.instance.activeGroup.value != null;
+        TabGroupController.instance.clearActiveGroup();
+        if (wasExcluded) {
+          // The ExcludeFocus only lifts on the next frame, so the SAME
+          // click can't focus the composer yet — without this the user
+          // would have to click twice. Re-request focus post-frame so
+          // one click into the agent lands focus in the input.
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            _composerFocusNode.requestFocus();
+          });
+        }
+      },
+      child: ValueListenableBuilder<int?>(
+        valueListenable: TabGroupController.instance.activeGroup,
+        builder: (context, activeGroup, child) => ExcludeFocus(
+          excluding: activeGroup != null,
+          child: child!,
+        ),
+        child: inner,
       ),
     );
   }
