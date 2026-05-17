@@ -12,6 +12,7 @@ import '../utils/icons.dart';
 import '../utils/launch_url.dart';
 import '../utils/mouse.dart';
 import '../utils/numbers.dart';
+import '../widgets/epyx_focusable.dart';
 import '../widgets/error.dart';
 import '../widgets/flet_store_mixin.dart';
 import 'base_controls.dart';
@@ -249,6 +250,23 @@ class _IconButtonControlState extends State<IconButtonControl>
             onHover: onHoverHandler,
             selectedIcon: selectedIconWidget,
             onPressed: onPressed);
+      }
+
+      // Epyx focus-group navigation — see button.dart. EAct icon-only
+      // buttons set tab metadata; plain Flet IconButtons never do.
+      final tabGroup = widget.control.getInt("tab_group");
+      final tabName = widget.control.getString("tab_name", "") ?? "";
+      if ((tabGroup != null || tabName.isNotEmpty) && button != null) {
+        final inner = button;
+        button = EpyxFocusable(
+          name: tabName.isEmpty ? "eiconbutton:${widget.control.id}" : tabName,
+          group: tabGroup,
+          order: widget.control.getInt("tab_order"),
+          skip: widget.control.getBool("tab_skip", false) ?? false,
+          isProxy: true,
+          proxyToFocusNode: _focusNode,
+          child: inner,
+        );
       }
 
       return LayoutControl(control: widget.control, child: button);

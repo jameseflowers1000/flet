@@ -7,6 +7,7 @@ import '../utils/colors.dart';
 import '../utils/launch_url.dart';
 import '../utils/misc.dart';
 import '../utils/numbers.dart';
+import '../widgets/epyx_focusable.dart';
 import '../widgets/error.dart';
 import '../widgets/flet_store_mixin.dart';
 import 'base_controls.dart';
@@ -227,6 +228,25 @@ class _ButtonControlState extends State<ButtonControl> with FletStoreMixin {
             clipBehavior: clipBehavior,
             child: content);
       }
+    }
+
+    // Epyx focus-group navigation: when tab metadata is present (EAct
+    // sets it; plain Flet buttons never do), wrap in EpyxFocusable
+    // proxy mode so the button joins `the.tab.group` nav — gated to
+    // the active group, in `the.tab.order`. Untouched otherwise.
+    final tabGroup = widget.control.getInt("tab_group");
+    final tabName = widget.control.getString("tab_name", "") ?? "";
+    if ((tabGroup != null || tabName.isNotEmpty) && button != null) {
+      final inner = button;
+      button = EpyxFocusable(
+        name: tabName.isEmpty ? "ebutton:${widget.control.id}" : tabName,
+        group: tabGroup,
+        order: widget.control.getInt("tab_order"),
+        skip: widget.control.getBool("tab_skip", false) ?? false,
+        isProxy: true,
+        proxyToFocusNode: _focusNode,
+        child: inner,
+      );
     }
 
     return LayoutControl(control: widget.control, child: button);

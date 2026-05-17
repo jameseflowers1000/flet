@@ -89,6 +89,16 @@ class Button(LayoutControl, AdaptiveControl):
     Whether this button should be focused initially.
     """
 
+    # Epyx focus-group navigation metadata. When `tab_name` is set (or
+    # `tab_group` is non-null), the Dart widget wraps the button in
+    # EpyxFocusable so it participates in `the.tab.group` navigation.
+    # EAct sets these; plain Flet buttons leave them unset and are
+    # entirely unaffected.
+    tab_group: Optional[int] = None
+    tab_order: Optional[int] = None
+    tab_skip: bool = False
+    tab_name: str = ""
+
     clip_behavior: Optional[ClipBehavior] = None
     """
     The button's clip behavior.

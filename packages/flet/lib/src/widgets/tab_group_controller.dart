@@ -151,7 +151,23 @@ class TabGroupController {
         // FocusNode whose canRequestFocus is still false from the
         // prior frame, and Flutter silently drops the request.
         WidgetsBinding.instance.addPostFrameCallback((_) {
-          inGroup.first.node.requestFocus();
+          final node = inGroup.first.node;
+          node.requestFocus();
+          // The target may be scrolled out of view (a pane's ListView
+          // parked elsewhere). Native Tab auto-scrolls via the
+          // traversal policy, but our explicit requestFocus does not —
+          // so scroll the focused control to the centre of whatever
+          // scrollables enclose it. Without this, Cmd-; can move focus
+          // to a control the user can't see.
+          final ctx = node.context;
+          if (ctx != null) {
+            Scrollable.ensureVisible(
+              ctx,
+              alignment: 0.5,
+              duration: const Duration(milliseconds: 200),
+              curve: Curves.easeInOut,
+            );
+          }
           _activating = false;
         });
       } else {

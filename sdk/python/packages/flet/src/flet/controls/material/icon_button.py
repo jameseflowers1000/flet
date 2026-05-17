@@ -110,6 +110,13 @@ class IconButton(LayoutControl, AdaptiveControl):
     get focus.
     """
 
+    # Epyx focus-group navigation metadata — see Button. Set by EAct;
+    # unset on plain Flet IconButtons (no behaviour change there).
+    tab_group: Optional[int] = None
+    tab_order: Optional[int] = None
+    tab_skip: bool = False
+    tab_name: str = ""
+
     disabled_color: Optional[ColorValue] = None
     """
     The color to use for the icon inside the button when disabled.
