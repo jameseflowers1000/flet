@@ -20,6 +20,8 @@
 //   - Paints a 2px blue border when hasFocus.
 library;
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'tab_group_controller.dart';
 
@@ -71,12 +73,47 @@ class _EpyxFocusableState extends State<EpyxFocusable> {
           : _ownNode;
   TabEntry? _entry;
 
+  // Ephemeral group-position pips: shown for a moment right after the
+  // ACTIVE GROUP changes (Ctrl-J/K, Cmd-;, click into another group),
+  // then faded out. Never shown for plain within-group Tab.
+  bool _showGroupHint = false;
+  Timer? _hintTimer;
+  static const Duration _hintLinger = Duration(milliseconds: 1500);
+
   @override
   void initState() {
     super.initState();
     _ownNode = FocusNode(debugLabel: 'EpyxFocus(${widget.name})');
     _activeNode.addListener(_onFocusChange);
+    TabGroupController.instance.hasExplicitGroups
+        .addListener(_onHasExplicitChanged);
+    TabGroupController.instance.activeGroup
+        .addListener(_onActiveGroupChanged);
     _registerIfEligible();
+  }
+
+  /// The active group changed — flash the position pips, then fade.
+  void _onActiveGroupChanged() {
+    if (!mounted) return;
+    _hintTimer?.cancel();
+    _hintTimer = Timer(_hintLinger, () {
+      if (mounted) setState(() => _showGroupHint = false);
+    });
+    setState(() => _showGroupHint = true);
+  }
+
+  /// The implicit group appeared or dissolved — only an ungrouped
+  /// control's effective group changes. Re-register it. Deferred to
+  /// post-frame: this fires synchronously inside register()'s notify,
+  /// where mutating the registry mid-iteration is unsafe. The build
+  /// itself reacts via its ValueListenableBuilder, so no setState here.
+  void _onHasExplicitChanged() {
+    if (!mounted || widget.group != null) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || widget.group != null) return;
+      _unregister();
+      _registerIfEligible();
+    });
   }
 
   @override
@@ -94,9 +131,20 @@ class _EpyxFocusableState extends State<EpyxFocusable> {
     }
   }
 
+  /// Effective group: the explicit `the.tab.group`, or — when the
+  /// doclet declares NO explicit groups anywhere — the implicit group
+  /// so every control is navigable. Null only for an ungrouped control
+  /// in a doclet that DOES have explicit groups elsewhere.
+  int? _effectiveGroup() {
+    if (widget.group != null) return widget.group;
+    return TabGroupController.instance.hasExplicitGroups.value
+        ? null
+        : kImplicitGroup;
+  }
+
   void _registerIfEligible() {
-    final g = widget.group;
-    if (g == null) return; // Excluded from nav (default — opt-in).
+    final g = _effectiveGroup();
+    if (g == null) return;
     final ctl = TabGroupController.instance;
     _entry = TabEntry(
       group: g,
@@ -105,6 +153,7 @@ class _EpyxFocusableState extends State<EpyxFocusable> {
       name: widget.name,
       node: _activeNode,
       registrationSeq: ctl.nextSeq(),
+      isImplicit: widget.group == null,
     );
     ctl.register(_entry!);
   }
@@ -117,6 +166,11 @@ class _EpyxFocusableState extends State<EpyxFocusable> {
 
   @override
   void dispose() {
+    _hintTimer?.cancel();
+    TabGroupController.instance.hasExplicitGroups
+        .removeListener(_onHasExplicitChanged);
+    TabGroupController.instance.activeGroup
+        .removeListener(_onActiveGroupChanged);
     _unregister();
     _activeNode.removeListener(_onFocusChange);
     _ownNode.dispose();
@@ -131,9 +185,7 @@ class _EpyxFocusableState extends State<EpyxFocusable> {
     setState(() {});
   }
 
-  void _onTap() {
-    final g = widget.group;
-    if (g == null) return;
+  void _onTap(int g) {
     // Switch group if needed, but DON'T focusFirst — we want THIS
     // node to focus, not the group's first entry.
     TabGroupController.instance.activate(g, focusFirst: false);
@@ -191,54 +243,113 @@ class _EpyxFocusableState extends State<EpyxFocusable> {
 
   @override
   Widget build(BuildContext context) {
-    final g = widget.group;
     // SKIP (`the.tab.skip = True`): not a Tab stop, but still clickable
-    // / editable. Checked before the no-group opt-out — skip-without-
-    // group is legitimate (e.g. an ETab the user excludes from Tab but
-    // still wants to click cells in and override them).
+    // / editable (e.g. an ETab excluded from Tab but whose cells the
+    // user still overrides).
     if (widget.skip) {
       return _tabSkipped(widget.child);
     }
-    // UNGROUPED control (`the.tab.group` never set):
-    //   - No group active anywhere → fully transparent passthrough, so
-    //     a doclet that doesn't use tab groups behaves natively.
-    //   - A group IS active → this control is "outside the group", so
-    //     per the design every node outside the active group is
-    //     non-focusable. Gate it off.
-    if (g == null) {
-      return ValueListenableBuilder<int?>(
-        valueListenable: TabGroupController.instance.activeGroup,
-        builder: (context, active, _) {
-          if (active == null) return widget.child;
-          return _nonFocusable(widget.child);
-        },
-      );
-    }
+    return ValueListenableBuilder<bool>(
+      valueListenable: TabGroupController.instance.hasExplicitGroups,
+      builder: (context, hasExplicit, _) {
+        // Effective group: explicit `the.tab.group`, or the implicit
+        // group when the doclet declares none. Null only when this
+        // control is ungrouped AND explicit groups exist elsewhere —
+        // then it's outside every group and non-focusable.
+        final g = widget.group ?? (hasExplicit ? null : kImplicitGroup);
+        if (g == null) {
+          return ValueListenableBuilder<int?>(
+            valueListenable: TabGroupController.instance.activeGroup,
+            builder: (context, active, _) {
+              if (active == null) return widget.child;
+              return _nonFocusable(widget.child);
+            },
+          );
+        }
+        return _buildGrouped(g);
+      },
+    );
+  }
+
+  Widget _buildGrouped(int g) {
     return ValueListenableBuilder<int?>(
       valueListenable: TabGroupController.instance.activeGroup,
       builder: (context, active, _) {
-        final isActive = active == g && !widget.skip;
+        final isActive = active == g;
 
         Widget body = widget.child;
-        if (widget.drawFocusBorder && _activeNode.hasFocus) {
-          // position: foreground — paint the border ON TOP of the
-          // child. The default (background) paints it behind, where an
-          // opaque child (EMark panel, EPlot canvas, ETab grid) fully
-          // occludes it — that's why non-EScalar controls showed no
-          // focus box. EScalar's box is the TextField's own decoration,
-          // unaffected by this.
+        if (widget.drawFocusBorder) {
+          // Modern focus GLOW — a soft blue halo just outside the
+          // control's edge, replacing the old 2px line.
+          //  - BlurStyle.outer: the blur is painted ENTIRELY outside
+          //    the box, so it never spills inward over the content.
+          //  - boxShadow is paint-only: the control's size and its
+          //    siblings never shift — no resizing.
+          //  - The DecoratedBox stays in the tree always; only the
+          //    shadow list toggles, so the child's State isn't
+          //    recreated on focus change (the grey-grid bug).
+          // Two layers: a tight bright ring + a wider soft halo.
           body = DecoratedBox(
-            position: DecorationPosition.foreground,
             decoration: BoxDecoration(
-              border: Border.all(color: const Color(0xFF0066FF), width: 2),
+              borderRadius: BorderRadius.circular(6),
+              boxShadow: _activeNode.hasFocus
+                  ? const [
+                      BoxShadow(
+                        color: Color(0x880066FF),
+                        blurRadius: 10,
+                        spreadRadius: 1,
+                        blurStyle: BlurStyle.outer,
+                      ),
+                      BoxShadow(
+                        color: Color(0x3D0066FF),
+                        blurRadius: 28,
+                        spreadRadius: 3,
+                        blurStyle: BlurStyle.outer,
+                      ),
+                    ]
+                  : const [],
             ),
             child: body,
           );
         }
+        // Group-position pips — top-right of the focus box. One dot per
+        // group, the active one filled. Shown EPHEMERALLY: only just
+        // after the active group changes (_showGroupHint, set by
+        // _onActiveGroupChanged and cleared by a 1.5s timer), and only
+        // on the focused control of a multi-group doclet. Not shown for
+        // within-group Tab. Always in the tree (opacity-toggled) so the
+        // child's State isn't recreated when the pips appear/disappear.
+        final groups = TabGroupController.instance.allGroups();
+        final activeIdx = groups.indexOf(g);
+        final showHint = _showGroupHint &&
+            _activeNode.hasFocus &&
+            groups.length >= 2 &&
+            activeIdx >= 0;
+        body = Stack(
+          clipBehavior: Clip.none,
+          children: [
+            body,
+            Positioned(
+              top: 2,
+              right: 2,
+              child: IgnorePointer(
+                child: AnimatedOpacity(
+                  opacity: showHint ? 1.0 : 0.0,
+                  duration: const Duration(milliseconds: 250),
+                  child: _GroupHint(
+                    count: groups.length,
+                    activeIndex: activeIdx,
+                  ),
+                ),
+              ),
+            ),
+          ],
+        );
+
         body = Listener(
           behavior: HitTestBehavior.translucent,
           onPointerDown: (_) {
-            _onTap();
+            _onTap(g);
           },
           child: body,
         );
@@ -281,6 +392,60 @@ class _EpyxFocusableState extends State<EpyxFocusable> {
           ),
         );
       },
+    );
+  }
+}
+
+/// Ephemeral group-change hint: the Ctrl-K / Ctrl-J switch keys
+/// flanking a row of position pips (one dot per group, active one
+/// filled). `⌃K` on the left = previous group, `⌃J` on the right =
+/// next — so the layout itself shows which key goes which way. Shown
+/// briefly when the active group changes, then faded.
+class _GroupHint extends StatelessWidget {
+  final int count;
+  final int activeIndex;
+  const _GroupHint({required this.count, required this.activeIndex});
+
+  static const _keyStyle = TextStyle(
+    color: Color(0xFF9DC3FF),
+    fontSize: 9,
+    fontWeight: FontWeight.w600,
+    height: 1.0,
+  );
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+      decoration: BoxDecoration(
+        color: const Color(0xCC0A2540),
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Text('⌃K', style: _keyStyle),
+          const SizedBox(width: 6),
+          ...List.generate(count, (i) {
+            final active = i == activeIndex;
+            return Padding(
+              padding: EdgeInsets.only(left: i == 0 ? 0 : 4),
+              child: Container(
+                width: 6,
+                height: 6,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: active
+                      ? const Color(0xFF4C9DFF)
+                      : const Color(0x55FFFFFF),
+                ),
+              ),
+            );
+          }),
+          const SizedBox(width: 6),
+          const Text('⌃J', style: _keyStyle),
+        ],
+      ),
     );
   }
 }

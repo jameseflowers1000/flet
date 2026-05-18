@@ -3,6 +3,15 @@ import FlutterMacOS
 import WebKit
 
 class MainFlutterWindow: NSWindow {
+  // Channel for focus-group nav. Dart pushes `setEditorFocused`;
+  // we push `cycle` when the user presses Ctrl-J/Ctrl-K (see
+  // performKeyEquivalent).
+  private var tabNavChannel: FlutterMethodChannel?
+  // True while the embedded vim editor has focus — Dart keeps this in
+  // sync. When true we DON'T claim Ctrl-J/Ctrl-K (the editor / nvim
+  // use them; Dart handles the doclet case itself there anyway).
+  private var vimEditorFocused = false
+
   override func awakeFromNib() {
     let flutterViewController = FlutterViewController.init()
     flutterViewController.backgroundColor = .clear
@@ -11,6 +20,18 @@ class MainFlutterWindow: NSWindow {
     self.setFrame(windowFrame, display: true)
 
     RegisterGeneratedPlugins(registry: flutterViewController)
+
+    tabNavChannel = FlutterMethodChannel(
+      name: "epyx/tabnav",
+      binaryMessenger: flutterViewController.engine.binaryMessenger)
+    tabNavChannel?.setMethodCallHandler { [weak self] call, result in
+      if call.method == "setEditorFocused" {
+        self?.vimEditorFocused = (call.arguments as? Bool) ?? false
+        result(nil)
+      } else {
+        result(FlutterMethodNotImplemented)
+      }
+    }
 
     super.awakeFromNib()
   }
@@ -26,6 +47,27 @@ class MainFlutterWindow: NSWindow {
   // key equivalent directly to the WKWebView before Flutter can
   // intercept it.
   override func performKeyEquivalent(with event: NSEvent) -> Bool {
+    // ── Ctrl-J / Ctrl-K → focus-group navigation ──────────────────
+    // Read modifierFlags off the raw NSEvent so a Caps-Lock-remapped-
+    // to-Control is honored — Flutter's keyboard layer derives Control
+    // from the physical keycode and misses that remap. Skipped while
+    // the vim editor is focused (it / nvim use these keys).
+    // Mask to the four real modifiers — NOT .deviceIndependentFlagsMask,
+    // which also carries the Caps-Lock lock-state bit and would break
+    // the match when a (non-remapped) Caps Lock happens to be toggled.
+    let mods = event.modifierFlags.intersection(
+      [.control, .command, .option, .shift])
+    if mods == .control, !vimEditorFocused,
+       let chars = event.charactersIgnoringModifiers?.lowercased() {
+      if chars == "j" {
+        tabNavChannel?.invokeMethod("cycle", arguments: 1)
+        return true
+      }
+      if chars == "k" {
+        tabNavChannel?.invokeMethod("cycle", arguments: -1)
+        return true
+      }
+    }
     if let responder = firstResponder as? NSView,
        let wk = ancestorWKWebView(of: responder) {
       // For Cmd+V, use the paste: action (same path as right-click → Paste)

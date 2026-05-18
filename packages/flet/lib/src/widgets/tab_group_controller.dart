@@ -42,6 +42,12 @@ class TabEntry {
   /// when (order, name) match.
   final int registrationSeq;
 
+  /// True when this entry is in the IMPLICIT group — i.e. the control
+  /// has no `the.tab.group` of its own and the doclet defines no
+  /// explicit groups at all, so every control falls into one implicit
+  /// group. Implicit entries don't count toward `hasExplicitGroups`.
+  final bool isImplicit;
+
   TabEntry({
     required this.group,
     required this.order,
@@ -49,8 +55,12 @@ class TabEntry {
     required this.name,
     required this.node,
     required this.registrationSeq,
+    this.isImplicit = false,
   });
 }
+
+/// The group id used for the implicit group (see TabEntry.isImplicit).
+const int kImplicitGroup = 0;
 
 /// Process-singleton. Imported by Page.dart and every extension that
 /// wraps a focusable widget. Lives in flet core so all extensions can
@@ -63,6 +73,13 @@ class TabGroupController {
   /// to by every EpyxFocusable so the active group's wrappers rebuild
   /// with canRequestFocus=true and the rest with false.
   final ValueNotifier<int?> activeGroup = ValueNotifier<int?>(null);
+
+  /// True iff some control declares an explicit `the.tab.group`. When
+  /// false, the whole doclet has no groups, so every control joins one
+  /// implicit group (everything focusable, Tab cycles all). When it
+  /// flips true, the implicit group dissolves — ungrouped controls
+  /// listen to this and re-register / rebuild accordingly.
+  final ValueNotifier<bool> hasExplicitGroups = ValueNotifier<bool>(false);
 
   /// All registered focusable entries. Mutated under no lock — Dart
   /// is single-threaded, and registration only happens on
@@ -84,10 +101,33 @@ class TabGroupController {
     if (activeGroup.value == null) {
       activeGroup.value = e.group;
     }
+    _refreshHasExplicit();
   }
 
   void unregister(FocusNode node) {
     entries.removeWhere((e) => e.node == node);
+    _refreshHasExplicit();
+  }
+
+  /// Recompute `hasExplicitGroups` from the registry. When it flips
+  /// false→true the implicit group has just dissolved: if the active
+  /// group is no longer a real (explicit) group, jump to the first
+  /// explicit one so focus isn't stranded on the dead implicit group.
+  void _refreshHasExplicit() {
+    final has = entries.any((e) => !e.isImplicit);
+    if (hasExplicitGroups.value == has) return;
+    hasExplicitGroups.value = has;
+    if (has) {
+      final explicit = entries
+          .where((e) => !e.isImplicit)
+          .map((e) => e.group)
+          .toSet()
+          .toList()
+        ..sort();
+      if (explicit.isNotEmpty && !explicit.contains(activeGroup.value)) {
+        activeGroup.value = explicit.first;
+      }
+    }
   }
 
   /// Allocate a sequence number for a new entry. Caller passes this
@@ -99,6 +139,20 @@ class TabGroupController {
   ///   - excludes skip=true
   ///   - sort by (order ?? infinity, registrationSeq)
   List<TabEntry> entriesInGroup(int group) => _entriesInGroup(group);
+
+  /// Sorted distinct group ids that have at least one non-skip entry.
+  List<int> allGroups() => _allGroups();
+
+  /// "2/3"-style label — group `g`'s 1-based position out of the total
+  /// group count. Empty when there are fewer than 2 groups (nothing to
+  /// switch to, so the on-screen hint pill stays hidden).
+  String groupPositionLabel(int g) {
+    final groups = _allGroups();
+    if (groups.length < 2) return '';
+    final idx = groups.indexOf(g);
+    if (idx < 0) return '';
+    return '${idx + 1}/${groups.length}';
+  }
 
   List<TabEntry> _entriesInGroup(int group) {
     final inGroup = entries.where((e) => e.group == group && !e.skip).toList();

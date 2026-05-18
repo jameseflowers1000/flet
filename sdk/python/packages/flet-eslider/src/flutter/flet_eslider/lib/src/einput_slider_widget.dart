@@ -625,8 +625,10 @@ class _EInputSliderWidgetState extends State<EInputSliderWidget> {
           duration: const Duration(milliseconds: 80),
           padding: EdgeInsets.all(focusWidth),
           decoration: BoxDecoration(
+            // Focus is now shown by EpyxFocusable's blue glow — keep
+            // this border transparent so there's no competing line.
             border: Border.all(
-              color: _hasFocus ? focusColor : Colors.transparent,
+              color: Colors.transparent,
               width: focusWidth,
             ),
             borderRadius: BorderRadius.circular(6),
@@ -642,7 +644,7 @@ class _EInputSliderWidgetState extends State<EInputSliderWidget> {
       skip: tabSkip,
       isProxy: true,
       proxyToFocusNode: _focusNode,
-      drawFocusBorder: false,
+      drawFocusBorder: true,
       onFocusChange: (_) {},
       child: inner,
     );

@@ -23,6 +23,7 @@ import '../routing/route_parser.dart';
 import '../routing/route_state.dart';
 import '../routing/router_delegate.dart';
 import '../services/service_binding.dart';
+import '../widgets/epyx_focusable.dart';
 import '../widgets/tab_group_controller.dart';
 import '../services/service_registry.dart';
 import '../utils/device_info.dart';
@@ -128,6 +129,64 @@ class _PageControlState extends State<PageControl> with WidgetsBindingObserver {
     widget.control.addInvokeMethodListener(_invokeMethod);
     widget.control.addListener(_onPageControlChanged);
     _ensureServiceRegistries();
+    // Focus-group nav bridge to the macOS host. The Swift side reads
+    // raw NSEvent.modifierFlags (which honors a Caps-Lock→Control
+    // remap, unlike Flutter's keycode-based Control detection) and
+    // sends `cycle` for Ctrl-J/Ctrl-K; we tell it when the vim editor
+    // is focused so it leaves those keys alone there.
+    _tabNavChannel.setMethodCallHandler(_onTabNavCall);
+    FocusManager.instance.addListener(_pushEditorFocusToHost);
+    FocusManager.instance.addListener(_reportFocusedControl);
+  }
+
+  String? _lastReportedFocus;
+
+  /// Report the keyboard-focused doclet control to Python so the
+  /// orchestrator's UI-focus tracking (which Cmd-E reads to pick its
+  /// edit target) follows Tab / Cmd-J moves — not just clicks. Walks
+  /// up from primaryFocus to the enclosing EpyxFocusable; its `name`
+  /// is the control's logical name. Fires nothing when focus isn't on
+  /// a wrapped control (chrome / vim editor) so the slot keeps its
+  /// last value, matching click behaviour.
+  void _reportFocusedControl() {
+    String? name;
+    final ctx = FocusManager.instance.primaryFocus?.context;
+    if (ctx != null) {
+      ctx.visitAncestorElements((el) {
+        final w = el.widget;
+        if (w is EpyxFocusable) {
+          name = w.name;
+          return false;
+        }
+        return true;
+      });
+    }
+    if (name == null || name == _lastReportedFocus) return;
+    _lastReportedFocus = name;
+    widget.control.triggerEventWithoutSubscribers('ui_focus', name);
+  }
+
+  static const MethodChannel _tabNavChannel = MethodChannel('epyx/tabnav');
+  bool _lastEditorFocusedSentToHost = false;
+
+  Future<dynamic> _onTabNavCall(MethodCall call) async {
+    if (call.method == 'cycle') {
+      final dir = (call.arguments as int?) ?? 1;
+      // Belt-and-suspenders: the host already skips while the editor
+      // is focused, but re-check in case focus moved in between.
+      if (!_focusInVimEditor()) {
+        TabGroupController.instance.cycle(dir);
+      }
+    }
+    return null;
+  }
+
+  void _pushEditorFocusToHost() {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.macOS) return;
+    final focused = _focusInVimEditor();
+    if (focused == _lastEditorFocusedSentToHost) return;
+    _lastEditorFocusedSentToHost = focused;
+    _tabNavChannel.invokeMethod('setEditorFocused', focused);
   }
 
   @override
@@ -181,6 +240,9 @@ class _PageControlState extends State<PageControl> with WidgetsBindingObserver {
     if (_keyboardHandlerSubscribed) {
       HardwareKeyboard.instance.removeHandler(_handleKeyDown);
     }
+    FocusManager.instance.removeListener(_pushEditorFocusToHost);
+    FocusManager.instance.removeListener(_reportFocusedControl);
+    _tabNavChannel.setMethodCallHandler(null);
     widget.control.removeInvokeMethodListener(_invokeMethod);
     widget.control.removeListener(_onPageControlChanged);
     _services?.dispose();
@@ -370,6 +432,23 @@ class _PageControlState extends State<PageControl> with WidgetsBindingObserver {
         "app_lifecycle_state_change", {"state": state});
   }
 
+  /// True when keyboard focus is inside the embedded vim editor — used
+  /// to defer Ctrl-J/Ctrl-K (the editor binds Ctrl-K to hover docs).
+  bool _focusInVimEditor() {
+    final ctx = FocusManager.instance.primaryFocus?.context;
+    if (ctx == null) return false;
+    bool inEditor = false;
+    ctx.visitAncestorElements((el) {
+      final name = el.widget.runtimeType.toString();
+      if (name.contains('VimEditor') || name.contains('UnifiedEditor')) {
+        inEditor = true;
+        return false;
+      }
+      return true;
+    });
+    return inEditor;
+  }
+
   bool _handleKeyDown(KeyEvent e) {
     if (e is KeyDownEvent) {
       final k = e.logicalKey;
@@ -405,6 +484,21 @@ class _PageControlState extends State<PageControl> with WidgetsBindingObserver {
         // Flutter "consumed, stop propagating".
         final cmdOrCtrl = HardwareKeyboard.instance.isMetaPressed ||
             HardwareKeyboard.instance.isControlPressed;
+        // Ctrl-J / Ctrl-K — next / previous focus group (vim j/k).
+        // The primary group-switch binding. Control specifically (not
+        // Meta), and NOT while the vim editor has focus — there
+        // Ctrl-K is the editor's hover-docs; defer to it (same
+        // context split as Tab).
+        if (HardwareKeyboard.instance.isControlPressed &&
+            !HardwareKeyboard.instance.isMetaPressed &&
+            !HardwareKeyboard.instance.isAltPressed &&
+            (k == LogicalKeyboardKey.keyJ ||
+                k == LogicalKeyboardKey.keyK) &&
+            !_focusInVimEditor()) {
+          TabGroupController.instance
+              .cycle(k == LogicalKeyboardKey.keyJ ? 1 : -1);
+          return true;
+        }
         if (cmdOrCtrl) {
           if (k == LogicalKeyboardKey.keyE &&
               !HardwareKeyboard.instance.isAltPressed &&

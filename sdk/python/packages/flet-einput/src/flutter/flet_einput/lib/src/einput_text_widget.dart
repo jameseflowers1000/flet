@@ -825,9 +825,12 @@ class _EInputTextWidgetState extends State<EInputTextWidget> {
               width: borderWidth,
             ),
           ),
+          // Focus is now shown by EpyxFocusable's blue glow — keep the
+          // focused border identical to the resting border so there's
+          // no competing 2px line on focus.
           focusedBorder: OutlineInputBorder(
             borderSide: BorderSide(
-              color: focusedBorderColor ?? Colors.blue,
+              color: borderColor ?? Colors.white,
               width: borderWidth,
             ),
           ),
@@ -840,7 +843,7 @@ class _EInputTextWidgetState extends State<EInputTextWidget> {
       skip: tabSkip,
       isProxy: true,
       proxyToFocusNode: _focusNode,
-      drawFocusBorder: false,
+      drawFocusBorder: true,
       onFocusChange: (focused) {
         // Already wired via _focusNode.addListener(_onFocusChanged) →
         // existing focus_change event; EpyxFocusable's callback is a
