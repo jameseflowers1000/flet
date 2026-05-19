@@ -51,7 +51,7 @@ class _VimEditorFletWidgetState extends State<VimEditorFletWidget> {
     final initial = widget.control.getString('initial_text') ?? '';
     final label = widget.control.getString('label') ?? '';
     final uri = widget.control.getString('uri') ?? '';
-    print('[vim_editor] _initSession: initial.length=${initial.length} '
+    labLogAlways('[vim_editor] _initSession: initial.length=${initial.length} '
         'label="$label" uri="$uri" '
         'preview="${initial.length > 40 ? "${initial.substring(0, 40)}..." : initial}"');
     _session = EditSession(

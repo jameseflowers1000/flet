@@ -216,6 +216,22 @@ class _UnifiedEditorState extends State<UnifiedEditor> {
     // streams onto it (the old manager's streams are now closed).
     if (!identical(oldWidget.nvim, widget.nvim)) {
       _bindNvimStreams(widget.nvim);
+      // INIT-ORDER RACE FIX: `_maybeStartNvim` runs async — it
+      // completes ~30ms AFTER initState. The push attempt in
+      // initState (when `_mode == nvim`) silently no-ops because
+      // `widget.nvim` is still null at that moment. Result: nvim
+      // is connected with an empty buffer, and the user only sees
+      // their content after switching to another control and back
+      // (which triggers a session-change push). Now that nvim has
+      // arrived, do the deferred push so the initial /edit shows
+      // content immediately.
+      if (oldWidget.nvim == null &&
+          widget.nvim != null &&
+          _mode == EditorMode.nvim) {
+        labLogAlways('[lab] nvim arrived post-initState — '
+            'deferred _pushSessionToNvim');
+        _pushSessionToNvim();
+      }
     }
     // Session swap (e.g., second `/edit <name>` from the orchestrator
     // built a fresh EditSession with a different URI / initial text).
@@ -497,7 +513,13 @@ return {
 
   Future<void> _pushSessionToNvim() async {
     final rpc = widget.nvim?.rpc;
-    if (rpc == null) return;
+    if (rpc == null) {
+      // Common at initState time: `_maybeStartNvim` is async and
+      // hasn't completed yet. The deferred-push branch in
+      // didUpdateWidget catches this when nvim arrives.
+      labLogAlways('[lab] _pushSessionToNvim: SKIPPED (nvim not ready)');
+      return;
+    }
     try {
       // Buffer name = synthetic URL keyed by session label so the
       // status line in vim shows what we're editing, and the
