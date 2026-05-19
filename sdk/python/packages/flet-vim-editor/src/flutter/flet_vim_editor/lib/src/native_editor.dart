@@ -203,7 +203,8 @@ class NativeEditorState extends State<NativeEditor> {
   @override
   void didUpdateWidget(covariant NativeEditor oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.session != widget.session) {
+    final sessionChanged = oldWidget.session != widget.session;
+    if (sessionChanged) {
       oldWidget.session.removeListener(_onSessionChange);
       widget.session.addListener(_onSessionChange);
       _syncFromSession();
@@ -222,7 +223,20 @@ class NativeEditorState extends State<NativeEditor> {
     // the value unchanged; the forked _CodeLineEditableState detects
     // that case and skips its dismiss-autocomplete branch while still
     // calling markNeedsLayout on the field, so paragraphs rebuild.
-    if (oldWidget.diagnostics != widget.diagnostics) {
+    //
+    // CRITICAL: skip forceRepaint when the session ALSO changed this
+    // update. `_syncFromSession()` above just swapped `_controller.text`
+    // to the new buffer, but re_editor's `_CodeFieldRender` still holds
+    // a paragraph cache sized for the OLD buffer. forceRepaint() walks
+    // that stale cache and indexes the new (often shorter) `CodeLines`
+    // — `CodeLines[20]` on a 20-line buffer → RangeError → the whole
+    // NativeEditor throws and Flutter replaces it with a grey
+    // RenderErrorBox that crushes the editor layout. The text swap
+    // already triggers a normal repaint that rebuilds paragraphs
+    // against the correct line count; the diagnostics are cleared to
+    // `[]` on a session swap anyway, so there is nothing extra to
+    // refresh.
+    if (oldWidget.diagnostics != widget.diagnostics && !sessionChanged) {
       _controller.forceRepaint();
     }
   }
