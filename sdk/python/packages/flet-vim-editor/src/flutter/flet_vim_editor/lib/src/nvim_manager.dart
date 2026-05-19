@@ -22,17 +22,35 @@ import 'nvim_rpc_client.dart';
 
 class NvimManager {
   static NvimManager? _shared;
+  // In-flight (re)connect, shared by concurrent callers so an editor
+  // rebuild that calls getOrCreate/connectExisting twice does not
+  // spawn two nvim processes / open two bridge connections.
+  static Future<NvimManager>? _connecting;
 
   /// Singleton — one nvim --embed per lab. Subsequent EditSessions reuse.
   /// `theme` drives the in-grid `:highlight` palette (atom-one-dark by
   /// default). Pass an alternate `EditorTheme` to retheme the editor;
   /// the colors flow into the Lua bootstrap via
   /// `EditorTheme.toNvimHighlightLua()`.
+  ///
+  /// Returns the cached manager only when it is still HEALTHY. A cached
+  /// manager whose connection has dropped is torn down and replaced —
+  /// see `connectExisting` for why this matters.
   static Future<NvimManager> getOrCreate({
     required String nvimPath,
     EditorTheme theme = EditorTheme.atomOneDark,
-  }) async {
-    if (_shared != null) return _shared!;
+  }) {
+    final existing = _shared;
+    if (existing != null && existing.isHealthy) {
+      return Future<NvimManager>.value(existing);
+    }
+    return _connecting ??= _spawnLocal(nvimPath, theme)
+        .whenComplete(() => _connecting = null);
+  }
+
+  static Future<NvimManager> _spawnLocal(
+      String nvimPath, EditorTheme theme) async {
+    await _shared?.stop();
     final mgr = NvimManager._(nvimPath: nvimPath, theme: theme);
     await mgr._start();
     _shared = mgr;
@@ -42,11 +60,33 @@ class NvimManager {
   /// Web/Chrome path: the lab is in the browser, so we cannot spawn a
   /// process. Connect to lab_chrome_proxy.py which has spawned its own
   /// `nvim --embed` and bridges stdio over a binary WebSocket.
+  ///
+  /// CRITICAL: only the cached manager is reused, and only while it is
+  /// HEALTHY. The previous `if (_shared != null) return _shared!` reused
+  /// the singleton unconditionally — so the moment the nvim WebSocket
+  /// dropped, every reconnect handed back the same DEAD manager and the
+  /// editor was stuck showing "nvim DOWN" until a full app restart
+  /// (`_maybeStartNvim`'s health-aware retry loop was defeated because
+  /// `connectExisting` never produced a live instance). Now a dead
+  /// cached manager is stopped and a fresh connection is made, so a
+  /// dropped bridge recovers on the next `/edit`.
   static Future<NvimManager> connectExisting({
     required String nvimWsUrl,
     EditorTheme theme = EditorTheme.atomOneDark,
-  }) async {
-    if (_shared != null) return _shared!;
+  }) {
+    final existing = _shared;
+    if (existing != null && existing.isHealthy) {
+      return Future<NvimManager>.value(existing);
+    }
+    return _connecting ??= _connectExternal(nvimWsUrl, theme)
+        .whenComplete(() => _connecting = null);
+  }
+
+  static Future<NvimManager> _connectExternal(
+      String nvimWsUrl, EditorTheme theme) async {
+    // Tear down a dead cached manager (stop() nulls `_shared` when it
+    // still points at that instance) before starting fresh.
+    await _shared?.stop();
     final mgr = NvimManager._external(nvimWsUrl: nvimWsUrl, theme: theme);
     await mgr._startExternal();
     _shared = mgr;

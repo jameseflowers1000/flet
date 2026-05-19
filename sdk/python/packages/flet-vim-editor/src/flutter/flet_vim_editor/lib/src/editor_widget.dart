@@ -116,41 +116,12 @@ class _UnifiedEditorState extends State<UnifiedEditor> {
         if (mounted) setState(() {});
       }
     });
-    // Subscribe to nvim's :w events so a save inside the Vim view
-    // pulls the buffer back into the session and fires session.save.
-    final nvim = widget.nvim;
-    if (nvim != null) {
-      _saveSub = nvim.onSave.listen((_) async {
-        final rpc = nvim.rpc;
-        if (rpc == null) return;
-        try {
-          final text = await rpc.getBufferText();
-          widget.session.setText(text);
-          await widget.session.save();
-        } catch (e) {
-          debugPrint('[unified] :w pull failed: $e');
-        }
-      });
-      // Listen for nvim's TextChanged* autocmd notifications. Each fire
-      // means the user mutated the buffer; pull the new text and push
-      // it to the LSP via didChange so diagnostics update. Debounced
-      // 80ms so a burst of keystrokes coalesces into one round-trip.
-      _textSub = nvim.onTextChanged.listen((_) {
-        _textChangedDebounce?.cancel();
-        _textChangedDebounce = Timer(const Duration(milliseconds: 80), () async {
-          if (_mode != EditorMode.nvim) return; // only when actually in vim
-          final rpc = nvim.rpc;
-          final lsp = widget.lsp;
-          if (rpc == null || lsp == null) return;
-          try {
-            final text = await rpc.getBufferText();
-            lsp.didChange(_ourUri(), text, version: ++_vimLspVersion);
-          } catch (e) {
-            debugPrint('[unified] vim text-changed didChange failed: $e');
-          }
-        });
-      });
-    }
+    // Subscribe to nvim's :w / text-changed events. Done via
+    // `_bindNvimStreams` (not inline) because the nvim manager can now
+    // be SWAPPED at runtime — a dropped WebSocket is torn down and
+    // reconnected (NvimManager.connectExisting). `didUpdateWidget`
+    // re-binds when that happens.
+    _bindNvimStreams(widget.nvim);
     if (_mode == EditorMode.nvim) {
       _pushSessionToNvim();
     }
@@ -170,6 +141,57 @@ class _UnifiedEditorState extends State<UnifiedEditor> {
   /// stomping on a different active editor's handler.
   LspClient? _boundLsp;
 
+  /// nvim manager whose `onSave` / `onTextChanged` streams we are
+  /// currently subscribed to. Tracked so `didUpdateWidget` can detect
+  /// a manager swap (reconnect after a dropped WebSocket) and rebind —
+  /// the old manager's streams are closed by `NvimManager.stop()`, so
+  /// without rebinding `:w`-to-save and live diagnostics would silently
+  /// stop working after a reconnect.
+  NvimManager? _boundNvim;
+
+  void _bindNvimStreams(NvimManager? nvim) {
+    if (identical(nvim, _boundNvim)) return;
+    _boundNvim = nvim;
+    _saveSub?.cancel();
+    _textSub?.cancel();
+    _saveSub = null;
+    _textSub = null;
+    if (nvim == null) return;
+    // :w inside the Vim view → pull the buffer back into the session
+    // and fire session.save. Use `widget.nvim?.rpc` (not a captured
+    // ref) so the call always targets the live manager.
+    _saveSub = nvim.onSave.listen((_) async {
+      final rpc = widget.nvim?.rpc;
+      if (rpc == null) return;
+      try {
+        final text = await rpc.getBufferText();
+        widget.session.setText(text);
+        await widget.session.save();
+      } catch (e) {
+        debugPrint('[unified] :w pull failed: $e');
+      }
+    });
+    // nvim's TextChanged* autocmd → pull the new text and push it to
+    // the LSP via didChange so diagnostics update. Debounced 80ms so a
+    // burst of keystrokes coalesces into one round-trip.
+    _textSub = nvim.onTextChanged.listen((_) {
+      _textChangedDebounce?.cancel();
+      _textChangedDebounce =
+          Timer(const Duration(milliseconds: 80), () async {
+        if (_mode != EditorMode.nvim) return; // only when actually in vim
+        final rpc = widget.nvim?.rpc;
+        final lsp = widget.lsp;
+        if (rpc == null || lsp == null) return;
+        try {
+          final text = await rpc.getBufferText();
+          lsp.didChange(_ourUri(), text, version: ++_vimLspVersion);
+        } catch (e) {
+          debugPrint('[unified] vim text-changed didChange failed: $e');
+        }
+      });
+    });
+  }
+
   void _bindLspDiagnostics(LspClient? lsp) {
     if (identical(lsp, _boundLsp)) return;
     if (_boundLsp != null && _boundLsp!.onDiagnostics == _onDiagnostics) {
@@ -188,6 +210,12 @@ class _UnifiedEditorState extends State<UnifiedEditor> {
     super.didUpdateWidget(oldWidget);
     if (!identical(oldWidget.lsp, widget.lsp)) {
       _bindLspDiagnostics(widget.lsp);
+    }
+    // nvim manager swapped — reconnect after a dropped WebSocket
+    // produces a fresh NvimManager. Rebind the :w / text-changed
+    // streams onto it (the old manager's streams are now closed).
+    if (!identical(oldWidget.nvim, widget.nvim)) {
+      _bindNvimStreams(widget.nvim);
     }
     // Session swap (e.g., second `/edit <name>` from the orchestrator
     // built a fresh EditSession with a different URI / initial text).
