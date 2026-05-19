@@ -155,13 +155,12 @@ class _UnifiedEditorState extends State<UnifiedEditor> {
       _pushSessionToNvim();
     }
     _bindLspDiagnostics(widget.lsp);
-    // CodeEditor's `autofocus` was removed (it re-asserted focus on
-    // rebuilds and stole keystrokes from nvim). Initial focus is now
-    // driven entirely by `_claimEditorFocus`, called once after the
-    // first frame so the active editor's State is mounted.
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) _claimEditorFocus();
-    });
+    // Do NOT claim keyboard focus on initial mount. Cmd-E opens the
+    // editor as a side panel while the user is still navigating doclet
+    // controls (Tab / Ctrl-J); stealing focus here drops the doclet's
+    // focus glow and strands the user in nvim. The editor takes focus
+    // on an explicit click (`_onPointerDown`) or a mode switch
+    // (`_claimEditorFocus` in `_switchMode`) instead.
   }
 
   /// Last LSP we attached our `_onDiagnostics` callback to. Tracked so

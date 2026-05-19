@@ -114,6 +114,8 @@ class _FloatingWindowWidgetState extends State<FloatingWindowWidget> {
 
   @override
   Widget build(BuildContext context) {
+    print('[wmdiag] FloatingWindow.build t=${DateTime.now().millisecondsSinceEpoch} '
+        'visible=$_visible chromeCached=${_cachedChrome != null}');
     return LayoutControl(
       control: widget.control,
       child: LayoutBuilder(

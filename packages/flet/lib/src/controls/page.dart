@@ -689,10 +689,29 @@ class _PageControlState extends State<PageControl> with WidgetsBindingObserver {
         ? darkTheme
         : lightTheme;
 
+    // Keeps Tab / Shift-Tab inside the active doclet tab group (see
+    // TabGroupController.handleTabKey). Installed as the app `builder`
+    // so this Focus sits below the `Shortcuts` widget WidgetsApp
+    // installs: its `onKeyEvent` then sees Tab BEFORE the shortcut
+    // fires `NextFocusIntent`, and returning `handled` stops the native
+    // traversal that would otherwise escape into the editor / chrome.
+    Widget focusTraversalBuilder(BuildContext context, Widget? child) {
+      return Focus(
+        canRequestFocus: false,
+        skipTraversal: true,
+        onKeyEvent: (node, event) =>
+            TabGroupController.instance.handleTabKey(event)
+                ? KeyEventResult.handled
+                : KeyEventResult.ignored,
+        child: child ?? const SizedBox.shrink(),
+      );
+    }
+
     Widget scaffoldMessengerBuilder(BuildContext context, Widget? child) {
       return Theme(
           data: materialTheme ?? lightTheme ?? ThemeData(),
-          child: ScaffoldMessenger(child: child ?? const SizedBox.shrink()));
+          child: ScaffoldMessenger(
+              child: focusTraversalBuilder(context, child)));
     }
 
     var showSemanticsDebugger =
@@ -732,6 +751,7 @@ class _PageControlState extends State<PageControl> with WidgetsBindingObserver {
                 theme: lightTheme,
                 darkTheme: darkTheme,
                 themeMode: themeMode,
+                builder: focusTraversalBuilder,
                 supportedLocales: localeConfiguration.supportedLocales,
                 locale: localeConfiguration.locale,
                 localizationsDelegates: localizationsDelegates,
@@ -747,6 +767,7 @@ class _PageControlState extends State<PageControl> with WidgetsBindingObserver {
                 theme: lightTheme,
                 darkTheme: darkTheme,
                 themeMode: themeMode,
+                builder: focusTraversalBuilder,
                 localizationsDelegates: localizationsDelegates,
                 supportedLocales: localeConfiguration.supportedLocales,
                 locale: localeConfiguration.locale,

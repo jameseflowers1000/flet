@@ -287,7 +287,9 @@ class _EInputSliderWidgetState extends State<EInputSliderWidget> {
       if (_typing) {
         _commitTypedBuffer(reason: "enter");
       } else {
-        _focusNode.nextFocus();
+        // Group-constrained — a bare nextFocus() escapes the active
+        // tab group (see TabGroupController.moveFocus).
+        TabGroupController.instance.moveFocus(_focusNode, 1);
       }
       return KeyEventResult.handled;
     }

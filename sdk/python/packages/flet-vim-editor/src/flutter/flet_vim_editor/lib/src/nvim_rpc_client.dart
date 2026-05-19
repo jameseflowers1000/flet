@@ -104,11 +104,17 @@ class NvimRpcClient {
   }
 
   Future<void> connectWebSocket(String url) async {
+    print('[wmdiag] connectWebSocket START '
+        't=${DateTime.now().millisecondsSinceEpoch}');
     _ws = WebSocketChannel.connect(Uri.parse(url));
     try {
       await _ws!.ready.timeout(const Duration(seconds: 5));
+      print('[wmdiag] connectWebSocket ready OK '
+          't=${DateTime.now().millisecondsSinceEpoch}');
     } catch (e) {
       _log('[nvim.rpc.ws] ready timeout: $e');
+      print('[wmdiag] connectWebSocket ready FAIL '
+          't=${DateTime.now().millisecondsSinceEpoch} $e');
     }
     _wsSub = _ws!.stream.listen(
       (raw) {

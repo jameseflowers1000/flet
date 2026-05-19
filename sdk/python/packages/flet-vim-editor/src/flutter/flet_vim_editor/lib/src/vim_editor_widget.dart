@@ -36,6 +36,7 @@ class _VimEditorFletWidgetState extends State<VimEditorFletWidget> {
   @override
   void initState() {
     super.initState();
+    print('[wmdiag] VimEditor.initState t=${DateTime.now().millisecondsSinceEpoch}');
     _initSession();
     _maybeStartLsp();
     _maybeStartNvim();
@@ -112,7 +113,11 @@ class _VimEditorFletWidgetState extends State<VimEditorFletWidget> {
       while (mounted) {
         final c = LspClient.webSocket(url: url);
         try {
+          print('[wmdiag] _maybeStartLsp start() START '
+              't=${DateTime.now().millisecondsSinceEpoch} url=$url');
           await c.start();
+          print('[wmdiag] _maybeStartLsp start() OK '
+              't=${DateTime.now().millisecondsSinceEpoch}');
           if (!mounted) return;
           setState(() => _lsp = c);
           return;
@@ -147,7 +152,11 @@ class _VimEditorFletWidgetState extends State<VimEditorFletWidget> {
     try {
       while (mounted) {
         try {
+          print('[wmdiag] _maybeStartNvim connectExisting START '
+              't=${DateTime.now().millisecondsSinceEpoch} url=$url');
           final mgr = await NvimManager.connectExisting(nvimWsUrl: url);
+          print('[wmdiag] _maybeStartNvim connectExisting OK '
+              't=${DateTime.now().millisecondsSinceEpoch}');
           if (!mounted) return;
           setState(() => _nvim = mgr);
           return;

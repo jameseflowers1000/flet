@@ -18,6 +18,7 @@
 // tab_order / tab_skip into Flet control properties, then read here.
 library;
 
+import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 
 class TabEntry {
@@ -277,12 +278,73 @@ class TabGroupController {
           .toList(),
     };
   }
-}
 
-// NOTE: there is intentionally NO custom FocusTraversalPolicy here.
-// Group containment is achieved purely by EpyxFocusable gating
-// `canRequestFocus` — only the active group's nodes are focusable, so
-// native Flutter Tab can only ever cycle those. A policy that filters
-// `sortDescendants` (returning a subset) violates the policy contract
-// — Flutter's `next()` still knows the dropped nodes are focusable and
-// lands focus on stray FocusScopeNodes. Don't reintroduce one.
+  /// Handle a raw Tab / Shift-Tab key event for group-constrained
+  /// traversal. Returns true when focus was moved inside the active
+  /// group — the caller then marks the event handled so Flutter's own
+  /// traversal never runs. Returns false to let native traversal
+  /// proceed (focus in the editor, free mode, or no active group).
+  ///
+  /// WHY intercept the key rather than install a FocusTraversalPolicy:
+  /// `canRequestFocus` gating only covers EpyxFocusable controls — the
+  /// vim editor and orchestrator chrome carry ungated focusable widgets,
+  /// so once either is on screen native Tab escapes the group ("the
+  /// focus abyss"). A custom FocusTraversalPolicy is unreliable here
+  /// (WidgetsApp installs its own FocusTraversalGroup; ours was never
+  /// resolved as the nearest one). Intercepting the key in an ancestor
+  /// `Focus.onKeyEvent` — which runs before the `Shortcuts` widget that
+  /// fires `NextFocusIntent` — both moves focus AND stops the native
+  /// traversal, so there is no parallel-traversal fight.
+  bool handleTabKey(KeyEvent event) {
+    if (event is! KeyDownEvent && event is! KeyRepeatEvent) return false;
+    if (event.logicalKey != LogicalKeyboardKey.tab) return false;
+    final node = FocusManager.instance.primaryFocus;
+    if (node == null) return false;
+    final dir = HardwareKeyboard.instance.isShiftPressed ? -1 : 1;
+    return _moveFocusInGroup(node, dir);
+  }
+
+  /// Move keyboard focus by [dir] (+1 next / -1 previous), constrained
+  /// to the active doclet group. Falls back to native traversal when
+  /// [current] is not in the active group (editor / free mode).
+  ///
+  /// Proxy widgets (EInputText, ESlider) that run their own key
+  /// handling MUST call this instead of a bare `FocusNode.nextFocus()`
+  /// — a bare call uses Flutter's default policy and escapes the group
+  /// into the editor / orchestrator chrome ("the focus abyss").
+  void moveFocus(FocusNode current, int dir) {
+    if (_moveFocusInGroup(current, dir)) return;
+    if (dir > 0) {
+      current.nextFocus();
+    } else {
+      current.previousFocus();
+    }
+  }
+
+  /// Move focus by [dir] within the active group when [current] is one
+  /// of its registered nodes. Returns true once handled (focus moved,
+  /// or a single-control group consumed the key to stay put); false
+  /// when focus is not in the active group so the caller defers.
+  bool _moveFocusInGroup(FocusNode current, int dir) {
+    final active = activeGroup.value;
+    if (active == null) return false;
+    final inGroup = _entriesInGroup(active);
+    final idx = inGroup.indexWhere((e) => e.node == current);
+    if (idx < 0) return false;
+    if (inGroup.length == 1) return true;
+    var ni = (idx + dir) % inGroup.length;
+    if (ni < 0) ni += inGroup.length;
+    final target = inGroup[ni].node;
+    target.requestFocus();
+    final ctx = target.context;
+    if (ctx != null) {
+      Scrollable.ensureVisible(
+        ctx,
+        alignment: 0.5,
+        duration: const Duration(milliseconds: 200),
+        curve: Curves.easeInOut,
+      );
+    }
+    return true;
+  }
+}

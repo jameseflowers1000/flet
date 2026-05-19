@@ -181,12 +181,10 @@ class NvimViewState extends State<NvimView> {
     if (!identical(oldWidget.manager, widget.manager)) {
       _attachRedraw();
     }
-    if (!oldWidget.active && widget.active) {
-      // We just became the visible editor — claim focus.
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) _focusNode.requestFocus();
-      });
-    }
+    // Becoming the visible editor does NOT claim keyboard focus — that
+    // would steal focus from the doclet control the user is editing
+    // (Cmd-E opens the editor as a side panel). Focus is taken on an
+    // explicit click (`_onPointerDown`) or mode switch (`grabFocus`).
   }
 
   Future<void> grabFocus() async {

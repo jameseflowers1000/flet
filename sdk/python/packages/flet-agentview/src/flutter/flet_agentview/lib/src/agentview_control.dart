@@ -49,6 +49,7 @@ class _AgentViewControlState extends State<AgentViewControl> {
   @override
   void initState() {
     super.initState();
+    print('[wmdiag] AgentView.initState t=${DateTime.now().millisecondsSinceEpoch}');
     _parseConfig();
   }
 

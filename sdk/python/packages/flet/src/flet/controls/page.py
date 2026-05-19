@@ -510,6 +510,13 @@ class Page(BasePage):
     Called when a keyboard key is pressed.
     """
 
+    on_ui_focus: Optional[ControlEventHandler["Page"]] = None
+    """
+    Epyx: called when keyboard focus moves to a doclet control. `data`
+    carries the focused control's logical name. Used by the orchestrator
+    so Cmd-E follows Tab / Ctrl-J focus moves, not just clicks.
+    """
+
     on_connect: Optional[ControlEventHandler["Page"]] = None
     """
     Called when a web user (re-)connects to a page session.

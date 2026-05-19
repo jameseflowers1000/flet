@@ -420,16 +420,12 @@ class _EInputTextWidgetState extends State<EInputTextWidget> {
       _cancel();
       return KeyEventResult.handled;
     }
-    if (key == LogicalKeyboardKey.tab && !shiftDown) {
-      print('[EInputText] baseline: Tab → nextFocus');
+    if (key == LogicalKeyboardKey.tab) {
       _commit('tab');
-      _focusNode.nextFocus();
-      return KeyEventResult.handled;
-    }
-    if (key == LogicalKeyboardKey.tab && shiftDown) {
-      print('[EInputText] baseline: Shift+Tab → previousFocus');
-      _commit('tab');
-      _focusNode.previousFocus();
+      // Group-constrained move — a bare _focusNode.nextFocus() uses
+      // Flutter's default policy and escapes the active tab group into
+      // the editor / orchestrator chrome.
+      TabGroupController.instance.moveFocus(_focusNode, shiftDown ? -1 : 1);
       return KeyEventResult.handled;
     }
     return KeyEventResult.ignored;
@@ -459,13 +455,11 @@ class _EInputTextWidgetState extends State<EInputTextWidget> {
       if (handled) return true;
     }
 
-    // 2. Baseline: commit + move to next focusable. Shift+Enter → previous.
+    // 2. Baseline: commit + move to next focusable. Shift+Enter →
+    //    previous. Group-constrained so focus can't escape the active
+    //    tab group (see TabGroupController.moveFocus).
     _commit('enter');
-    if (shiftDown) {
-      _focusNode.previousFocus();
-    } else {
-      _focusNode.nextFocus();
-    }
+    TabGroupController.instance.moveFocus(_focusNode, shiftDown ? -1 : 1);
     return true;
   }
 
