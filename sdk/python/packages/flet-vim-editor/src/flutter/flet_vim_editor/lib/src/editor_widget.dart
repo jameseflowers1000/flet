@@ -528,6 +528,9 @@ return {
           .replaceAll(RegExp(r'[^A-Za-z0-9_./-]'), '_');
       final bufName = 'lab://${safe.isEmpty ? "session" : safe}.py';
       labLog('[lab] _pushSessionToNvim: name=$bufName text_len=${widget.session.text.length}');
+      labLogAlways('[wmtime] setBufferText START '
+          't=${DateTime.now().millisecondsSinceEpoch} '
+          'len=${widget.session.text.length}');
       // .py extension here so nvim's filetype detection lands on Python
       // even before the explicit `filetype=python` re-assertion in
       // setBufferText. Belt-and-suspenders: the rename fires a
@@ -535,6 +538,8 @@ return {
       // detection succeeds; without it, ftdetect produces nothing and
       // syntax highlighting silently dies.
       await rpc.setBufferText(widget.session.text, name: bufName);
+      labLogAlways('[wmtime] setBufferText DONE '
+          't=${DateTime.now().millisecondsSinceEpoch}');
       // Verify post-push state — confirm filetype landed and the buffer
       // we wrote to is the one nvim is showing. If filetype != python
       // or cur_buf != our_buf, that's the regression.
