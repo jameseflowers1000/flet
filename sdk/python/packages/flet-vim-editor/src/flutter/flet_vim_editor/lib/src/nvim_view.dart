@@ -137,6 +137,8 @@ class NvimViewState extends State<NvimView> {
   bool _dirty = false;
   Timer? _resizeDebounce;
   Size? _lastSentSize;
+  // [wmtime] one-shot marker for when nvim first paints content.
+  bool _firstLineLogged = false;
 
   @override
   void initState() {
@@ -145,6 +147,8 @@ class NvimViewState extends State<NvimView> {
     _measureCell();
     _attachRedraw();
     labLog('[nvim.metrics] cellW=$_cellW cellH=$_cellH');
+    labLogAlways('[wmtime] NvimView.initState '
+        't=${DateTime.now().millisecondsSinceEpoch}');
     _installDiagHook();
     // Auto-dump diag 2s after first mount so the user sees a baseline
     // for what the palette + filetype look like in a healthy state.
@@ -484,6 +488,11 @@ class NvimViewState extends State<NvimView> {
     var col = colStart;
     final cells = args[3] as List;
     if (row < 0 || row >= _rows) return;
+    if (!_firstLineLogged) {
+      _firstLineLogged = true;
+      labLogAlways('[wmtime] NvimView first grid_line — content painted '
+          't=${DateTime.now().millisecondsSinceEpoch}');
+    }
     int prevHl = 0;
     final dbg = <String>[];
     for (final raw in cells) {

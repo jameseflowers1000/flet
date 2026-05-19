@@ -25,6 +25,8 @@ import 'package:msgpack_dart/msgpack_dart.dart' show serialize;
 import 'package:web_socket_channel/web_socket_channel.dart';
 import 'package:web_socket_channel/status.dart' as ws_status;
 
+import 'log.dart';
+
 void _log(String msg) {
   // ignore: avoid_print
   print(msg);
@@ -104,16 +106,16 @@ class NvimRpcClient {
   }
 
   Future<void> connectWebSocket(String url) async {
-    print('[wmdiag] connectWebSocket START '
+    labLogAlways('[wmtime] connectWebSocket START '
         't=${DateTime.now().millisecondsSinceEpoch}');
     _ws = WebSocketChannel.connect(Uri.parse(url));
     try {
       await _ws!.ready.timeout(const Duration(seconds: 5));
-      print('[wmdiag] connectWebSocket ready OK '
+      labLogAlways('[wmtime] connectWebSocket ready OK '
           't=${DateTime.now().millisecondsSinceEpoch}');
     } catch (e) {
       _log('[nvim.rpc.ws] ready timeout: $e');
-      print('[wmdiag] connectWebSocket ready FAIL '
+      labLogAlways('[wmtime] connectWebSocket ready FAIL '
           't=${DateTime.now().millisecondsSinceEpoch} $e');
     }
     _wsSub = _ws!.stream.listen(

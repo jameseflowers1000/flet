@@ -11,6 +11,7 @@ import 'package:flutter/material.dart';
 import 'edit_session.dart';
 import 'editor_chrome.dart' show EditorMode;
 import 'editor_widget.dart' as ed;
+import 'log.dart';
 import 'lsp_client.dart';
 import 'nvim_manager.dart';
 
@@ -33,10 +34,14 @@ class _VimEditorFletWidgetState extends State<VimEditorFletWidget> {
   bool _lspConnecting = false;
   bool _nvimConnecting = false;
 
+  // [wmtime] build counter — marks when the editor frame is (re)built.
+  int _buildCount = 0;
+
   @override
   void initState() {
     super.initState();
-    print('[wmdiag] VimEditor.initState t=${DateTime.now().millisecondsSinceEpoch}');
+    labLogAlways('[wmtime] VimEditor.initState '
+        't=${DateTime.now().millisecondsSinceEpoch}');
     _initSession();
     _maybeStartLsp();
     _maybeStartNvim();
@@ -113,17 +118,18 @@ class _VimEditorFletWidgetState extends State<VimEditorFletWidget> {
       while (mounted) {
         final c = LspClient.webSocket(url: url);
         try {
-          print('[wmdiag] _maybeStartLsp start() START '
+          labLogAlways('[wmtime] _maybeStartLsp start() START '
               't=${DateTime.now().millisecondsSinceEpoch} url=$url');
           await c.start();
-          print('[wmdiag] _maybeStartLsp start() OK '
+          labLogAlways('[wmtime] _maybeStartLsp start() OK '
               't=${DateTime.now().millisecondsSinceEpoch}');
           if (!mounted) return;
           setState(() => _lsp = c);
           return;
         } catch (e) {
           _lspAttempt += 1;
-          debugPrint('[vim_editor] LSP start failed (attempt $_lspAttempt): $e');
+          labLogAlways('[wmtime] LSP start FAILED (attempt $_lspAttempt) '
+              't=${DateTime.now().millisecondsSinceEpoch}: $e');
           // Pygls inside the container takes a beat to come up after a
           // container restart. Retry with simple back-off (clamped) so
           // a transient race resolves without the user touching anything.
@@ -152,17 +158,18 @@ class _VimEditorFletWidgetState extends State<VimEditorFletWidget> {
     try {
       while (mounted) {
         try {
-          print('[wmdiag] _maybeStartNvim connectExisting START '
+          labLogAlways('[wmtime] _maybeStartNvim connectExisting START '
               't=${DateTime.now().millisecondsSinceEpoch} url=$url');
           final mgr = await NvimManager.connectExisting(nvimWsUrl: url);
-          print('[wmdiag] _maybeStartNvim connectExisting OK '
+          labLogAlways('[wmtime] _maybeStartNvim connectExisting OK '
               't=${DateTime.now().millisecondsSinceEpoch}');
           if (!mounted) return;
           setState(() => _nvim = mgr);
           return;
         } catch (e) {
           _nvimAttempt += 1;
-          debugPrint('[vim_editor] nvim connect failed (attempt $_nvimAttempt): $e');
+          labLogAlways('[wmtime] nvim connect FAILED (attempt $_nvimAttempt) '
+              't=${DateTime.now().millisecondsSinceEpoch}: $e');
           final delayMs = (300 * (_nvimAttempt < 6 ? _nvimAttempt : 6))
               .clamp(300, 3000);
           await Future.delayed(Duration(milliseconds: delayMs));
@@ -218,6 +225,9 @@ class _VimEditorFletWidgetState extends State<VimEditorFletWidget> {
   @override
   Widget build(BuildContext context) {
     if (_session == null) return const SizedBox.shrink();
+    labLogAlways('[wmtime] VimEditorFletWidget.build #${++_buildCount} '
+        't=${DateTime.now().millisecondsSinceEpoch} '
+        'lsp=${_lsp != null} nvim=${_nvim != null}');
     final modeStr = widget.control.getString('initial_mode') ?? 'native';
     final mode = modeStr == 'nvim'
         ? EditorMode.nvim

@@ -118,10 +118,10 @@ class NvimManager {
       _nvimLastError = reason;
       debugPrint('[nvim] disconnected: $reason');
     });
-    print('[wmdiag] _startExternal bootstrapAutocmds START '
+    labLogAlways('[wmtime] _startExternal bootstrapAutocmds START '
         't=${DateTime.now().millisecondsSinceEpoch}');
     await _bootstrapAutocmds();
-    print('[wmdiag] _startExternal bootstrapAutocmds OK '
+    labLogAlways('[wmtime] _startExternal bootstrapAutocmds OK '
         't=${DateTime.now().millisecondsSinceEpoch}');
     // NB: ui_attach is deferred — NvimView calls attachUi() once it
     // has subscribed to onRedraw. Otherwise the initial hl_attr_define
