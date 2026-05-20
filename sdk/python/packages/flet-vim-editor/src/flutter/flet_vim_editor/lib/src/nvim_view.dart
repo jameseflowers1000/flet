@@ -951,12 +951,33 @@ class NvimViewState extends State<NvimView> {
   }
 
   void _onPointerDown(PointerDownEvent ev) {
+    final primaryBefore = FocusManager.instance.primaryFocus;
     labLogAlways('[focus.diag] NvimView._onPointerDown: '
         'active=${widget.active} '
         'hadFocus=${_focusNode.hasFocus} '
+        'canRequestFocus=${_focusNode.canRequestFocus} '
+        'primaryBefore=${primaryBefore?.debugLabel ?? primaryBefore?.runtimeType.toString() ?? "null"} '
         'mouseEnabled=$_mouseEnabled '
         't=${DateTime.now().millisecondsSinceEpoch}');
-    if (widget.active) _focusNode.requestFocus();
+    if (widget.active) {
+      // Bug-2 fix: a click into NvimView shortly after a session swap
+      // occasionally failed to transfer keyboard focus — the previous
+      // EScalar TextField's focus was still being released
+      // asynchronously by Flutter's tap-outside policy, racing our
+      // `requestFocus()`. The TextField's focus won, NvimView's
+      // request was silently dropped, and keystrokes beeped until the
+      // user clicked a second time. Explicitly release whatever is
+      // currently primary first so there is no race to lose.
+      final current = FocusManager.instance.primaryFocus;
+      if (current != null && current != _focusNode) {
+        current.unfocus();
+      }
+      _focusNode.requestFocus();
+      labLogAlways('[focus.diag] NvimView post-requestFocus: '
+          'hasFocus=${_focusNode.hasFocus} '
+          'hasPrimaryFocus=${_focusNode.hasPrimaryFocus} '
+          'primaryNow=${FocusManager.instance.primaryFocus?.debugLabel ?? FocusManager.instance.primaryFocus?.runtimeType.toString() ?? "null"}');
+    }
     if (!_mouseEnabled) return;
     final rpc = widget.manager?.rpc;
     if (rpc == null) return;
