@@ -63,9 +63,17 @@ void _ensureInit() {
     final dir = Directory('$home/.epyx');
     if (!dir.existsSync()) dir.createSync(recursive: true);
     _logFilePath = '${dir.path}/vim_editor.log';
-    // Truncate on startup so each session is isolated.
+    // APPEND a session marker — do NOT truncate. This file is shared
+    // with page.dart's `diag_log` (in flet-core), which writes events
+    // BEFORE the editor mounts: page-keydown timestamps for Cmd-E,
+    // EpyxFocusable focus transitions while the user is clicking around
+    // the doclet, etc. Truncating here erased exactly the pre-mount
+    // events we need to diagnose bug 1 (markdown outline disappearing
+    // on Cmd-E). The file grows across sessions; user can rm it when
+    // they want a clean slate.
     File(_logFilePath!).writeAsStringSync(
-        '── vim-editor log opened ${DateTime.now().toIso8601String()} ──\n');
+        '\n── vim-editor log opened ${DateTime.now().toIso8601String()} ──\n',
+        mode: FileMode.append);
     _flushTimer = Timer.periodic(_flushInterval, (_) => _flush());
   } catch (_) {
     _logFilePath = null;
