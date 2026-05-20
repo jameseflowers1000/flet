@@ -23,6 +23,7 @@ library;
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import '../utils/diag_log.dart';
 import 'tab_group_controller.dart';
 
 class EpyxFocusable extends StatefulWidget {
@@ -180,6 +181,16 @@ class _EpyxFocusableState extends State<EpyxFocusable> {
   void _onFocusChange() {
     if (!mounted) return;
     final focused = _activeNode.hasFocus;
+    // [focus.diag] log every EpyxFocusable focus-state transition.
+    // Bug 1: blue outline disappears on click + Cmd-E on the markdown.
+    // Python's mark_ui_focus chain stays pinned to the clicked control,
+    // but the Dart blue border is driven by `_activeNode.hasFocus`.
+    // Something is stealing the FocusNode's focus on Cmd-E — this log
+    // shows which control transitions to hasFocus=false and when, so
+    // we can correlate with what mounted in the editor.
+    diagLog('[focus.diag] EpyxFocusable(${widget.name}) '
+        'hasFocus=$focused isProxy=${widget.isProxy} '
+        't=${DateTime.now().millisecondsSinceEpoch}');
     widget.onFocusChange?.call(focused);
     // Repaint the border. setState is cheap — one wrapper.
     setState(() {});
