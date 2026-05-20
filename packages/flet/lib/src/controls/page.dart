@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:io' show File, FileMode, Platform;
 import 'dart:ui' as ui;
 import 'dart:ui';
 
@@ -467,30 +466,13 @@ class _PageControlState extends State<PageControl> with WidgetsBindingObserver {
         LogicalKeyboardKey.shiftLeft,
         LogicalKeyboardKey.shiftRight
       ].contains(k)) {
-        // [wmtime] Host-side timestamp BEFORE the keyboard event is
-        // packed off through the Flet protocol to the container Python
-        // handler. Cmd/Ctrl-prefix only (filters out per-character
-        // typing noise). Pair with `[cmde-diag] _on_keyboard ...
-        // received` on the Python side: the delta is the
-        // host→container hop (Flutter event dispatch + Flet serialize +
-        // WebSocket + container Python dispatch). Currently chasing a
-        // perceived "huge delay" on Cmd-E that the existing logs show
-        // as only 65ms once Python takes over — the missing time is
-        // most likely in this hop.
-        if (HardwareKeyboard.instance.isMetaPressed ||
-            HardwareKeyboard.instance.isControlPressed) {
-          try {
-            if (Platform.isMacOS || Platform.isLinux) {
-              final home = Platform.environment['HOME'] ?? '/tmp';
-              File('$home/.epyx/vim_editor.log').writeAsStringSync(
-                  '[wmtime] page.dart keydown ${k.keyLabel} '
-                  'meta=${HardwareKeyboard.instance.isMetaPressed} '
-                  'ctrl=${HardwareKeyboard.instance.isControlPressed} '
-                  't=${DateTime.now().millisecondsSinceEpoch}\n',
-                  mode: FileMode.append);
-            }
-          } catch (_) {/* diagnostic must never crash key handling */}
-        }
+        // (Removed: the sync host-side [wmtime] page.dart keydown
+        // file write that lived here is the prime suspect for having
+        // accidentally masked an upstream race that caused ~20s Cmd-E
+        // spikes. Stripped to test whether removing it brings the
+        // spike back. If the spike returns we have proof the race is
+        // real and live, and we get to chase it as the actual bug.
+        // See feedback_python_dash_m_two_modules.md / today's session.)
         widget.control.triggerEventWithoutSubscribers(
             "keyboard_event",
             KeyboardEvent(
