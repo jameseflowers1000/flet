@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io' show File, FileMode, Platform, Directory;
 import 'dart:ui' as ui;
 import 'dart:ui';
 
@@ -42,6 +43,39 @@ import '../widgets/loading_page.dart';
 import '../widgets/page_context.dart';
 import '../widgets/page_media.dart';
 import 'control_widget.dart';
+
+// ── Buffered diagnostic logger (page.dart-local) ────────────────────
+// Cheap appends to an in-memory list at the call site; a periodic
+// Timer flushes to `~/.epyx/vim_editor.log`. We deliberately AVOID
+// sync `File.writeAsStringSync` at the call site, because today we
+// found that a sync file write in `_handleKeyDown` was accidentally
+// masking real focus-event races on Cmd-E. The blocking duration
+// (~1ms) was on the same order as the races we needed to catch, so
+// the instrumentation was *changing* the system instead of measuring
+// it. List-append is ~50ns and won't perturb anything at that scale.
+// Shares the same target file as flet-vim-editor's `log.dart` —
+// POSIX append-only writes from independent buffers are race-free,
+// and entries carry epoch timestamps for post-hoc ordering.
+final List<String> _pageDiagBuf = <String>[];
+Timer? _pageDiagFlushTimer;
+
+void _pageDiagLog(String line) {
+  _pageDiagBuf.add(line);
+  _pageDiagFlushTimer ??= Timer.periodic(const Duration(seconds: 2), (_) {
+    if (_pageDiagBuf.isEmpty) return;
+    final lines = List<String>.from(_pageDiagBuf);
+    _pageDiagBuf.clear();
+    try {
+      if (Platform.isMacOS || Platform.isLinux) {
+        final home = Platform.environment['HOME'] ?? '/tmp';
+        final dir = Directory('$home/.epyx');
+        if (!dir.existsSync()) dir.createSync(recursive: true);
+        File('$home/.epyx/vim_editor.log').writeAsStringSync(
+            '${lines.join('\n')}\n', mode: FileMode.append);
+      }
+    } catch (_) {/* logging must never crash key handling */}
+  });
+}
 
 class PageControl extends StatefulWidget {
   final Control control;
@@ -466,13 +500,17 @@ class _PageControlState extends State<PageControl> with WidgetsBindingObserver {
         LogicalKeyboardKey.shiftLeft,
         LogicalKeyboardKey.shiftRight
       ].contains(k)) {
-        // (Removed: the sync host-side [wmtime] page.dart keydown
-        // file write that lived here is the prime suspect for having
-        // accidentally masked an upstream race that caused ~20s Cmd-E
-        // spikes. Stripped to test whether removing it brings the
-        // spike back. If the spike returns we have proof the race is
-        // real and live, and we get to chase it as the actual bug.
-        // See feedback_python_dash_m_two_modules.md / today's session.)
+        // Host-side keydown timestamp for Cmd/Ctrl-prefix keys.
+        // Routed through `_pageDiagLog` (buffered) so it does NOT
+        // serialize into the keyboard event path — see the comment
+        // on `_pageDiagBuf` above for why that matters here.
+        if (HardwareKeyboard.instance.isMetaPressed ||
+            HardwareKeyboard.instance.isControlPressed) {
+          _pageDiagLog('[wmtime] page.dart keydown ${k.keyLabel} '
+              'meta=${HardwareKeyboard.instance.isMetaPressed} '
+              'ctrl=${HardwareKeyboard.instance.isControlPressed} '
+              't=${DateTime.now().millisecondsSinceEpoch}');
+        }
         widget.control.triggerEventWithoutSubscribers(
             "keyboard_event",
             KeyboardEvent(

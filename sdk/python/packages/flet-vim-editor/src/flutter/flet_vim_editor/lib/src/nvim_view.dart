@@ -149,6 +149,11 @@ class NvimViewState extends State<NvimView> {
     labLog('[nvim.metrics] cellW=$_cellW cellH=$_cellH');
     labLogAlways('[wmtime] NvimView.initState '
         't=${DateTime.now().millisecondsSinceEpoch}');
+    // [focus.diag] log every focus-state transition so we can pin
+    // down "first click after Cmd-E doesn't transfer keyboard focus
+    // (beeps), second click does" — bug 2 of today's pair of races
+    // unmasked by removing the sync barrier in page.dart.
+    _focusNode.addListener(_logFocusChange);
     _installDiagHook();
     // Auto-dump diag 2s after first mount so the user sees a baseline
     // for what the palette + filetype look like in a healthy state.
@@ -260,6 +265,7 @@ class NvimViewState extends State<NvimView> {
     _redrawSub?.cancel();
     _resizeDebounce?.cancel();
     _msgClearTimer?.cancel();
+    _focusNode.removeListener(_logFocusChange);
     _focusNode.dispose();
     super.dispose();
   }
@@ -937,7 +943,19 @@ class NvimViewState extends State<NvimView> {
     cb(row, col);
   }
 
+  void _logFocusChange() {
+    labLogAlways('[focus.diag] NvimView focus changed: '
+        'hasFocus=${_focusNode.hasFocus} '
+        'hasPrimaryFocus=${_focusNode.hasPrimaryFocus} '
+        't=${DateTime.now().millisecondsSinceEpoch}');
+  }
+
   void _onPointerDown(PointerDownEvent ev) {
+    labLogAlways('[focus.diag] NvimView._onPointerDown: '
+        'active=${widget.active} '
+        'hadFocus=${_focusNode.hasFocus} '
+        'mouseEnabled=$_mouseEnabled '
+        't=${DateTime.now().millisecondsSinceEpoch}');
     if (widget.active) _focusNode.requestFocus();
     if (!_mouseEnabled) return;
     final rpc = widget.manager?.rpc;
