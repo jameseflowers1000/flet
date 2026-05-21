@@ -59,6 +59,18 @@ typedef NvimViewStateKey = GlobalKey<NvimViewState>;
 class NvimViewState extends State<NvimView> {
   final FocusNode _focusNode = FocusNode(debugLabel: 'NvimEmbedView');
 
+  // FocusScope separation: the editor lives in its OWN scope, distinct
+  // from the doclet's scope. Without this boundary, transferring focus
+  // to the editor from a doclet TextField was a same-scope leaf→leaf
+  // race: our `_focusNode.requestFocus()` competed with the TextField's
+  // async tap-outside policy and intermittently lost ("click twice to
+  // type" / beeps). A dedicated scope makes the transfer a scope-level
+  // change — requesting focus on `_focusNode` makes THIS scope the
+  // active one and yields the doclet's scope, instead of two leaves
+  // fighting inside one scope. See `_onPointerDown` / `grabFocus`.
+  final FocusScopeNode _scopeNode =
+      FocusScopeNode(debugLabel: 'NvimEditorScope');
+
   // ── grid state ─────────────────────────────────────────────────────
   int _rows = 24;
   int _cols = 80;
@@ -197,7 +209,43 @@ class NvimViewState extends State<NvimView> {
   }
 
   Future<void> grabFocus() async {
-    if (mounted) _focusNode.requestFocus();
+    if (mounted) _claimFocus('grabFocus');
+  }
+
+  /// Deterministically move keyboard focus to the editor.
+  ///
+  /// The old code called `primaryFocus.unfocus()` then
+  /// `_focusNode.requestFocus()`. When the previous primary was a leaf
+  /// FocusNode (a doclet TextField), `unfocus()` reparents focus to the
+  /// doclet's enclosing scope and races the TextField's async
+  /// tap-outside policy — which intermittently re-won, so the first
+  /// click/Cmd-E "missed" and the user had to act twice ("beeps until
+  /// you click again").
+  ///
+  /// New strategy, paired with the editor's own [FocusScope]:
+  ///   1. `requestFocus()` once — this makes the editor scope the active
+  ///      scope and yields the doclet scope (no `unfocus()` race).
+  ///   2. Re-assert on the NEXT frame iff we didn't win, to beat any
+  ///      async reassert from the TextField that lands after step 1.
+  /// We never call `unfocus()` on the previous node, so there is no
+  /// leaf→scope reparent for the TextField policy to fight over.
+  void _claimFocus(String reason) {
+    if (!mounted) return;
+    final primaryBefore = FocusManager.instance.primaryFocus;
+    _focusNode.requestFocus();
+    labLogAlways('[focus.diag] NvimView _claimFocus($reason): '
+        'before=${primaryBefore?.debugLabel ?? primaryBefore?.runtimeType.toString() ?? "null"} '
+        'hasPrimaryFocus=${_focusNode.hasPrimaryFocus} '
+        't=${DateTime.now().millisecondsSinceEpoch}');
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !widget.active) return;
+      if (!_focusNode.hasPrimaryFocus) {
+        _focusNode.requestFocus();
+        labLogAlways('[focus.diag] NvimView _claimFocus($reason) re-assert: '
+            'hasPrimaryFocus=${_focusNode.hasPrimaryFocus} '
+            't=${DateTime.now().millisecondsSinceEpoch}');
+      }
+    });
   }
 
   /// Read the current cursor's row out of the painted grid as a plain
@@ -267,6 +315,7 @@ class NvimViewState extends State<NvimView> {
     _msgClearTimer?.cancel();
     _focusNode.removeListener(_logFocusChange);
     _focusNode.dispose();
+    _scopeNode.dispose();
     super.dispose();
   }
 
@@ -960,23 +1009,7 @@ class NvimViewState extends State<NvimView> {
         'mouseEnabled=$_mouseEnabled '
         't=${DateTime.now().millisecondsSinceEpoch}');
     if (widget.active) {
-      // Bug-2 fix: a click into NvimView shortly after a session swap
-      // occasionally failed to transfer keyboard focus — the previous
-      // EScalar TextField's focus was still being released
-      // asynchronously by Flutter's tap-outside policy, racing our
-      // `requestFocus()`. The TextField's focus won, NvimView's
-      // request was silently dropped, and keystrokes beeped until the
-      // user clicked a second time. Explicitly release whatever is
-      // currently primary first so there is no race to lose.
-      final current = FocusManager.instance.primaryFocus;
-      if (current != null && current != _focusNode) {
-        current.unfocus();
-      }
-      _focusNode.requestFocus();
-      labLogAlways('[focus.diag] NvimView post-requestFocus: '
-          'hasFocus=${_focusNode.hasFocus} '
-          'hasPrimaryFocus=${_focusNode.hasPrimaryFocus} '
-          'primaryNow=${FocusManager.instance.primaryFocus?.debugLabel ?? FocusManager.instance.primaryFocus?.runtimeType.toString() ?? "null"}');
+      _claimFocus('pointerDown');
     }
     if (!_mouseEnabled) return;
     final rpc = widget.manager?.rpc;
@@ -1130,10 +1163,17 @@ return { text = (lines[1] or ''), kind = 'line' }
     if (widget.manager == null) {
       return const _NotReadyHint();
     }
-    return Focus(
-      focusNode: _focusNode,
-      onKeyEvent: _onKeyEvent,
-      child: LayoutBuilder(builder: (ctx, constraints) {
+    // FocusScope wraps the editor's Focus so the editor owns a scope
+    // distinct from the doclet. Mounting this scope does NOT autofocus
+    // (no `autofocus: true` descendant) — Cmd-E opens the editor as a
+    // side panel while keyboard focus stays on the doclet control until
+    // an explicit click or mode switch, preserving existing behavior.
+    return FocusScope(
+      node: _scopeNode,
+      child: Focus(
+        focusNode: _focusNode,
+        onKeyEvent: _onKeyEvent,
+        child: LayoutBuilder(builder: (ctx, constraints) {
         // Schedule a resize on next frame if size changed.
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (mounted) _onSizeChanged(constraints.biggest);
@@ -1181,6 +1221,7 @@ return { text = (lines[1] or ''), kind = 'line' }
           ),
         );
       }),
+      ),
     );
   }
 
