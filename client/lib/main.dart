@@ -86,6 +86,7 @@ List<FletExtension> _buildExtensions() {
     flet_window_manager.Extension(),
     flet_secure_storage.Extension(),
     flet_webview.Extension(),
+    _EpyxLogoExtension(),
     // --FAT_CLIENT_START--
     // --RIVE_EXTENSION_START--
     // flet_rive.Extension(),
@@ -231,7 +232,10 @@ class _EpyxAppState extends State<EpyxApp> {
 // -- Animated Epyx logo (per-letter neon glow, matching Python NeonLogo) --
 class EpyxLogo extends StatefulWidget {
   final double height;
-  const EpyxLogo({super.key, this.height = 60});
+  // Force the neon (hover) appearance without a real mouse hover — used
+  // by external callers (e.g. dialog highlight via NeonLogo.neon_enter).
+  final bool forceNeon;
+  const EpyxLogo({super.key, this.height = 60, this.forceNeon = false});
 
   @override
   State<EpyxLogo> createState() => EpyxLogoState();
@@ -296,20 +300,21 @@ class EpyxLogoState extends State<EpyxLogo> with TickerProviderStateMixin {
 
   /// Normal state: flat logo centered, neon on hover
   Widget _buildIdleStack(double neonHeight, double flatHeight) {
+    final neon = _hovering || widget.forceNeon;
     return Stack(
       children: [
         // Flat logo (normal)
         AnimatedOpacity(
-          opacity: _hovering ? 0.0 : 1.0,
+          opacity: neon ? 0.0 : 1.0,
           duration: _fadeDuration,
           child: Center(
             child: Image.asset('assets/epyx-logo.png',
               height: flatHeight, fit: BoxFit.fitHeight),
           ),
         ),
-        // Full neon logo (hover)
+        // Full neon logo (hover / forced)
         AnimatedOpacity(
-          opacity: _hovering ? 1.0 : 0.0,
+          opacity: neon ? 1.0 : 0.0,
           duration: _fadeDuration,
           child: Image.asset('assets/epyx-logo-neon.png',
             height: neonHeight, fit: BoxFit.fitHeight),
@@ -338,6 +343,58 @@ class EpyxLogoState extends State<EpyxLogo> with TickerProviderStateMixin {
           ),
       ],
     );
+  }
+}
+
+// -- Flet control wrapper around EpyxLogo --
+// Lets the IN-DOCLET logo (built by Python in main.py) reuse the SAME
+// client-side neon animation as the catalog logo. The `busy` property is
+// driven by Python around recalc; the Dart Timer runs in the client, so
+// it keeps animating even while the Python event loop is blocked by a
+// long fixed-point recalc. Control type "epyx_logo".
+class _EpyxLogoControl extends StatefulWidget {
+  final Control control;
+  const _EpyxLogoControl({super.key, required this.control});
+
+  @override
+  State<_EpyxLogoControl> createState() => _EpyxLogoControlState();
+}
+
+class _EpyxLogoControlState extends State<_EpyxLogoControl> {
+  final GlobalKey<EpyxLogoState> _logoKey = GlobalKey<EpyxLogoState>();
+
+  void _syncBusy() {
+    final st = _logoKey.currentState;
+    if (st == null) return;
+    if (widget.control.getBool("busy", false) ?? false) {
+      st.startBusy();
+    } else {
+      st.stopBusy();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // build() re-runs whenever the control notifies (property change),
+    // so sync the busy state after this frame onto the (mounted) State.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _syncBusy();
+    });
+    return EpyxLogo(
+      key: _logoKey,
+      height: widget.control.getDouble("height") ?? 60,
+      forceNeon: widget.control.getBool("force_neon", false) ?? false,
+    );
+  }
+}
+
+class _EpyxLogoExtension extends FletExtension {
+  @override
+  Widget? createWidget(Key? key, Control control) {
+    if (control.type == "epyx_logo") {
+      return _EpyxLogoControl(key: key, control: control);
+    }
+    return null;
   }
 }
 
