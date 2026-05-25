@@ -136,7 +136,9 @@ class EditorChrome extends StatelessWidget {
                 onModeChange: onModeChange,
                 actions: actions,
               ),
-              if (status.hasHealthIssue) _HealthBanner(status: status),
+              // Always mounted so it can debounce internally — the brief
+              // connecting window on editor open must NOT flash "LSP DOWN".
+              _HealthBanner(status: status),
               Expanded(
                 child: Container(
                   color: const Color(0xFF111111),
@@ -625,25 +627,74 @@ class _ModeSwitch extends StatelessWidget {
 ///
 /// Click-through to a one-line remediation suggestion. Yellow-on-red
 /// so it can't be ignored.
-class _HealthBanner extends StatelessWidget {
+class _HealthBanner extends StatefulWidget {
   final EditorStatus status;
   const _HealthBanner({required this.status});
 
   @override
-  Widget build(BuildContext context) {
+  State<_HealthBanner> createState() => _HealthBannerState();
+}
+
+class _HealthBannerState extends State<_HealthBanner> {
+  // Only surface the banner once a down state has PERSISTED this long.
+  // The connecting window on editor open (LSP `initialize` round-trip,
+  // ~tens of ms) clears well before this, so it never flashes the alarming
+  // "LSP DOWN" — but a genuine sustained outage (>grace) still shows.
+  static const _graceMs = 1500;
+  bool _show = false;
+  Timer? _graceTimer;
+
+  List<String> _issues() {
+    final s = widget.status;
     final issues = <String>[];
-    if (!status.lspConnected) {
-      final err = (status.lspError ?? '').isEmpty
-          ? '(no detail)'
-          : status.lspError!;
+    if (!s.lspConnected) {
+      final err = (s.lspError ?? '').isEmpty ? '(no detail)' : s.lspError!;
       issues.add('LSP DOWN — $err');
     }
-    if (!status.nvimConnected) {
-      final err = (status.nvimError ?? '').isEmpty
-          ? '(no detail)'
-          : status.nvimError!;
+    if (!s.nvimConnected) {
+      final err = (s.nvimError ?? '').isEmpty ? '(no detail)' : s.nvimError!;
       issues.add('nvim DOWN — $err');
     }
+    return issues;
+  }
+
+  void _evaluate() {
+    final hasIssues = _issues().isNotEmpty;
+    if (!hasIssues) {
+      _graceTimer?.cancel();
+      _graceTimer = null;
+      if (_show) setState(() => _show = false);
+      return;
+    }
+    if (_show || _graceTimer != null) return; // already shown / pending
+    _graceTimer = Timer(const Duration(milliseconds: _graceMs), () {
+      _graceTimer = null;
+      if (mounted && _issues().isNotEmpty) setState(() => _show = true);
+    });
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _evaluate();
+  }
+
+  @override
+  void didUpdateWidget(covariant _HealthBanner oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _evaluate();
+  }
+
+  @override
+  void dispose() {
+    _graceTimer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!_show) return const SizedBox.shrink();
+    final issues = _issues();
     if (issues.isEmpty) return const SizedBox.shrink();
     return Container(
       width: double.infinity,
