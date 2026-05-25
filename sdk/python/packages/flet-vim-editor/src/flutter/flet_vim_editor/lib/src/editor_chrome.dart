@@ -277,15 +277,59 @@ class _StatusBarState extends State<_StatusBar> {
     });
   }
 
+  // Debounce LSP/nvim "down" the same way as the banner — the brief
+  // connecting window on editor open must not flash the badge red.
+  static const _graceMs = 1500;
+  bool _lspDown = false;
+  bool _nvimDown = false;
+  Timer? _lspGrace;
+  Timer? _nvimGrace;
+
+  void _evalHealth() {
+    if (widget.status.lspConnected) {
+      _lspGrace?.cancel();
+      _lspGrace = null;
+      if (_lspDown) setState(() => _lspDown = false);
+    } else if (!_lspDown && _lspGrace == null) {
+      _lspGrace = Timer(const Duration(milliseconds: _graceMs), () {
+        _lspGrace = null;
+        if (mounted && !widget.status.lspConnected) {
+          setState(() => _lspDown = true);
+        }
+      });
+    }
+    if (widget.status.nvimConnected) {
+      _nvimGrace?.cancel();
+      _nvimGrace = null;
+      if (_nvimDown) setState(() => _nvimDown = false);
+    } else if (!_nvimDown && _nvimGrace == null) {
+      _nvimGrace = Timer(const Duration(milliseconds: _graceMs), () {
+        _nvimGrace = null;
+        if (mounted && !widget.status.nvimConnected) {
+          setState(() => _nvimDown = true);
+        }
+      });
+    }
+  }
+
   @override
   void initState() {
     super.initState();
     _scheduleClockTick();
+    _evalHealth();
+  }
+
+  @override
+  void didUpdateWidget(covariant _StatusBar oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _evalHealth();
   }
 
   @override
   void dispose() {
     _clockTick?.cancel();
+    _lspGrace?.cancel();
+    _nvimGrace?.cancel();
     super.dispose();
   }
 
@@ -322,14 +366,14 @@ class _StatusBarState extends State<_StatusBar> {
     );
     final lspBadge = _badge(
       label: 'LSP',
-      ok: status.lspConnected,
+      ok: status.lspConnected || !_lspDown,  // debounced — no connect flash
       tooltip: status.lspConnected
           ? 'Language server connected'
           : 'Language server unavailable',
     );
     final nvimBadge = _badge(
       label: 'nvim',
-      ok: status.nvimConnected,
+      ok: status.nvimConnected || !_nvimDown,  // debounced — no connect flash
       tooltip: status.nvimConnected
           ? 'nvim RPC connected'
           : 'nvim RPC unavailable',
