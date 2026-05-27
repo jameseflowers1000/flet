@@ -5,6 +5,8 @@
 // URLs, and forwards `EditSession.save()` calls back to Python via
 // `triggerEvent('save', {text: ...})`.
 
+import 'dart:async';
+
 import 'package:flet/flet.dart';
 import 'package:flutter/material.dart';
 
@@ -32,6 +34,18 @@ class _VimEditorFletWidgetState extends State<VimEditorFletWidget> {
   int _lspAttempt = 0;
   int _nvimAttempt = 0;
   bool _lspConnecting = false;
+
+  // ETB-09b followup #12 — share a single LspClient across ALL VimEditor
+  // instances on the same lsp_ws_url. Previously each instance created
+  // its own → the LSP server's last-connection-wins eviction (see
+  // server.py _start_ws_resilient) churned through clients on every
+  // popup mount. The retry backoff stacked into >3s of perceived
+  // downtime, which the chrome's health-banner grace caught and
+  // flashed "LSP DOWN — (no detail)" briefly. With a shared healthy
+  // client the popup just reuses it and the banner never fires.
+  static LspClient? _sharedLsp;
+  static String? _sharedLspUrl;
+  static Future<LspClient>? _sharedLspStarting;
   bool _nvimConnecting = false;
 
   // [wmtime] build counter — marks when the editor frame is (re)built.
@@ -95,6 +109,38 @@ class _VimEditorFletWidgetState extends State<VimEditorFletWidget> {
   Future<void> _maybeStartLsp() async {
     final url = widget.control.getString('lsp_ws_url');
     if (url == null || url.isEmpty) return;
+
+    // ETB-09b followup #12 — reuse the static shared client if it's on
+    // this URL and healthy. Subsequent VimEditor mounts (e.g. opening
+    // a cell popup after the side panel) skip the connect+initialize
+    // round-trip entirely, which is what was producing "LSP DOWN".
+    if (_VimEditorFletWidgetState._sharedLspUrl == url
+        && _VimEditorFletWidgetState._sharedLsp != null
+        && _VimEditorFletWidgetState._sharedLsp!.isHealthy) {
+      if (_lsp != _VimEditorFletWidgetState._sharedLsp) {
+        if (mounted) setState(() {
+          _lsp = _VimEditorFletWidgetState._sharedLsp;
+          _readyLsp = url;
+        });
+      }
+      return;
+    }
+    // If another VimEditor is mid-start for this URL, wait on it.
+    if (_VimEditorFletWidgetState._sharedLspStarting != null
+        && _VimEditorFletWidgetState._sharedLspUrl == url) {
+      try {
+        final c = await _VimEditorFletWidgetState._sharedLspStarting!;
+        if (!mounted) return;
+        setState(() {
+          _lsp = c;
+          _readyLsp = url;
+        });
+      } catch (_) {
+        // The other start failed — fall through to retry below.
+      }
+      return;
+    }
+
     // Skip only when we already have a HEALTHY client on this URL.
     // Without the health check, a previous LspClient that died (WS
     // dropped, container restarted, transient network blip) sticks
@@ -114,6 +160,10 @@ class _VimEditorFletWidgetState extends State<VimEditorFletWidget> {
     }
     _lspConnecting = true;
     _readyLsp = url;
+    // Publish the in-flight start so concurrent mounts can await it.
+    final startCompleter = Completer<LspClient>();
+    _VimEditorFletWidgetState._sharedLspUrl = url;
+    _VimEditorFletWidgetState._sharedLspStarting = startCompleter.future;
     try {
       while (mounted) {
         final c = LspClient.webSocket(url: url);
@@ -123,8 +173,16 @@ class _VimEditorFletWidgetState extends State<VimEditorFletWidget> {
           await c.start();
           labLogAlways('[wmtime] _maybeStartLsp start() OK '
               't=${DateTime.now().millisecondsSinceEpoch}');
-          if (!mounted) return;
+          if (!mounted) {
+            startCompleter.complete(c);
+            _VimEditorFletWidgetState._sharedLsp = c;
+            _VimEditorFletWidgetState._sharedLspStarting = null;
+            return;
+          }
           setState(() => _lsp = c);
+          _VimEditorFletWidgetState._sharedLsp = c;
+          _VimEditorFletWidgetState._sharedLspStarting = null;
+          startCompleter.complete(c);
           return;
         } catch (e) {
           _lspAttempt += 1;
@@ -217,7 +275,14 @@ class _VimEditorFletWidgetState extends State<VimEditorFletWidget> {
 
   @override
   void dispose() {
-    _lsp?.stop();
+    // ETB-09b followup #12 — LSP client is now ALSO process-global
+    // (singleton, shared across VimEditor instances) to avoid the
+    // connect/evict/retry churn that produced "LSP DOWN" banners.
+    // Only stop the client if it's NOT the shared one (e.g. a stale
+    // instance from a URL-change before we adopted the singleton).
+    if (_lsp != null && _lsp != _VimEditorFletWidgetState._sharedLsp) {
+      _lsp!.stop();
+    }
     // NvimManager is process-global (singleton); don't dispose it here.
     super.dispose();
   }
@@ -237,6 +302,7 @@ class _VimEditorFletWidgetState extends State<VimEditorFletWidget> {
       lsp: _lsp,
       nvim: _nvim,
       initialMode: mode,
+      autofocus: widget.control.getBool('autofocus', false) ?? false,
       onCancel: () {
         // Same rationale as save: bypass the on_$event flag gate.
         widget.control.triggerEventWithoutSubscribers('cancel', null);

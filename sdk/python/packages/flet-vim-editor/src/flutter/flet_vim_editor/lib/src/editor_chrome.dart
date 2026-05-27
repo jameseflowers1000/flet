@@ -684,7 +684,14 @@ class _HealthBannerState extends State<_HealthBanner> {
   // The connecting window on editor open (LSP `initialize` round-trip,
   // ~tens of ms) clears well before this, so it never flashes the alarming
   // "LSP DOWN" — but a genuine sustained outage (>grace) still shows.
-  static const _graceMs = 1500;
+  //
+  // Bumped from 1500 → 3000ms for ETB-09b's cell-popup path: mounting
+  // a fresh VimEditor on overlay evicts any prior LSP client (single-
+  // connection model in the LSP server) and the new client takes
+  // ~1.5-2s to reach `isHealthy = true` via the 3s health heartbeat.
+  // Without the bump the popup briefly flashed "LSP DOWN" on every
+  // open; a real outage still surfaces within 3s.
+  static const _graceMs = 3000;
   bool _show = false;
   Timer? _graceTimer;
 

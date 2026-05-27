@@ -265,6 +265,12 @@ vim.opt.expandtab = true
 vim.opt.tabstop = 4
 vim.opt.shiftwidth = 4
 vim.opt.softtabstop = 4
+-- Silence the bell so Esc in normal mode (e.g. dismissing the cell
+-- popup) doesn't trigger a macOS NSBeep / nvim audible bell. ETB-09b
+-- followup #11.
+vim.opt.belloff = "all"
+vim.opt.errorbells = false
+vim.opt.visualbell = false
 -- Enable mouse so nvim_input_mouse positions the cursor.
 vim.opt.mouse = "a"
 vim.opt.scrolloff = 999

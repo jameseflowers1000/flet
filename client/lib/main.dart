@@ -152,13 +152,27 @@ void main([List<String>? args]) async {
   FletAppErrorsHandler errorsHandler = FletAppErrorsHandler();
   if (!kDebugMode) {
     FlutterError.onError = (details) {
+      _logGreyBoxDiag('FlutterError.onError', details);
       errorsHandler.onError(details.exceptionAsString());
     };
     PlatformDispatcher.instance.onError = (error, stack) {
+      _logGreyBoxAsyncError(error, stack);
       errorsHandler.onError(error.toString());
       return true;
     };
   }
+  // ETB-09b Task #8 — chain ErrorWidget.builder so a widget that throws
+  // during build (which becomes a grey RenderErrorBox in release) gets
+  // its exception + stack logged to ~/.epyx/grey_box_diag.log. Per
+  // feedback_flutter_release_renderbox_diag: release strips the yellow
+  // error text, so the grey box looks like a layout bug — instrument
+  // up front, name the actual throw. Probe is PASSIVE — defers to the
+  // default builder for the visual; only writes a log entry on the way.
+  final ErrorWidgetBuilder _defaultErrorBuilder = ErrorWidget.builder;
+  ErrorWidget.builder = (FlutterErrorDetails details) {
+    _logGreyBoxDiag('ErrorWidget.builder (widget threw during build)', details);
+    return _defaultErrorBuilder(details);
+  };
 
   debugPrint("Page URL: $pageUrl");
 
@@ -171,6 +185,60 @@ void main([List<String>? args]) async {
     extensions: extensions,
     errorsHandler: errorsHandler,
   ));
+}
+
+/// ETB-09b Task #8 — append a grey-box diagnostic entry to
+/// `~/.epyx/grey_box_diag.log`. Best-effort; swallows file errors so
+/// the diagnostic never makes the underlying widget crash worse.
+/// Web is excluded — no dart:io, and web didn't reproduce the bug.
+void _logGreyBoxDiag(String tag, FlutterErrorDetails details) {
+  if (kIsWeb) return;
+  try {
+    final home = Platform.environment['HOME'] ?? '/tmp';
+    final dir = Directory('$home/.epyx');
+    if (!dir.existsSync()) dir.createSync(recursive: true);
+    final f = File('$home/.epyx/grey_box_diag.log');
+    final ts = DateTime.now().toIso8601String();
+    final stackStr = details.stack?.toString() ?? '<no stack>';
+    // Cap stack to the first ~60 frames so the file stays readable
+    // when a widget throws on every rebuild.
+    final stackTrimmed =
+        stackStr.split('\n').take(60).join('\n');
+    final ctx = details.context?.toString() ?? '';
+    final lib = details.library ?? '';
+    final msg = StringBuffer()
+      ..writeln('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
+      ..writeln('[$ts] $tag')
+      ..writeln('EXCEPTION: ${details.exceptionAsString()}')
+      ..writeln('LIBRARY:   $lib')
+      ..writeln('CONTEXT:   $ctx')
+      ..writeln('STACK (first 60 frames):')
+      ..writeln(stackTrimmed)
+      ..writeln();
+    f.writeAsStringSync(msg.toString(), mode: FileMode.append);
+  } catch (_) {
+    // Swallow — the diagnostic must never make things worse.
+  }
+}
+
+void _logGreyBoxAsyncError(Object error, StackTrace stack) {
+  if (kIsWeb) return;
+  try {
+    final home = Platform.environment['HOME'] ?? '/tmp';
+    final dir = Directory('$home/.epyx');
+    if (!dir.existsSync()) dir.createSync(recursive: true);
+    final f = File('$home/.epyx/grey_box_diag.log');
+    final ts = DateTime.now().toIso8601String();
+    final stackTrimmed = stack.toString().split('\n').take(60).join('\n');
+    final msg = StringBuffer()
+      ..writeln('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
+      ..writeln('[$ts] PlatformDispatcher async error')
+      ..writeln('ERROR: $error')
+      ..writeln('STACK (first 60 frames):')
+      ..writeln(stackTrimmed)
+      ..writeln();
+    f.writeAsStringSync(msg.toString(), mode: FileMode.append);
+  } catch (_) {}
 }
 
 /// The top-level native Flutter app.

@@ -57,6 +57,12 @@ class UnifiedEditor extends StatefulWidget {
   /// without forking individual files. See `editor_config.dart`.
   final EditorConfig config;
 
+  /// When true, claim keyboard focus on mount (and on retarget into
+  /// a different parent). Default is false so the side panel doesn't
+  /// steal focus from the doclet's currently-focused control on
+  /// /edit; the ETB-09b cell popup sets this to true.
+  final bool autofocus;
+
   const UnifiedEditor({
     super.key,
     required this.session,
@@ -66,6 +72,7 @@ class UnifiedEditor extends StatefulWidget {
     this.initialMode = EditorMode.native,
     this.onModeChange,
     this.config = const EditorConfig(),
+    this.autofocus = false,
   });
 
   @override
@@ -126,12 +133,20 @@ class _UnifiedEditorState extends State<UnifiedEditor> {
       _pushSessionToNvim();
     }
     _bindLspDiagnostics(widget.lsp);
-    // Do NOT claim keyboard focus on initial mount. Cmd-E opens the
-    // editor as a side panel while the user is still navigating doclet
-    // controls (Tab / Ctrl-J); stealing focus here drops the doclet's
-    // focus glow and strands the user in nvim. The editor takes focus
-    // on an explicit click (`_onPointerDown`) or a mode switch
-    // (`_claimEditorFocus` in `_switchMode`) instead.
+    // Do NOT claim keyboard focus on initial mount BY DEFAULT. Cmd-E
+    // opens the editor as a side panel while the user is still
+    // navigating doclet controls (Tab / Ctrl-J); stealing focus here
+    // drops the doclet's focus glow and strands the user in nvim.
+    // The side panel takes focus on an explicit click
+    // (`_onPointerDown`) or a mode switch (`_claimEditorFocus` in
+    // `_switchMode`) instead.
+    //
+    // ETB-09b cell popup OPTS IN via `autofocus: true` — the user
+    // just hit Cmd-E expecting to type into the formula immediately,
+    // and the popup is its own surface (not the side panel).
+    if (widget.autofocus) {
+      _claimEditorFocus();
+    }
   }
 
   /// Last LSP we attached our `_onDiagnostics` callback to. Tracked so

@@ -54,6 +54,13 @@ class VimEditor(ft.LayoutControl):
     """When true the Dart side emits `[lab.diag]` / `[vim.complete]` /
     `[lsp.recv]` console traces — useful while bringing up new flows."""
 
+    autofocus: bool = False
+    """When true, the editor claims keyboard focus on mount. The side
+    panel deliberately does NOT autofocus (so the doclet's currently-
+    focused control keeps the cursor when Cmd-E opens the editor), but
+    the ETB-09b cell popup DOES — the user just hit Cmd-E expecting
+    to type into the formula immediately."""
+
     # ── events ─────────────────────────────────────────────────────
     # Implemented as method-style events on Flet's control protocol.
     # The Dart side calls `triggerEvent("save", {"text": ...})` on

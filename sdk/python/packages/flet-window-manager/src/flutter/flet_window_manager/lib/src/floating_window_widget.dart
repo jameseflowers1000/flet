@@ -415,8 +415,16 @@ class _FloatingWindowWidgetState extends State<FloatingWindowWidget> {
   void _onClose() {
     _visible = false;
     setState(() {});
+    // ETB-09b Task #8 — must send a bool, not a string. Earlier code
+    // shipped `'false'` here; that round-tripped a STRING into Python's
+    // FloatingWindow.win_visible (typed `bool`). On the next state
+    // push back to Dart, `_syncFromControl`'s `c.getBool("win_visible",
+    // true)!` blew up with `type 'String' is not a subtype of type
+    // 'bool?'`, taking the orchestrator's FloatingWindow down via a
+    // RenderErrorBox (grey rectangle in release). Found by chaining
+    // ErrorWidget.builder per feedback_flutter_release_renderbox_diag.
     FletBackend.of(context).updateControl(
-      widget.control.id, {'win_visible': 'false'});
+      widget.control.id, {'win_visible': false});
     FletBackend.of(context).triggerControlEvent(
       widget.control, "close", "");
   }
