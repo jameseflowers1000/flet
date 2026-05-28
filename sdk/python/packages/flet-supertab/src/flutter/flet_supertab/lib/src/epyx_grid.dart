@@ -110,6 +110,12 @@ class _EpyxGridState extends State<EpyxGrid> {
   // -- Scroll tracking for header display --
   int _firstVisibleRow = 0;
 
+  // -- ETB-09c: global (window) pixel position of the tap/drag that
+  //    drove the current selection. Sent in selection_change so the
+  //    cell-formula popup can anchor at the click. Null for keyboard-
+  //    driven selection (Python falls back to a fixed popup position).
+  Offset? _lastSelectGlobal;
+
   // -- Data version: skip rebuild when data hasn't changed --
   String _lastRowsJson = '';
   String _lastColsJson = '';
@@ -1941,14 +1947,26 @@ class _EpyxGridState extends State<EpyxGrid> {
     try {
       final colName = _selectedCol >= 0 && _selectedCol < _source.columnCount
           ? _source.columnName(_selectedCol) : '';
-      widget.control.triggerEventWithoutSubscribers('selection_change',
-          jsonEncode({
-            'row': _selectedRow,
-            'col': _selectedCol,
-            'column_name': colName,
-            'end_row': _selEndRow,
-            'end_col': _selEndCol,
-          }));
+      final payload = <String, dynamic>{
+        'row': _selectedRow,
+        'col': _selectedCol,
+        'column_name': colName,
+        'end_row': _selEndRow,
+        'end_col': _selEndCol,
+      };
+      // ETB-09c: anchor the cell-formula popup at the click point. We
+      // send the global pixel position of the tap that drove this
+      // selection (set in _onTapDown / _onPanStart). It's null for
+      // keyboard-driven selection — Python then falls back to a fixed
+      // popup position. Using the tap point sidesteps fragile cell-
+      // rect math (scroll / frozen cols / LOD / transposed specs).
+      final a = _lastSelectGlobal;
+      if (a != null) {
+        payload['anchor_x'] = a.dx;
+        payload['anchor_y'] = a.dy;
+      }
+      widget.control.triggerEventWithoutSubscribers(
+          'selection_change', jsonEncode(payload));
     } catch (_) {
       // Backend may be null in tests
     }
@@ -2344,6 +2362,9 @@ class _EpyxGridState extends State<EpyxGrid> {
     if (hit == null) return;
     final row = hit.row;
     final col = hit.col;
+    // ETB-09c: remember the click point (global/window coords) so the
+    // selection_change event can anchor the cell-formula popup here.
+    _lastSelectGlobal = details.globalPosition;
 
     // Click-away while editing: commit if user modified the text,
     // cancel if unchanged (safe for initiate_editing(initial_text=...)
@@ -2378,6 +2399,7 @@ class _EpyxGridState extends State<EpyxGrid> {
     final hit = _hitTestCell(details.localPosition);
     if (hit == null) return;
     _isDragSelecting = true;
+    _lastSelectGlobal = details.globalPosition;  // ETB-09c anchor
     // Commit/cancel any in-flight edit before starting a drag selection.
     if (_isEditing) {
       if (_editController.text != _editValue) {
