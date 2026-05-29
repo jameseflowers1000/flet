@@ -213,11 +213,49 @@ class _EpyxFocusableState extends State<EpyxFocusable> {
     });
   }
 
+  /// Wrap `child` with the soft blue focus glow when `_activeNode` has
+  /// focus and `drawFocusBorder` is on — shared by `_buildGrouped`
+  /// (active group's focused control) and `_tabSkipped` (the.tab.skip
+  /// controls, and ungrouped controls in a grouped doclet per ETB-14)
+  /// so focus indication is consistent across all three.
+  ///
+  /// Implementation details mirror _buildGrouped's original inline
+  /// version: BlurStyle.outer keeps the halo entirely outside the box
+  /// (no content overlap, no resize); the DecoratedBox stays in the
+  /// tree always — only the shadow list toggles — so child State isn't
+  /// recreated on focus change (the grey-grid bug).
+  Widget _focusBorder(Widget child) {
+    if (!widget.drawFocusBorder) return child;
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(6),
+        boxShadow: _activeNode.hasFocus
+            ? const [
+                BoxShadow(
+                  color: Color(0x880066FF),
+                  blurRadius: 10,
+                  spreadRadius: 1,
+                  blurStyle: BlurStyle.outer,
+                ),
+                BoxShadow(
+                  color: Color(0x3D0066FF),
+                  blurRadius: 28,
+                  spreadRadius: 3,
+                  blurStyle: BlurStyle.outer,
+                ),
+              ]
+            : const [],
+      ),
+      child: child,
+    );
+  }
+
   /// `the.tab.skip = True`: the control is NOT a Tab stop, but stays
   /// fully interactive — you can still click it and edit it (e.g. an
   /// ETab the user wants to override cells in without it being in the
   /// Tab order). So: `skipTraversal: true` only; `canRequestFocus` and
-  /// descendant focusability stay ON.
+  /// descendant focusability stay ON. The blue focus glow still draws
+  /// once focused — same indicator as a grouped focused control.
   Widget _tabSkipped(Widget child) {
     if (widget.isProxy) {
       final node = widget.proxyToFocusNode;
@@ -225,13 +263,13 @@ class _EpyxFocusableState extends State<EpyxFocusable> {
         node.skipTraversal = true;
         node.canRequestFocus = true;
       }
-      return child;
+      return _focusBorder(child);
     }
     return Focus(
       focusNode: _ownNode,
       canRequestFocus: true,
       skipTraversal: true,
-      child: child,
+      child: _focusBorder(child),
     );
   }
 
@@ -272,41 +310,10 @@ class _EpyxFocusableState extends State<EpyxFocusable> {
       builder: (context, active, _) {
         final isActive = active == g;
 
-        Widget body = widget.child;
-        if (widget.drawFocusBorder) {
-          // Modern focus GLOW — a soft blue halo just outside the
-          // control's edge, replacing the old 2px line.
-          //  - BlurStyle.outer: the blur is painted ENTIRELY outside
-          //    the box, so it never spills inward over the content.
-          //  - boxShadow is paint-only: the control's size and its
-          //    siblings never shift — no resizing.
-          //  - The DecoratedBox stays in the tree always; only the
-          //    shadow list toggles, so the child's State isn't
-          //    recreated on focus change (the grey-grid bug).
-          // Two layers: a tight bright ring + a wider soft halo.
-          body = DecoratedBox(
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(6),
-              boxShadow: _activeNode.hasFocus
-                  ? const [
-                      BoxShadow(
-                        color: Color(0x880066FF),
-                        blurRadius: 10,
-                        spreadRadius: 1,
-                        blurStyle: BlurStyle.outer,
-                      ),
-                      BoxShadow(
-                        color: Color(0x3D0066FF),
-                        blurRadius: 28,
-                        spreadRadius: 3,
-                        blurStyle: BlurStyle.outer,
-                      ),
-                    ]
-                  : const [],
-            ),
-            child: body,
-          );
-        }
+        // Soft blue focus glow when this control holds focus — shared
+        // helper (`_focusBorder`) so `_tabSkipped` shows the same
+        // indicator. No-op when `drawFocusBorder` is off.
+        Widget body = _focusBorder(widget.child);
         // Group-position pips — top-right of the focus box. One dot per
         // group, the active one filled. Shown EPHEMERALLY: only just
         // after the active group changes (_showGroupHint, set by
