@@ -110,11 +110,13 @@ class _EpyxGridState extends State<EpyxGrid> {
   // -- Scroll tracking for header display --
   int _firstVisibleRow = 0;
 
-  // -- ETB-09c: global (window) pixel position of the tap/drag that
+  // -- ETB-09c: global (window) pixel RECT of the cell whose tap/drag
   //    drove the current selection. Sent in selection_change so the
-  //    cell-formula popup can anchor at the click. Null for keyboard-
-  //    driven selection (Python falls back to a fixed popup position).
-  Offset? _lastSelectGlobal;
+  //    cell-formula popup can sit beside the cell (anchored off the
+  //    cell edge, not the tap point — so it never overlaps the cell)
+  //    with a caret centred on the cell. Null for keyboard-driven
+  //    selection (Python falls back to a fixed popup position).
+  Rect? _lastSelectRect;
 
   // -- Data version: skip rebuild when data hasn't changed --
   String _lastRowsJson = '';
@@ -1954,16 +1956,17 @@ class _EpyxGridState extends State<EpyxGrid> {
         'end_row': _selEndRow,
         'end_col': _selEndCol,
       };
-      // ETB-09c: anchor the cell-formula popup at the click point. We
-      // send the global pixel position of the tap that drove this
-      // selection (set in _onTapDown / _onPanStart). It's null for
-      // keyboard-driven selection — Python then falls back to a fixed
-      // popup position. Using the tap point sidesteps fragile cell-
-      // rect math (scroll / frozen cols / LOD / transposed specs).
-      final a = _lastSelectGlobal;
-      if (a != null) {
-        payload['anchor_x'] = a.dx;
-        payload['anchor_y'] = a.dy;
+      // ETB-09c: send the selected cell's global pixel rect so the
+      // cell-formula popup sits BESIDE the cell (anchored off its edge,
+      // never over it) with a caret centred on the cell. Set in
+      // _onTapDown / _onPanStart; null for keyboard-driven selection,
+      // where Python falls back to a fixed popup position.
+      final r = _lastSelectRect;
+      if (r != null) {
+        payload['cell_left'] = r.left;
+        payload['cell_top'] = r.top;
+        payload['cell_right'] = r.right;
+        payload['cell_bottom'] = r.bottom;
       }
       widget.control.triggerEventWithoutSubscribers(
           'selection_change', jsonEncode(payload));
@@ -2281,6 +2284,10 @@ class _EpyxGridState extends State<EpyxGrid> {
       widget.control.triggerEventWithoutSubscribers('cell_edit', eventData);
     }
 
+    // ETB-09c: keyboard nav has no tap rect — clear it so the popup
+    // falls back to its fixed position rather than anchoring at the
+    // previously-tapped cell.
+    _lastSelectRect = null;
     // Move selection (collapse range) — scroll: false, cell is adjacent and visible
     if (moveDown && _selectedRow < _effectiveRowCount - 1) {
       _moveTo(_selectedRow + 1, _selectedCol, scroll: false);
@@ -2357,14 +2364,56 @@ class _EpyxGridState extends State<EpyxGrid> {
     return (row: row, col: col);
   }
 
+  /// ETB-09c: the GLOBAL (window) rect of cell (row, col), derived from
+  /// the tap. We mirror _hitTestCell's abs-space math to find the tap's
+  /// offset INTO the cell, then express the cell rect in global coords
+  /// relative to the tap (global = local + gridOrigin; the in-cell
+  /// offset is the same in local and global space). Works with frozen
+  /// columns / checkbox / scroll because absX already accounts for them.
+  Rect _cellGlobalRect(Offset local, Offset global, int row, int col) {
+    final headerH = _source.headerRowHeight;
+    final yOffset = _yController.hasClients ? _yController.offset : 0.0;
+    final showCheckbox =
+        widget.control.getBool("show_checkbox_column", false) ?? false;
+    final cbOffset = showCheckbox ? _checkboxColWidth : 0.0;
+    final frozenCount = widget.control.getInt("frozen_columns_count", 0) ?? 0;
+    var localX = local.dx - cbOffset;
+    double absX;
+    if (frozenCount > 0 && frozenCount < _source.columnCount) {
+      final frozenW = _frozenColumnsWidth(frozenCount) - cbOffset;
+      if (localX <= frozenW) {
+        absX = localX;
+      } else {
+        final xOffset = _xController.hasClients ? _xController.offset : 0.0;
+        absX = frozenW + xOffset + (localX - frozenW - 2);
+      }
+    } else {
+      final xOffset = _xController.hasClients ? _xController.offset : 0.0;
+      absX = xOffset + localX;
+    }
+    double cumX = 0;
+    for (int i = 0; i < col && i < _source.columnCount; i++) {
+      cumX += _getColumnWidth(i);
+    }
+    final w = _getColumnWidth(col);
+    final inCellX = absX - cumX;            // tap offset into the cell (x)
+    final cellLeft = global.dx - inCellX;
+    final absY = yOffset + (local.dy - headerH);
+    final rowTop = row * _source.rowHeight;
+    final inCellY = absY - rowTop;          // tap offset into the cell (y)
+    final cellTop = global.dy - inCellY;
+    return Rect.fromLTWH(cellLeft, cellTop, w, _source.rowHeight);
+  }
+
   void _onTapDown(TapDownDetails details) {
     final hit = _hitTestCell(details.localPosition);
     if (hit == null) return;
     final row = hit.row;
     final col = hit.col;
-    // ETB-09c: remember the click point (global/window coords) so the
-    // selection_change event can anchor the cell-formula popup here.
-    _lastSelectGlobal = details.globalPosition;
+    // ETB-09c: remember the cell's global rect so selection_change can
+    // place the cell-formula popup beside the cell (not over it).
+    _lastSelectRect = _cellGlobalRect(
+        details.localPosition, details.globalPosition, row, col);
 
     // Click-away while editing: commit if user modified the text,
     // cancel if unchanged (safe for initiate_editing(initial_text=...)
@@ -2399,7 +2448,8 @@ class _EpyxGridState extends State<EpyxGrid> {
     final hit = _hitTestCell(details.localPosition);
     if (hit == null) return;
     _isDragSelecting = true;
-    _lastSelectGlobal = details.globalPosition;  // ETB-09c anchor
+    _lastSelectRect = _cellGlobalRect(           // ETB-09c anchor
+        details.localPosition, details.globalPosition, hit.row, hit.col);
     // Commit/cancel any in-flight edit before starting a drag selection.
     if (_isEditing) {
       if (_editController.text != _editValue) {
