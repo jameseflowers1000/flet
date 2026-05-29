@@ -213,23 +213,6 @@ class _EpyxFocusableState extends State<EpyxFocusable> {
     });
   }
 
-  /// Wrap `child` so neither it nor any descendant can take focus —
-  /// `descendantsAreFocusable: false` blocks the whole subtree. Used
-  /// for ungrouped controls while a group is active (the design says
-  /// every node outside the active group is non-focusable).
-  Widget _nonFocusable(Widget child) {
-    if (widget.isProxy && widget.proxyToFocusNode?.hasFocus == true) {
-      widget.proxyToFocusNode!.unfocus();
-    }
-    return Focus(
-      focusNode: _ownNode,
-      canRequestFocus: false,
-      skipTraversal: true,
-      descendantsAreFocusable: false,
-      child: child,
-    );
-  }
-
   /// `the.tab.skip = True`: the control is NOT a Tab stop, but stays
   /// fully interactive — you can still click it and edit it (e.g. an
   /// ETab the user wants to override cells in without it being in the
@@ -265,17 +248,18 @@ class _EpyxFocusableState extends State<EpyxFocusable> {
       builder: (context, hasExplicit, _) {
         // Effective group: explicit `the.tab.group`, or the implicit
         // group when the doclet declares none. Null only when this
-        // control is ungrouped AND explicit groups exist elsewhere —
-        // then it's outside every group and non-focusable.
+        // control is ungrouped AND explicit groups exist elsewhere.
         final g = widget.group ?? (hasExplicit ? null : kImplicitGroup);
         if (g == null) {
-          return ValueListenableBuilder<int?>(
-            valueListenable: TabGroupController.instance.activeGroup,
-            builder: (context, active, _) {
-              if (active == null) return widget.child;
-              return _nonFocusable(widget.child);
-            },
-          );
+          // ETB-14: an ungrouped control in a doclet that DOES declare
+          // groups elsewhere is kept OUT of the Tab / group cycle
+          // (skipTraversal) but stays CLICK-FOCUSABLE — clicking in
+          // still gives it keyboard / arrow-key input. Previously it
+          // was fully non-focusable (descendantsAreFocusable: false),
+          // which silently made a table keyboard-dead whenever its
+          // `the.tab.group` was simply omitted (e.g. data.specs while
+          // data.numbers was grouped). Same flags as `the.tab.skip`.
+          return _tabSkipped(widget.child);
         }
         return _buildGrouped(g);
       },
