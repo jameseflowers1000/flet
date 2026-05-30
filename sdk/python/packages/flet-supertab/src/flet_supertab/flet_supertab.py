@@ -22,6 +22,15 @@ class SuperTab(ft.LayoutControl):
     tab_order: Optional[int] = field(default=None, metadata={"data_field": "tab_order"})
     tab_skip: bool = field(default=False, metadata={"data_field": "tab_skip"})
     tab_name: str = field(default="", metadata={"data_field": "tab_name"})
+    # ETB-19 pick mode: while a cell-formula popup is open, a tap on
+    # any grid cell is a REFERENCE PICK (insert at the editor's cursor),
+    # NOT a normal selection that steals focus from the editor. Set by
+    # the orchestrator on every ETab while the popup is mounted; the
+    # grid's _onTapDown skips its `_focusNode.requestFocus()` while
+    # this flag is true so the editor keeps keyboard focus through the
+    # pick (Excel formula-bar behaviour).
+    pick_mode_active: bool = field(default=False,
+                                    metadata={"data_field": "pick_mode_active"})
 
     # JSON-encoded column definitions
     columns: Optional[str] = field(default=None, metadata={"data_field": "columns"})

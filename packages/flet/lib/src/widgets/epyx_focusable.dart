@@ -49,6 +49,13 @@ class EpyxFocusable extends StatefulWidget {
   final bool isProxy;
   final FocusNode? proxyToFocusNode;
 
+  /// ETB-19: when true, a pointer-down on this control is INERT — it
+  /// does not activate its tab group or request focus. The cell-formula
+  /// popup's editor stays focused so the click reads as a reference
+  /// pick, not a control-switch. Set on every ETab while the popup is
+  /// mounted (via SuperTab's `pick_mode_active` field).
+  final bool skipFocusOnTap;
+
   const EpyxFocusable({
     super.key,
     required this.name,
@@ -60,6 +67,7 @@ class EpyxFocusable extends StatefulWidget {
     this.drawFocusBorder = true,
     this.isProxy = false,
     this.proxyToFocusNode,
+    this.skipFocusOnTap = false,
   });
 
   @override
@@ -351,6 +359,10 @@ class _EpyxFocusableState extends State<EpyxFocusable> {
         body = Listener(
           behavior: HitTestBehavior.translucent,
           onPointerDown: (_) {
+            // ETB-19: while pick mode is on, a pointer-down on this
+            // control is a reference pick — DON'T activate the tab
+            // group or grab focus, the editor must keep both.
+            if (widget.skipFocusOnTap) return;
             _onTap(g);
           },
           child: body,

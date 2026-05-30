@@ -949,6 +949,8 @@ class _EpyxGridState extends State<EpyxGrid> {
     // Use LayoutBuilder to handle bounded vs unbounded height.
     // Bounded (Gallery/Fit): Expanded fills available space.
     // Unbounded (Natural mode): grid body determines own height (no Expanded).
+    final pickModeActive =
+        widget.control.getBool("pick_mode_active", false) ?? false;
     return EpyxFocusable(
       name: tabName.isEmpty ? "etab:${widget.control.id}" : tabName,
       group: tabGroup,
@@ -957,6 +959,10 @@ class _EpyxGridState extends State<EpyxGrid> {
       isProxy: true,
       proxyToFocusNode: _focusNode,
       drawFocusBorder: true,
+      // ETB-19: a tap while pick_mode_active is a reference pick — the
+      // wrapper skips its tab-group activate + requestFocus so the
+      // editor in the cell-formula popup keeps keyboard focus.
+      skipFocusOnTap: pickModeActive,
       child: LayoutControl(
       control: widget.control,
       child: LayoutBuilder(
@@ -2431,7 +2437,16 @@ class _EpyxGridState extends State<EpyxGrid> {
     // scroll: false — user tapped a visible cell, don't scroll.
     _moveTo(row, col,
         extend: HardwareKeyboard.instance.isShiftPressed, scroll: false);
-    _focusNode.requestFocus();
+    // ETB-19: while pick_mode_active, the editor in the cell-formula
+    // popup holds focus and we MUST NOT steal it on a tap — the tap is
+    // a reference pick, not a "focus this grid" gesture (Excel
+    // formula-bar behaviour). selection_change still fires below so
+    // the orchestrator can route the pick to insert-at-cursor.
+    final pickActive =
+        widget.control.getBool("pick_mode_active", false) ?? false;
+    if (!pickActive) {
+      _focusNode.requestFocus();
+    }
   }
 
   // ────────────────────────────────────────────────────────────────
