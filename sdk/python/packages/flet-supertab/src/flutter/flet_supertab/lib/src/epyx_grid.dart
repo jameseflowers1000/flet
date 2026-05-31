@@ -2571,12 +2571,21 @@ class _EpyxGridState extends State<EpyxGrid> {
   void _onPickPointerUp(PointerUpEvent event) {
     if (_pickDownPos == null) return;
     _pickDownPos = null;
-    final wasDragging = _pickIsDragging;
     _pickIsDragging = false;
     // Fire selection_change. Single cell when no drag (anchor==end);
     // range when drag occurred (anchor!=end). Orchestrator routes
     // based on tl != br in prop.selection.range.
     _fireSelectionChange();
+    // ETB-19: clear the transient drag-select highlight after picking —
+    // the popup editor now owns the reference, and the marching-ants
+    // overlay (picked_cells channel) will be the persistent visual.
+    // Without this, the green range stays painted on the grid.
+    setState(() {
+      _selectedRow = -1;
+      _selectedCol = -1;
+      _selEndRow = -1;
+      _selEndCol = -1;
+    });
   }
 
   void _onPickPointerCancel(PointerCancelEvent event) {
