@@ -1202,13 +1202,19 @@ class _EpyxGridState extends State<EpyxGrid> {
           final scrollableWidth = _scrollableColumnsWidth(frozenCount);
 
           // ETB-01: drag-select feature flag (read once per build).
+          // ETB-19: pick mode implies drag-select — a drag is how the
+          // user picks a NumPy-slice range into the formula editor;
+          // forcing them to flip allow_drag_select per-ETab would
+          // defeat the gesture.
           final allowDragSelect =
-              widget.control.getBool("allow_drag_select", false) ?? false;
+              (widget.control.getBool("allow_drag_select", false) ?? false)
+              || (widget.control.getBool("pick_mode_active", false) ?? false);
           return Focus(
             focusNode: _focusNode,
             onKeyEvent: _onKeyEvent,
             child: GestureDetector(
               onTapDown: (details) => _onTapDown(details),
+              onTap: _onTap,
               onSecondaryTapDown: (details) => _onSecondaryTapDown(details),
               onPanStart: allowDragSelect ? _onPanStart : null,
               onPanUpdate: allowDragSelect ? _onPanUpdate : null,
@@ -1349,6 +1355,7 @@ class _EpyxGridState extends State<EpyxGrid> {
             onKeyEvent: _onKeyEvent,
             child: GestureDetector(
               onTapDown: (details) => _onTapDown(details),
+              onTap: _onTap,
               onSecondaryTapDown: (details) => _onSecondaryTapDown(details),
               onPanStart: allowDragSelect ? _onPanStart : null,
               onPanUpdate: allowDragSelect ? _onPanUpdate : null,
@@ -1918,7 +1925,8 @@ class _EpyxGridState extends State<EpyxGrid> {
 
   /// Move anchor (and collapse range unless extending).
   /// Set scroll=false for tap events (cell already visible).
-  void _moveTo(int row, int col, {bool extend = false, bool scroll = true}) {
+  void _moveTo(int row, int col, {bool extend = false, bool scroll = true,
+      bool fireEvent = true}) {
     final prevRow = _selectedRow;
     final prevCol = _selectedCol;
     final prevEndRow = _selEndRow;
@@ -1946,13 +1954,15 @@ class _EpyxGridState extends State<EpyxGrid> {
     // shift-click and shift-arrow paths.  Now both paths fire — but only
     // when the (row, col) under their respective slot actually moved, so
     // we don't spam events on shift-arrow against the bound.
-    if (extend) {
-      if (row != prevEndRow || col != prevEndCol) {
-        _fireSelectionChange();
-      }
-    } else {
-      if (row != prevRow || col != prevCol) {
-        _fireSelectionChange();
+    if (fireEvent) {
+      if (extend) {
+        if (row != prevEndRow || col != prevEndCol) {
+          _fireSelectionChange();
+        }
+      } else {
+        if (row != prevRow || col != prevCol) {
+          _fireSelectionChange();
+        }
       }
     }
   }
@@ -2449,18 +2459,32 @@ class _EpyxGridState extends State<EpyxGrid> {
 
     // Shift+click extends selection, plain click moves anchor.
     // scroll: false — user tapped a visible cell, don't scroll.
-    _moveTo(row, col,
-        extend: HardwareKeyboard.instance.isShiftPressed, scroll: false);
-    // ETB-19: while pick_mode_active, the editor in the cell-formula
-    // popup holds focus and we MUST NOT steal it on a tap — the tap is
-    // a reference pick, not a "focus this grid" gesture (Excel
-    // formula-bar behaviour). selection_change still fires below so
-    // the orchestrator can route the pick to insert-at-cursor.
+    // ETB-19: in pick mode, the press might turn into a drag-pick —
+    // defer the selection_change to _onTap (only fires when no drag
+    // occurred) / _onPanEnd (drag did). Otherwise the user gets BOTH
+    // a single-cell pick (from tap_down) AND a range pick (from
+    // pan_end) — the editor gets two inserts per drag.
     final pickActive =
         widget.control.getBool("pick_mode_active", false) ?? false;
+    _moveTo(row, col,
+        extend: HardwareKeyboard.instance.isShiftPressed,
+        scroll: false,
+        fireEvent: !pickActive);
+    // ETB-19: while pick_mode_active, the editor in the cell-formula
+    // popup holds focus and we MUST NOT steal it on a tap.
     if (!pickActive) {
       _focusNode.requestFocus();
     }
+  }
+
+  /// ETB-19: tap (press + release without drag) in pick mode → emit the
+  /// single-cell selection_change here, not in onTapDown — so a drag-pick
+  /// fires once (on pan_end) instead of twice (anchor + range).
+  void _onTap() {
+    final pickActive =
+        widget.control.getBool("pick_mode_active", false) ?? false;
+    if (!pickActive) return;
+    _fireSelectionChange();
   }
 
   // ────────────────────────────────────────────────────────────────
