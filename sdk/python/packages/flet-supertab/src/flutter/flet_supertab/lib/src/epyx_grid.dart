@@ -6,6 +6,7 @@
 //   - SUPERTAB_WIDGET.md §3, §4.6, §4.7, §7 Phase 1
 //   - Prototype: ~/Dropbox/current/epyc/exp/spreadsheet_table1/
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
 
@@ -126,6 +127,15 @@ class _EpyxGridState extends State<EpyxGrid> {
   Offset? _pickDownPos;
   bool _pickIsDragging = false;
   static const double _pickDragThreshold = 4.0;
+  // ETB-19 autoscroll-on-edge while drag-picking: a periodic Timer
+  // pulses _yController when the pointer is held within `_pickEdgeZone`
+  // pixels of the row-list top/bottom. Without this the user can only
+  // pick what's already visible.
+  Offset? _pickLastPointerPos;
+  Timer? _pickAutoScrollTimer;
+  double _pickAutoScrollVel = 0;   // pixels per 16 ms tick (sign = dir)
+  static const double _pickEdgeZone = 60.0;
+  static const double _pickMaxAutoScrollVel = 18.0;
 
   // -- ETB-09c: global (window) pixel RECT of the cell whose tap/drag
   //    drove the current selection. Sent in selection_change so the
@@ -224,6 +234,7 @@ class _EpyxGridState extends State<EpyxGrid> {
     _editController.dispose();
     _editFocusNode.dispose();
     _focusNode.dispose();
+    _pickAutoScrollTimer?.cancel();
     super.dispose();
   }
 
@@ -2558,6 +2569,8 @@ class _EpyxGridState extends State<EpyxGrid> {
       if (dist < _pickDragThreshold) return;
       _pickIsDragging = true;
     }
+    _pickLastPointerPos = event.localPosition;
+    _updatePickAutoScroll(event.localPosition);
     // Update the selection end-cell as the pointer moves.
     final hit = _hitTestCell(event.localPosition);
     if (hit == null) return;
@@ -2572,6 +2585,7 @@ class _EpyxGridState extends State<EpyxGrid> {
     if (_pickDownPos == null) return;
     _pickDownPos = null;
     _pickIsDragging = false;
+    _stopPickAutoScroll();
     // Fire selection_change. Single cell when no drag (anchor==end);
     // range when drag occurred (anchor!=end). Orchestrator routes
     // based on tl != br in prop.selection.range.
@@ -2591,6 +2605,68 @@ class _EpyxGridState extends State<EpyxGrid> {
   void _onPickPointerCancel(PointerCancelEvent event) {
     _pickDownPos = null;
     _pickIsDragging = false;
+    _stopPickAutoScroll();
+  }
+
+  // Compute velocity from pointer's distance into the edge zone and
+  // (re)start the periodic timer that drives the scroll. Stops the
+  // timer when the pointer is back in the middle.
+  void _updatePickAutoScroll(Offset localPos) {
+    if (!_yController.hasClients) return;
+    // Approximate row-list region: header sits above, takes up
+    // (widget.height - viewport.height). Good enough for edge detection.
+    final box = context.findRenderObject();
+    if (box is! RenderBox) return;
+    final totalH = box.size.height;
+    final vpH = _yController.position.viewportDimension;
+    final rowsTop = (totalH - vpH).clamp(0.0, totalH);
+    double vel = 0;
+    if (localPos.dy < rowsTop + _pickEdgeZone) {
+      final into = (rowsTop + _pickEdgeZone - localPos.dy)
+          .clamp(0.0, _pickEdgeZone);
+      vel = -_pickMaxAutoScrollVel * (into / _pickEdgeZone);
+    } else if (localPos.dy > totalH - _pickEdgeZone) {
+      final into = (localPos.dy - (totalH - _pickEdgeZone))
+          .clamp(0.0, _pickEdgeZone);
+      vel = _pickMaxAutoScrollVel * (into / _pickEdgeZone);
+    }
+    _pickAutoScrollVel = vel;
+    if (vel == 0) {
+      _stopPickAutoScroll();
+    } else {
+      _pickAutoScrollTimer ??= Timer.periodic(
+          const Duration(milliseconds: 16), (_) => _pickAutoScrollTick());
+    }
+  }
+
+  void _pickAutoScrollTick() {
+    if (!_yController.hasClients || _pickAutoScrollVel == 0) {
+      _stopPickAutoScroll();
+      return;
+    }
+    final maxScroll = _yController.position.maxScrollExtent;
+    final newOffset =
+        (_yController.offset + _pickAutoScrollVel).clamp(0.0, maxScroll);
+    if (newOffset == _yController.offset) return;
+    _yController.jumpTo(newOffset);
+    // Re-hit-test under the held pointer so the selection extends into
+    // the newly-revealed rows as we scroll past them.
+    final pos = _pickLastPointerPos;
+    if (pos == null) return;
+    final hit = _hitTestCell(pos);
+    if (hit == null) return;
+    if (hit.row == _selEndRow && hit.col == _selEndCol) return;
+    setState(() {
+      _selEndRow = hit.row;
+      _selEndCol = hit.col;
+    });
+  }
+
+  void _stopPickAutoScroll() {
+    _pickAutoScrollTimer?.cancel();
+    _pickAutoScrollTimer = null;
+    _pickAutoScrollVel = 0;
+    _pickLastPointerPos = null;
   }
 
   // ────────────────────────────────────────────────────────────────
