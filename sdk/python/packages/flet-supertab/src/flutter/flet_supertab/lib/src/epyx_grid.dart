@@ -1254,11 +1254,17 @@ class _EpyxGridState extends State<EpyxGrid> {
                           Expanded(
                             child: SuperListView.builder(
                               controller: _getFrozenController(),
+                              // ETB-19: same as the scrollable panel below
+                              // — disable the inner scroll while drag-pick
+                              // is on so onPanStart wins the arena.
+                              physics: allowDragSelect
+                                  ? const NeverScrollableScrollPhysics()
+                                  : null,
                               itemCount: itemCount,
                           extentEstimation: (i, _) => i != null
                             ? _cache.fastRowHeight(i)
                             : (_cache.hasHeightOverrides ? 0.0 : _cache.defaultRowHeight),
-                              
+
                               itemBuilder: (context, index) {
                                 if (cacheActive) {
                                   return _buildCachedRow(index, colEnd: frozenCount);
@@ -1313,6 +1319,15 @@ class _EpyxGridState extends State<EpyxGrid> {
                                 child: SuperListView.builder(
                                   controller: _yController,
                                   listController: _listController,
+                                  // ETB-19: while drag-pick is enabled
+                                  // (pick mode), the row list MUST NOT
+                                  // own vertical drags — otherwise its
+                                  // scroll recogniser wins the arena
+                                  // before _onPanStart can fire. Scroll
+                                  // resumes when the popup closes.
+                                  physics: allowDragSelect
+                                      ? const NeverScrollableScrollPhysics()
+                                      : null,
                                   itemCount: itemCount,
                           extentEstimation: (i, _) => i != null
                             ? _cache.fastRowHeight(i)
@@ -1399,6 +1414,10 @@ class _EpyxGridState extends State<EpyxGrid> {
                         child: SuperListView.builder(
                           controller: _yController,
                           listController: _listController,
+                          // ETB-19: scroll yields to drag-pick in pick mode.
+                          physics: allowDragSelect
+                              ? const NeverScrollableScrollPhysics()
+                              : null,
                           itemCount: scrollableRowCount.clamp(0, itemCount),
                           extentEstimation: (i, _) => i != null
                             ? _cache.fastRowHeight(i)
