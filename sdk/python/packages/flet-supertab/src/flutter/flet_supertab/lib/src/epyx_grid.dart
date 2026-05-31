@@ -116,6 +116,17 @@ class _EpyxGridState extends State<EpyxGrid> {
   //    and Cmd-click → retarget (keep editing a different cell).
   bool _lastSelectMeta = false;
 
+  // -- ETB-19: raw-pointer drag detection used in PICK MODE only.
+  //    Flutter's GestureDetector pan recognisers were unreliable
+  //    against the row-list's drag (gesture arena races). The Listener
+  //    that wraps the build in pick mode bypasses the arena entirely:
+  //    onPointerDown captures the start, onPointerMove starts the
+  //    drag once we cross a small threshold, onPointerUp emits the
+  //    selection_change (single cell if no drag, range otherwise).
+  Offset? _pickDownPos;
+  bool _pickIsDragging = false;
+  static const double _pickDragThreshold = 4.0;
+
   // -- ETB-09c: global (window) pixel RECT of the cell whose tap/drag
   //    drove the current selection. Sent in selection_change so the
   //    cell-formula popup can sit beside the cell (anchored off the
@@ -1201,24 +1212,35 @@ class _EpyxGridState extends State<EpyxGrid> {
           final frozenWidth = _frozenColumnsWidth(frozenCount);
           final scrollableWidth = _scrollableColumnsWidth(frozenCount);
 
-          // ETB-01: drag-select feature flag (read once per build).
-          // ETB-19: pick mode implies drag-select — a drag is how the
-          // user picks a NumPy-slice range into the formula editor;
-          // forcing them to flip allow_drag_select per-ETab would
-          // defeat the gesture.
-          final allowDragSelect =
-              (widget.control.getBool("allow_drag_select", false) ?? false)
-              || (widget.control.getBool("pick_mode_active", false) ?? false);
+          // ETB-01 legacy flag.
+          final allowLegacyDragSelect =
+              widget.control.getBool("allow_drag_select", false) ?? false;
+          // ETB-19: pick mode also yields scroll (physics gate) so the
+          // Listener can see pointer moves cleanly. But the pan
+          // recognisers stay NULL in pick mode — the Listener drives
+          // drag detection; wiring pan would double-fire.
+          final pickModeActive =
+              widget.control.getBool("pick_mode_active", false) ?? false;
+          final allowDragSelect = allowLegacyDragSelect || pickModeActive;
+          final wirePan = allowLegacyDragSelect && !pickModeActive;
           return Focus(
             focusNode: _focusNode,
             onKeyEvent: _onKeyEvent,
-            child: GestureDetector(
+            child: Listener(
+              // ETB-19: raw-pointer drag detection runs in pick mode
+              // (no-op otherwise). Listener fires regardless of the
+              // gesture arena, so the row-list's scroll recogniser
+              // can't claim the drag.
+              onPointerDown: _onPickPointerDown,
+              onPointerMove: _onPickPointerMove,
+              onPointerUp: _onPickPointerUp,
+              onPointerCancel: _onPickPointerCancel,
+              child: GestureDetector(
               onTapDown: (details) => _onTapDown(details),
-              onTap: _onTap,
               onSecondaryTapDown: (details) => _onSecondaryTapDown(details),
-              onPanStart: allowDragSelect ? _onPanStart : null,
-              onPanUpdate: allowDragSelect ? _onPanUpdate : null,
-              onPanEnd: allowDragSelect ? _onPanEnd : null,
+              onPanStart: wirePan ? _onPanStart : null,
+              onPanUpdate: wirePan ? _onPanUpdate : null,
+              onPanEnd: wirePan ? _onPanEnd : null,
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -1352,6 +1374,7 @@ class _EpyxGridState extends State<EpyxGrid> {
                 ],
               ),
             ),
+            ),
           );
         }
 
@@ -1359,22 +1382,36 @@ class _EpyxGridState extends State<EpyxGrid> {
         final frozenRows = widget.control.getInt("frozen_rows_count", 0) ?? 0;
         final scrollableRowCount = itemCount - frozenRows;
 
-        // ETB-01: drag-select feature flag (read once per build).
-        final allowDragSelect =
+        // ETB-01 legacy flag.
+        final allowLegacyDragSelect =
             widget.control.getBool("allow_drag_select", false) ?? false;
+        // ETB-19: pick mode yields scroll (physics gate) so the Listener
+        // can see pointer moves cleanly; pan recognisers stay NULL —
+        // the Listener drives drag detection (wiring pan would
+        // double-fire selection_change).
+        final pickModeActive =
+            widget.control.getBool("pick_mode_active", false) ?? false;
+        final allowDragSelect = allowLegacyDragSelect || pickModeActive;
+        final wirePan = allowLegacyDragSelect && !pickModeActive;
         return MouseRegion(
           onHover: (event) => _onHover(event.localPosition),
           onExit: (_) => _onHoverExit(),
           child: Focus(
             focusNode: _focusNode,
             onKeyEvent: _onKeyEvent,
-            child: GestureDetector(
+            child: Listener(
+              // ETB-19: raw-pointer drag detection — same as the
+              // frozen-columns path above.
+              onPointerDown: _onPickPointerDown,
+              onPointerMove: _onPickPointerMove,
+              onPointerUp: _onPickPointerUp,
+              onPointerCancel: _onPickPointerCancel,
+              child: GestureDetector(
               onTapDown: (details) => _onTapDown(details),
-              onTap: _onTap,
               onSecondaryTapDown: (details) => _onSecondaryTapDown(details),
-              onPanStart: allowDragSelect ? _onPanStart : null,
-              onPanUpdate: allowDragSelect ? _onPanUpdate : null,
-              onPanEnd: allowDragSelect ? _onPanEnd : null,
+              onPanStart: wirePan ? _onPanStart : null,
+              onPanUpdate: wirePan ? _onPanUpdate : null,
+              onPanEnd: wirePan ? _onPanEnd : null,
               child: SingleChildScrollView(
               controller: _xController,
               scrollDirection: Axis.horizontal,
@@ -1441,6 +1478,7 @@ class _EpyxGridState extends State<EpyxGrid> {
                 ),
               ),
             ),
+          ),
           ),
         ),
         );
@@ -2496,14 +2534,54 @@ class _EpyxGridState extends State<EpyxGrid> {
     }
   }
 
-  /// ETB-19: tap (press + release without drag) in pick mode → emit the
-  /// single-cell selection_change here, not in onTapDown — so a drag-pick
-  /// fires once (on pan_end) instead of twice (anchor + range).
-  void _onTap() {
+  // ── ETB-19: raw-pointer drag detection (Listener handlers) ─────────
+  //
+  // We tap into `Listener` events, which fire BEFORE Flutter's gesture
+  // arena and don't compete with scroll views, so we get reliable
+  // pointer down/move/up tracking regardless of what GestureDetectors
+  // sit underneath. Only active while pick_mode_active is true; outside
+  // pick mode these are no-ops and the existing GestureDetector
+  // (onTapDown / onPan*) handles selection as before.
+
+  void _onPickPointerDown(PointerDownEvent event) {
     final pickActive =
         widget.control.getBool("pick_mode_active", false) ?? false;
     if (!pickActive) return;
+    _pickDownPos = event.localPosition;
+    _pickIsDragging = false;
+  }
+
+  void _onPickPointerMove(PointerMoveEvent event) {
+    if (_pickDownPos == null) return;
+    final dist = (event.localPosition - _pickDownPos!).distance;
+    if (!_pickIsDragging) {
+      if (dist < _pickDragThreshold) return;
+      _pickIsDragging = true;
+    }
+    // Update the selection end-cell as the pointer moves.
+    final hit = _hitTestCell(event.localPosition);
+    if (hit == null) return;
+    if (hit.row == _selEndRow && hit.col == _selEndCol) return;
+    setState(() {
+      _selEndRow = hit.row;
+      _selEndCol = hit.col;
+    });
+  }
+
+  void _onPickPointerUp(PointerUpEvent event) {
+    if (_pickDownPos == null) return;
+    _pickDownPos = null;
+    final wasDragging = _pickIsDragging;
+    _pickIsDragging = false;
+    // Fire selection_change. Single cell when no drag (anchor==end);
+    // range when drag occurred (anchor!=end). Orchestrator routes
+    // based on tl != br in prop.selection.range.
     _fireSelectionChange();
+  }
+
+  void _onPickPointerCancel(PointerCancelEvent event) {
+    _pickDownPos = null;
+    _pickIsDragging = false;
   }
 
   // ────────────────────────────────────────────────────────────────
