@@ -34,6 +34,12 @@ class _VimEditorFletWidgetState extends State<VimEditorFletWidget> {
   int _lspAttempt = 0;
   int _nvimAttempt = 0;
   bool _lspConnecting = false;
+  // ETB-19: counter mirroring `VimEditor.pending_insert_seq` from
+  // Python. Bumps when the orchestrator wants us to insert a cell
+  // reference at the cursor; didUpdateWidget detects the bump and
+  // routes the text to the active backend (nvim_put for vim mode,
+  // session text append for EZ mode in v1).
+  int _lastInsertSeq = 0;
 
   // ETB-09b followup #12 — share a single LspClient across ALL VimEditor
   // instances on the same lsp_ws_url. Previously each instance created
@@ -271,6 +277,39 @@ class _VimEditorFletWidgetState extends State<VimEditorFletWidget> {
     }
     _maybeStartLsp();
     _maybeStartNvim();
+    // ETB-19: insert-at-cursor request from Python. The Python side
+    // calls `editor.insert_at_cursor(text)` which bumps
+    // `pending_insert_seq` and stuffs the text in `pending_insert_text`.
+    // We mirror the seq locally and dispatch when it moves forward.
+    final newSeq = widget.control.getInt("pending_insert_seq", 0) ?? 0;
+    if (newSeq > _lastInsertSeq) {
+      _lastInsertSeq = newSeq;
+      final text = widget.control.getString("pending_insert_text") ?? '';
+      if (text.isNotEmpty) {
+        _handleInsertAtCursor(text);
+      }
+    }
+  }
+
+  /// ETB-19: insert `text` at the editor's current cursor. Vim mode →
+  /// `nvim_put` (mode-agnostic, single undo step); EZ mode (v1) → append
+  /// to session text. Same API surface from Python regardless of mode.
+  void _handleInsertAtCursor(String text) {
+    final rpc = _nvim?.rpc;
+    if (rpc != null) {
+      // 'c' = char-mode; after=false = insert AT cursor; follow=true =
+      // move cursor to the end of the inserted text. Works whether the
+      // user is in normal or insert mode.
+      rpc.request('nvim_put', [[text], 'c', false, true]).catchError((e) {
+        print('[etb19] nvim_put failed: $e');
+      });
+      return;
+    }
+    // EZ-mode fallback v1: append at the end. Cursor-position insertion
+    // for EZ is a quick follow-up (TextEditingController.selection).
+    if (_session != null) {
+      _session!.setText(_session!.text + text);
+    }
   }
 
   @override

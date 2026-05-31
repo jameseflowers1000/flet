@@ -61,6 +61,31 @@ class VimEditor(ft.LayoutControl):
     the ETB-09b cell popup DOES — the user just hit Cmd-E expecting
     to type into the formula immediately."""
 
+    # ── ETB-19 programmatic insertion at cursor ───────────────────
+    # Excel-style cell-reference picking: when the user clicks a grid
+    # cell while the cell-formula popup is open, the orchestrator wants
+    # to drop that cell's reference text at the editor's cursor. The
+    # Python side calls `insert_at_cursor(text)`; we bump
+    # `pending_insert_seq` and stuff the text in `pending_insert_text`.
+    # The Dart side watches `pending_insert_seq` — when it changes, it
+    # inserts the text at the current cursor (via `nvim_input` in vim
+    # mode, via the TextEditingController in EZ). Same primitive for
+    # both modes, same UX.
+    pending_insert_seq: int = 0
+    pending_insert_text: str = ""
+
+    def insert_at_cursor(self, text: str) -> None:
+        """Insert `text` at the editor's current cursor. Used by the
+        cell-formula popup's pick path."""
+        if not text:
+            return
+        self.pending_insert_seq = int(self.pending_insert_seq or 0) + 1
+        self.pending_insert_text = text
+        try:
+            self.update()
+        except Exception:
+            pass
+
     # ── events ─────────────────────────────────────────────────────
     # Implemented as method-style events on Flet's control protocol.
     # The Dart side calls `triggerEvent("save", {"text": ...})` on

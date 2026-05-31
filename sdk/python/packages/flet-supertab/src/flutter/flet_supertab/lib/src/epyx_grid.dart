@@ -110,6 +110,12 @@ class _EpyxGridState extends State<EpyxGrid> {
   // -- Scroll tracking for header display --
   int _firstVisibleRow = 0;
 
+  // -- ETB-19: Cmd/Meta-modifier of the last tap. Captured in
+  //    _onTapDown / _onPanStart, emitted in selection_change so the
+  //    orchestrator can route plain-click → pick (insert reference)
+  //    and Cmd-click → retarget (keep editing a different cell).
+  bool _lastSelectMeta = false;
+
   // -- ETB-09c: global (window) pixel RECT of the cell whose tap/drag
   //    drove the current selection. Sent in selection_change so the
   //    cell-formula popup can sit beside the cell (anchored off the
@@ -1974,6 +1980,10 @@ class _EpyxGridState extends State<EpyxGrid> {
         payload['cell_right'] = r.right;
         payload['cell_bottom'] = r.bottom;
       }
+      // ETB-19: meta=true ⇒ Cmd/Ctrl was held → orchestrator interprets
+      // as RETARGET (keep editing a different cell). False ⇒ plain
+      // click → PICK (insert reference at editor cursor).
+      payload['meta'] = _lastSelectMeta;
       widget.control.triggerEventWithoutSubscribers(
           'selection_change', jsonEncode(payload));
     } catch (_) {
@@ -2420,6 +2430,10 @@ class _EpyxGridState extends State<EpyxGrid> {
     // place the cell-formula popup beside the cell (not over it).
     _lastSelectRect = _cellGlobalRect(
         details.localPosition, details.globalPosition, row, col);
+    // ETB-19: record Cmd/Meta (and Ctrl on non-mac) so the orchestrator
+    // can route Cmd-click → retarget vs plain click → reference pick.
+    _lastSelectMeta = HardwareKeyboard.instance.isMetaPressed
+        || HardwareKeyboard.instance.isControlPressed;
 
     // Click-away while editing: commit if user modified the text,
     // cancel if unchanged (safe for initiate_editing(initial_text=...)
