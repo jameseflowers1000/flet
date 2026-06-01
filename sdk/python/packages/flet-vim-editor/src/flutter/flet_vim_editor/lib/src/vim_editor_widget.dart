@@ -285,30 +285,59 @@ class _VimEditorFletWidgetState extends State<VimEditorFletWidget> {
     if (newSeq > _lastInsertSeq) {
       _lastInsertSeq = newSeq;
       final text = widget.control.getString("pending_insert_text") ?? '';
+      final replaceLen =
+          widget.control.getInt("pending_insert_replace_len", 0) ?? 0;
       if (text.isNotEmpty) {
-        _handleInsertAtCursor(text);
+        _handleInsertAtCursor(text, replaceLen);
       }
     }
   }
 
-  /// ETB-19: insert `text` at the editor's current cursor. Vim mode →
-  /// `nvim_put` (mode-agnostic, single undo step); EZ mode (v1) → append
-  /// to session text. Same API surface from Python regardless of mode.
-  void _handleInsertAtCursor(String text) {
+  /// ETB-19: insert `text` at the editor's current cursor. When
+  /// `replaceLen > 0`, delete that many characters immediately before
+  /// the cursor first (Excel-style "replace previous pick"). Vim mode
+  /// uses the buffer API so it remains a single undo unit; EZ mode (v1)
+  /// appends to session text.
+  void _handleInsertAtCursor(String text, [int replaceLen = 0]) {
     final rpc = _nvim?.rpc;
     if (rpc != null) {
-      // 'c' = char-mode; after=false = insert AT cursor; follow=true =
-      // move cursor to the end of the inserted text. Works whether the
-      // user is in normal or insert mode.
-      rpc.request('nvim_put', [[text], 'c', false, true]).catchError((e) {
-        print('[etb19] nvim_put failed: $e');
-      });
+      if (replaceLen > 0) {
+        _replaceAndInsertVim(rpc, text, replaceLen);
+      } else {
+        // 'c' = char-mode; after=false = insert AT cursor; follow=true =
+        // move cursor to the end of the inserted text. Works whether the
+        // user is in normal or insert mode.
+        rpc.request('nvim_put', [[text], 'c', false, true]).catchError((e) {
+          print('[etb19] nvim_put failed: $e');
+        });
+      }
       return;
     }
     // EZ-mode fallback v1: append at the end. Cursor-position insertion
     // for EZ is a quick follow-up (TextEditingController.selection).
     if (_session != null) {
       _session!.setText(_session!.text + text);
+    }
+  }
+
+  /// ETB-19 replace-previous-pick: get cursor, delete `replaceLen`
+  /// columns to the left, insert `text`, and move the cursor to the end
+  /// of the inserted text. Uses nvim_buf_set_text so it's a single undo
+  /// step independent of editor mode.
+  Future<void> _replaceAndInsertVim(
+      dynamic rpc, String text, int replaceLen) async {
+    try {
+      final cursor = await rpc.request('nvim_win_get_cursor', [0]);
+      // [line_1based, col_0based_bytes]
+      final line0 = (cursor[0] as int) - 1;
+      final col0 = cursor[1] as int;
+      final newCol = (col0 - replaceLen).clamp(0, col0);
+      await rpc.request(
+          'nvim_buf_set_text', [0, line0, newCol, line0, col0, [text]]);
+      await rpc.request(
+          'nvim_win_set_cursor', [0, [line0 + 1, newCol + text.length]]);
+    } catch (e) {
+      print('[etb19] replace+insert failed: $e');
     }
   }
 

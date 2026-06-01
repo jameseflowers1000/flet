@@ -15,6 +15,7 @@ import 'package:flet_micropython/flet_micropython.dart' show RenderPlaneControl;
 import 'package:flet_micropython/src/micropython_service.dart'
     if (dart.library.io) 'package:flet_micropython/src/micropython_service_native.dart';
 import 'package:flutter/foundation.dart' show defaultTargetPlatform, TargetPlatform, kIsWeb;
+import 'package:flutter/gestures.dart' show PointerSignalEvent, PointerScrollEvent;
 import 'dart:io' show File, FileMode;
 import 'package:flutter/material.dart';
 import 'package:super_sliver_list/super_sliver_list.dart';
@@ -128,30 +129,10 @@ class _EpyxGridState extends State<EpyxGrid>
   Offset? _pickDownPos;
   bool _pickIsDragging = false;
   static const double _pickDragThreshold = 4.0;
-  // ETB-19 autoscroll-on-edge while drag-picking: a periodic Timer
-  // pulses _yController when the pointer is held within `_pickEdgeZone`
-  // pixels of the row-list top/bottom. Without this the user can only
-  // pick what's already visible.
+  // Last seen pointer position during pick-mode drag. Wheel events
+  // re-hit-test against this so the user can scroll-then-release
+  // without having to jiggle the cursor.
   Offset? _pickLastPointerPos;
-  // Wall-clock of the last PointerMove during a drag-pick. Used to
-  // gate autoscroll: if the cursor sits still longer than
-  // `_pickMoveIdleMs`, the timer cancels itself. This puts the scroll
-  // under direct user control — hold still to stop, jiggle to keep
-  // going, fling past the edge for fast traversal.
-  DateTime? _pickLastMoveAt;
-  static const int _pickMoveIdleMs = 120;
-  Timer? _pickAutoScrollTimer;
-  double _pickAutoScrollVel = 0;   // pixels per 16 ms tick (sign = dir)
-  static const double _pickEdgeZone = 110.0;
-  // 2 px / 16 ms ≈ 125 px/s ≈ 4–5 rows/s at peak. Earlier 5 px/tick
-  // (~12 rows/s) made it impossible to release on the row you wanted —
-  // by the time you reacted, the selection had moved past. With this
-  // peak and a 110 px quadratic ramp:
-  //   10 px in  → ~0.02 row/s  (essentially parked)
-  //   60 px in  → ~1.4 rows/s  (steady navigation)
-  //   110 px in → ~4.6 rows/s  (full speed; only reached when the
-  //                            cursor is at or past the widget edge)
-  static const double _pickMaxAutoScrollVel = 2.0;
   // ETB-19 marching-ants: animation driver + parsed picks. Repaint
   // listenable is the merge of the controller + scroll controllers,
   // so the painter ticks every frame AND on scroll.
@@ -262,7 +243,6 @@ class _EpyxGridState extends State<EpyxGrid>
     _editController.dispose();
     _editFocusNode.dispose();
     _focusNode.dispose();
-    _pickAutoScrollTimer?.cancel();
     _antsController.dispose();
     super.dispose();
   }
@@ -1276,6 +1256,7 @@ class _EpyxGridState extends State<EpyxGrid>
               onPointerMove: _onPickPointerMove,
               onPointerUp: _onPickPointerUp,
               onPointerCancel: _onPickPointerCancel,
+              onPointerSignal: _onPickPointerSignal,
               child: GestureDetector(
               onTapDown: (details) => _onTapDown(details),
               // ETB-19: suppress cell context menu in pick mode — a slow
@@ -1452,6 +1433,7 @@ class _EpyxGridState extends State<EpyxGrid>
               onPointerMove: _onPickPointerMove,
               onPointerUp: _onPickPointerUp,
               onPointerCancel: _onPickPointerCancel,
+              onPointerSignal: _onPickPointerSignal,
               child: GestureDetector(
               onTapDown: (details) => _onTapDown(details),
               // ETB-19: suppress cell context menu in pick mode — a slow
@@ -2639,8 +2621,6 @@ class _EpyxGridState extends State<EpyxGrid>
       _pickIsDragging = true;
     }
     _pickLastPointerPos = event.localPosition;
-    _pickLastMoveAt = DateTime.now();
-    _updatePickAutoScroll(event.localPosition);
     // Update the selection end-cell as the pointer moves.
     final hit = _hitTestCell(event.localPosition);
     if (hit == null) return;
@@ -2655,7 +2635,6 @@ class _EpyxGridState extends State<EpyxGrid>
     if (_pickDownPos == null) return;
     _pickDownPos = null;
     _pickIsDragging = false;
-    _stopPickAutoScroll();
     // Fire selection_change. Single cell when no drag (anchor==end);
     // range when drag occurred (anchor!=end). Orchestrator routes
     // based on tl != br in prop.selection.range.
@@ -2675,90 +2654,38 @@ class _EpyxGridState extends State<EpyxGrid>
   void _onPickPointerCancel(PointerCancelEvent event) {
     _pickDownPos = null;
     _pickIsDragging = false;
-    _stopPickAutoScroll();
+    _pickLastPointerPos = null;
   }
 
-  // Pixel-based edge autoscroll. Velocity grows quadratically with how
-  // far the pointer is INTO the edge zone — near the boundary it's a
-  // crawl, deep in (or off the widget) it's full speed. Curve choice
-  // matters: a linear ramp at our peak velocity (5 px / tick) still
-  // felt twitchy; squaring the depth gives fine control near the
-  // boundary so the user can park the cursor and inch the selection.
-  //
-  // NOTE: an earlier draft also added a row-based fallback that fired
-  // whenever _selEndRow touched the first/last visible row. That created
-  // a runaway feedback loop on reverse (scroll exposes new rows → hit-
-  // test under stationary cursor picks up the new outermost row →
-  // _selEndRow stays at boundary → keeps firing → cursor "can't catch
-  // it"). Removed.
-  void _updatePickAutoScroll(Offset localPos) {
+  // ETB-19: in pick mode, the SuperListView uses NeverScrollableScrollPhysics
+  // so the gesture arena doesn't claim the drag for scrolling. That also
+  // blocks wheel / two-finger swipe input though — fix it here: handle
+  // wheel events at the Listener level, drive `_yController` manually, and
+  // re-hit-test under the last cursor position so the selection extends
+  // into the freshly-revealed rows without the user having to jiggle the
+  // mouse.
+  void _onPickPointerSignal(PointerSignalEvent event) {
+    final pickActive =
+        widget.control.getBool("pick_mode_active", false) ?? false;
+    if (!pickActive) return;
+    if (event is! PointerScrollEvent) return;
     if (!_yController.hasClients) return;
     final pos = _yController.position;
-    final vpH = pos.viewportDimension;
-    if (vpH <= 0) return;
-    // localPos.dy is relative to the Listener (whole grid). Convert to
-    // viewport-local by subtracting the header above.
-    final viewportLocalY = localPos.dy - _source.headerRowHeight;
-    double vel = 0;
-    if (viewportLocalY < _pickEdgeZone) {
-      final into = (_pickEdgeZone - viewportLocalY)
-          .clamp(0.0, _pickEdgeZone);
-      final t = into / _pickEdgeZone;
-      vel = -_pickMaxAutoScrollVel * t * t;
-    } else if (viewportLocalY > vpH - _pickEdgeZone) {
-      final into = (viewportLocalY - (vpH - _pickEdgeZone))
-          .clamp(0.0, _pickEdgeZone);
-      final t = into / _pickEdgeZone;
-      vel = _pickMaxAutoScrollVel * t * t;
+    final newOffset = (pos.pixels + event.scrollDelta.dy)
+        .clamp(0.0, pos.maxScrollExtent);
+    if (newOffset != pos.pixels) {
+      _yController.jumpTo(newOffset);
     }
-    _pickAutoScrollVel = vel;
-    if (vel == 0) {
-      _stopPickAutoScroll();
-    } else {
-      _pickAutoScrollTimer ??= Timer.periodic(
-          const Duration(milliseconds: 16), (_) => _pickAutoScrollTick());
-    }
-  }
-
-  void _pickAutoScrollTick() {
-    if (!_yController.hasClients || _pickAutoScrollVel == 0) {
-      _stopPickAutoScroll();
-      return;
-    }
-    // Motion-gate: if the cursor has been stationary for more than
-    // `_pickMoveIdleMs`, freeze the scroll. The user is in control —
-    // hold still to stop, move again to resume.
-    final lastMove = _pickLastMoveAt;
-    if (lastMove != null &&
-        DateTime.now().difference(lastMove).inMilliseconds >
-            _pickMoveIdleMs) {
-      _stopPickAutoScroll();
-      return;
-    }
-    final maxScroll = _yController.position.maxScrollExtent;
-    final newOffset =
-        (_yController.offset + _pickAutoScrollVel).clamp(0.0, maxScroll);
-    if (newOffset == _yController.offset) return;
-    _yController.jumpTo(newOffset);
-    // Re-hit-test under the held pointer so the selection extends into
-    // the newly-revealed rows as we scroll past them.
-    final pos = _pickLastPointerPos;
-    if (pos == null) return;
-    final hit = _hitTestCell(pos);
+    // Extend selection to whatever's now under the cursor.
+    final p = _pickLastPointerPos;
+    if (p == null || _pickDownPos == null) return;
+    final hit = _hitTestCell(p);
     if (hit == null) return;
     if (hit.row == _selEndRow && hit.col == _selEndCol) return;
     setState(() {
       _selEndRow = hit.row;
       _selEndCol = hit.col;
     });
-  }
-
-  void _stopPickAutoScroll() {
-    _pickAutoScrollTimer?.cancel();
-    _pickAutoScrollTimer = null;
-    _pickAutoScrollVel = 0;
-    _pickLastPointerPos = null;
-    _pickLastMoveAt = null;
   }
 
   // ── ETB-19 marching ants ─────────────────────────────────────────

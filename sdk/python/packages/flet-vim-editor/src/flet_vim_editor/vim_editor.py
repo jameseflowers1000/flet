@@ -73,12 +73,20 @@ class VimEditor(ft.LayoutControl):
     # both modes, same UX.
     pending_insert_seq: int = 0
     pending_insert_text: str = ""
+    # ETB-19: when > 0, the Dart side deletes this many characters
+    # immediately before the cursor BEFORE inserting `pending_insert_text`.
+    # Used by the orchestrator's "replace previous pick" path so each
+    # new cell-pick swaps in a fresh reference instead of appending.
+    pending_insert_replace_len: int = 0
 
-    def insert_at_cursor(self, text: str) -> None:
-        """Insert `text` at the editor's current cursor. Used by the
-        cell-formula popup's pick path."""
+    def insert_at_cursor(self, text: str, replace_len: int = 0) -> None:
+        """Insert `text` at the editor's current cursor. If `replace_len`
+        is non-zero, delete that many characters immediately before the
+        cursor first (Excel-style: each new pick replaces the previously
+        picked reference). Used by the cell-formula popup's pick path."""
         if not text:
             return
+        self.pending_insert_replace_len = int(replace_len or 0)
         self.pending_insert_seq = int(self.pending_insert_seq or 0) + 1
         self.pending_insert_text = text
         try:
