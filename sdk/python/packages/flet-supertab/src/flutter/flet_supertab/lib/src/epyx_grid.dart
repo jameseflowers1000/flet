@@ -15,7 +15,11 @@ import 'package:flet_micropython/flet_micropython.dart' show RenderPlaneControl;
 import 'package:flet_micropython/src/micropython_service.dart'
     if (dart.library.io) 'package:flet_micropython/src/micropython_service_native.dart';
 import 'package:flutter/foundation.dart' show defaultTargetPlatform, TargetPlatform, kIsWeb;
-import 'package:flutter/gestures.dart' show PointerSignalEvent, PointerScrollEvent;
+import 'package:flutter/gestures.dart'
+    show
+        PointerSignalEvent,
+        PointerScrollEvent,
+        PointerPanZoomUpdateEvent;
 import 'dart:io' show File, FileMode;
 import 'package:flutter/material.dart';
 import 'package:super_sliver_list/super_sliver_list.dart';
@@ -1257,6 +1261,7 @@ class _EpyxGridState extends State<EpyxGrid>
               onPointerUp: _onPickPointerUp,
               onPointerCancel: _onPickPointerCancel,
               onPointerSignal: _onPickPointerSignal,
+              onPointerPanZoomUpdate: _onPickPanZoomUpdate,
               child: GestureDetector(
               onTapDown: (details) => _onTapDown(details),
               // ETB-19: suppress cell context menu in pick mode — a slow
@@ -1434,6 +1439,7 @@ class _EpyxGridState extends State<EpyxGrid>
               onPointerUp: _onPickPointerUp,
               onPointerCancel: _onPickPointerCancel,
               onPointerSignal: _onPickPointerSignal,
+              onPointerPanZoomUpdate: _onPickPanZoomUpdate,
               child: GestureDetector(
               onTapDown: (details) => _onTapDown(details),
               // ETB-19: suppress cell context menu in pick mode — a slow
@@ -2659,24 +2665,45 @@ class _EpyxGridState extends State<EpyxGrid>
 
   // ETB-19: in pick mode, the SuperListView uses NeverScrollableScrollPhysics
   // so the gesture arena doesn't claim the drag for scrolling. That also
-  // blocks wheel / two-finger swipe input though — fix it here: handle
-  // wheel events at the Listener level, drive `_yController` manually, and
-  // re-hit-test under the last cursor position so the selection extends
-  // into the freshly-revealed rows without the user having to jiggle the
-  // mouse.
+  // blocks wheel / two-finger swipe input though — re-implement both at
+  // the Listener level: drive `_yController` manually and re-hit-test
+  // under the stationary cursor so the selection extends into the freshly-
+  // revealed rows without requiring the user to jiggle the mouse.
+  //
+  // Two signal types matter on macOS:
+  //   * Mouse wheel → PointerSignalEvent (PointerScrollEvent subtype),
+  //     handled by onPointerSignal. scrollDelta is ADDED to offset.
+  //   * Trackpad two-finger swipe → PointerPanZoomUpdateEvent, handled
+  //     by onPointerPanZoomUpdate. panDelta is SUBTRACTED (Flutter
+  //     convention — pan direction is opposite of scroll direction).
   void _onPickPointerSignal(PointerSignalEvent event) {
     final pickActive =
         widget.control.getBool("pick_mode_active", false) ?? false;
     if (!pickActive) return;
     if (event is! PointerScrollEvent) return;
+    _applyPickScroll(event.scrollDelta.dy);
+  }
+
+  void _onPickPanZoomUpdate(PointerPanZoomUpdateEvent event) {
+    final pickActive =
+        widget.control.getBool("pick_mode_active", false) ?? false;
+    if (!pickActive) return;
+    // Negate: a downward two-finger swipe (panDelta.dy > 0) should
+    // reveal earlier content (scroll offset decreases) — macOS natural-
+    // scrolling. Flutter's own Scrollable does the same.
+    _applyPickScroll(-event.panDelta.dy);
+  }
+
+  void _applyPickScroll(double dyDelta) {
     if (!_yController.hasClients) return;
     final pos = _yController.position;
-    final newOffset = (pos.pixels + event.scrollDelta.dy)
-        .clamp(0.0, pos.maxScrollExtent);
+    final newOffset =
+        (pos.pixels + dyDelta).clamp(0.0, pos.maxScrollExtent);
     if (newOffset != pos.pixels) {
       _yController.jumpTo(newOffset);
     }
-    // Extend selection to whatever's now under the cursor.
+    // If a drag is in progress, extend selection to whatever's now
+    // under the (stationary) cursor.
     final p = _pickLastPointerPos;
     if (p == null || _pickDownPos == null) return;
     final hit = _hitTestCell(p);
