@@ -1543,19 +1543,17 @@ class _EpyxGridState extends State<EpyxGrid>
   }
 
   /// ETB-19 marching-ants overlay — CustomPaint over the SuperListView.
-  /// Resolves each picked (row, col_name) to its viewport-space rect and
-  /// hands the list to `_MarchingAntsPainter`. Repainted on every animation
-  /// tick AND on vertical scroll, via the merged repaint listenable.
+  /// The painter receives a CALLBACK that resolves (row, col_name) to a
+  /// viewport-space rect at paint time, NOT a precomputed rect list —
+  /// computing rects at build time would freeze them at the old scroll
+  /// offset, and `paint()` only re-runs (not the build) when the
+  /// repaint Listenable fires for animation ticks / scroll changes.
   Widget _buildMarchingAntsOverlay() {
-    final rects = <Rect>[];
-    for (final p in _pickedCells) {
-      final r = _pickedCellViewportRect(p.row, p.col);
-      if (r != null) rects.add(r);
-    }
     return CustomPaint(
       painter: _MarchingAntsPainter(
-        rects: rects,
+        picks: _pickedCells,
         animation: _antsController,
+        resolveRect: _pickedCellViewportRect,
         extraRepaint: _yController,
       ),
     );
@@ -4244,25 +4242,31 @@ class _BarBgPainter extends CustomPainter {
 /// cycle and is reduced modulo the dash length to slide the dashes.
 class _MarchingAntsPainter extends CustomPainter {
   _MarchingAntsPainter({
-    required this.rects,
+    required this.picks,
     required this.animation,
+    required this.resolveRect,
     Listenable? extraRepaint,
   }) : super(
             repaint: extraRepaint == null
                 ? animation
                 : Listenable.merge([animation, extraRepaint]));
 
-  final List<Rect> rects;
+  final List<({int row, String col})> picks;
   // Read `.value` at paint time — capturing it at build time would
   // freeze the phase and the dashes wouldn't march.
   final Animation<double> animation;
+  // Re-resolved at every paint so cell rects track scroll. (Build-time
+  // rects froze the dashes at whatever scroll offset was current when
+  // the widget was built; CustomPaint's repaint Listenable only marks
+  // the RenderObject dirty for paint, not for build.)
+  final Rect? Function(int row, String col) resolveRect;
   static const double _dash = 6.0;
   static const double _gap = 4.0;
   static const double _stroke = 1.6;
 
   @override
   void paint(Canvas canvas, Size size) {
-    if (rects.isEmpty) return;
+    if (picks.isEmpty) return;
     final period = _dash + _gap;
     final phasePx = animation.value * period;
     final paint = Paint()
@@ -4272,7 +4276,9 @@ class _MarchingAntsPainter extends CustomPainter {
     // Clip to viewport so dashes never bleed over chrome.
     canvas.save();
     canvas.clipRect(Offset.zero & size);
-    for (final r in rects) {
+    for (final p in picks) {
+      final r = resolveRect(p.row, p.col);
+      if (r == null) continue;
       // Draw the four sides as dashed segments, each starting from a
       // phase-shifted offset so all four scroll in the same direction.
       _drawDashedLine(canvas, paint, r.topLeft, r.topRight, phasePx, period);
@@ -4303,18 +4309,17 @@ class _MarchingAntsPainter extends CustomPainter {
   }
 
   @override
-  // Repaints are driven by the `repaint` Listenable in the super
-  // constructor (animation + scroll). When CustomPaint diffs us against
-  // an old painter (rare — only on widget rebuild), we accept the swap
-  // whenever the rect list shape differs.
+  // Repaints are driven by the `repaint` Listenable (animation + scroll).
+  // When CustomPaint diffs us against an old painter (only on widget
+  // rebuild), accept the swap whenever the pick set changed shape.
   bool shouldRepaint(covariant _MarchingAntsPainter old) =>
-      rects.length != old.rects.length ||
-      !_sameRects(rects, old.rects);
+      picks.length != old.picks.length || !_samePicks(picks, old.picks);
 
-  static bool _sameRects(List<Rect> a, List<Rect> b) {
+  static bool _samePicks(
+      List<({int row, String col})> a, List<({int row, String col})> b) {
     if (a.length != b.length) return false;
     for (var i = 0; i < a.length; i++) {
-      if (a[i] != b[i]) return false;
+      if (a[i].row != b[i].row || a[i].col != b[i].col) return false;
     }
     return true;
   }
