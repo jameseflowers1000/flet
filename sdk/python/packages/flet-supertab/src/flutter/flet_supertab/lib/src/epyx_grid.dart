@@ -1246,8 +1246,13 @@ class _EpyxGridState extends State<EpyxGrid>
           // drag detection; wiring pan would double-fire.
           final pickModeActive =
               widget.control.getBool("pick_mode_active", false) ?? false;
-          final allowDragSelect = allowLegacyDragSelect || pickModeActive;
-          final wirePan = allowLegacyDragSelect && !pickModeActive;
+          // ETB-19: NeverScrollable kicks in only while a press is
+          // in progress (drag-pick). When no press, scroll physics is
+          // normal so wheel / two-finger swipe works natively (Excel
+          // pattern: click anchor → scroll → shift-click endpoint).
+          final pickPressActive = pickModeActive && _pickDownPos != null;
+          final allowDragSelect = allowLegacyDragSelect || pickPressActive;
+          final wirePan = allowLegacyDragSelect && !pickPressActive;
           return Focus(
             focusNode: _focusNode,
             onKeyEvent: _onKeyEvent,
@@ -1417,14 +1422,16 @@ class _EpyxGridState extends State<EpyxGrid>
         // ETB-01 legacy flag.
         final allowLegacyDragSelect =
             widget.control.getBool("allow_drag_select", false) ?? false;
-        // ETB-19: pick mode yields scroll (physics gate) so the Listener
-        // can see pointer moves cleanly; pan recognisers stay NULL —
-        // the Listener drives drag detection (wiring pan would
-        // double-fire selection_change).
+        // ETB-19: NeverScrollable kicks in only while a press is in
+        // progress (drag-pick). When no press, scroll physics is
+        // normal so wheel / two-finger swipe works natively (Excel
+        // pattern: click anchor → scroll → shift-click endpoint).
+        // Pan recognisers stay NULL in pick mode — Listener drives drag.
         final pickModeActive =
             widget.control.getBool("pick_mode_active", false) ?? false;
-        final allowDragSelect = allowLegacyDragSelect || pickModeActive;
-        final wirePan = allowLegacyDragSelect && !pickModeActive;
+        final pickPressActive = pickModeActive && _pickDownPos != null;
+        final allowDragSelect = allowLegacyDragSelect || pickPressActive;
+        final wirePan = allowLegacyDragSelect && !pickPressActive;
         return MouseRegion(
           onHover: (event) => _onHover(event.localPosition),
           onExit: (_) => _onHoverExit(),
@@ -2615,12 +2622,18 @@ class _EpyxGridState extends State<EpyxGrid>
     final pickActive =
         widget.control.getBool("pick_mode_active", false) ?? false;
     if (!pickActive) return;
-    _pickDownPos = event.localPosition;
-    // Seed last-known pos here too: if the user presses and immediately
-    // trackpad-swipes (no PointerMove yet), _applyPickScroll still has
-    // a valid cursor position to hit-test against.
-    _pickLastPointerPos = event.localPosition;
-    _pickIsDragging = false;
+    // setState here so the build path can flip scroll physics to
+    // NeverScrollable while a drag is in progress, then back to natural
+    // physics on release. Lets wheel / trackpad scroll work natively
+    // between clicks (anchor → scroll → shift-click pattern) and via
+    // the Listener-driven path during a drag.
+    setState(() {
+      _pickDownPos = event.localPosition;
+      // Seed last-known pos here too: press-and-immediately-trackpad
+      // (no PointerMove yet) leaves _applyPickScroll a valid cursor pos.
+      _pickLastPointerPos = event.localPosition;
+      _pickIsDragging = false;
+    });
   }
 
   void _onPickPointerMove(PointerMoveEvent event) {
@@ -2649,10 +2662,8 @@ class _EpyxGridState extends State<EpyxGrid>
     // range when drag occurred (anchor!=end). Orchestrator routes
     // based on tl != br in prop.selection.range.
     _fireSelectionChange();
-    // ETB-19: clear the transient drag-select highlight after picking —
-    // the popup editor now owns the reference, and the marching-ants
-    // overlay (picked_cells channel) will be the persistent visual.
-    // Without this, the green range stays painted on the grid.
+    // ETB-19: clear the transient drag-select highlight AND flip
+    // physics back to natural (no NeverScrollable) in the same frame.
     setState(() {
       _selectedRow = -1;
       _selectedCol = -1;
@@ -2662,9 +2673,11 @@ class _EpyxGridState extends State<EpyxGrid>
   }
 
   void _onPickPointerCancel(PointerCancelEvent event) {
-    _pickDownPos = null;
-    _pickIsDragging = false;
-    _pickLastPointerPos = null;
+    setState(() {
+      _pickDownPos = null;
+      _pickIsDragging = false;
+      _pickLastPointerPos = null;
+    });
   }
 
   // ETB-19: in pick mode, the SuperListView uses NeverScrollableScrollPhysics
@@ -2681,17 +2694,16 @@ class _EpyxGridState extends State<EpyxGrid>
   //     by onPointerPanZoomUpdate. panDelta is SUBTRACTED (Flutter
   //     convention — pan direction is opposite of scroll direction).
   void _onPickPointerSignal(PointerSignalEvent event) {
-    final pickActive =
-        widget.control.getBool("pick_mode_active", false) ?? false;
-    if (!pickActive) return;
+    // Only intercept while a drag-pick is in progress. Outside of that,
+    // physics is normal and the SuperListView handles wheel natively —
+    // letting BOTH us and it handle it would double-scroll.
+    if (_pickDownPos == null) return;
     if (event is! PointerScrollEvent) return;
     _applyPickScroll(event.scrollDelta.dy);
   }
 
   void _onPickPanZoomUpdate(PointerPanZoomUpdateEvent event) {
-    final pickActive =
-        widget.control.getBool("pick_mode_active", false) ?? false;
-    if (!pickActive) return;
+    if (_pickDownPos == null) return;
     // Negate: a downward two-finger swipe (panDelta.dy > 0) should
     // reveal earlier content (scroll offset decreases) — macOS natural-
     // scrolling. Flutter's own Scrollable does the same.
@@ -2704,20 +2716,29 @@ class _EpyxGridState extends State<EpyxGrid>
     // Use pointerScroll (Flutter's own Scrollable goes through this) so
     // the SuperListView's internal state — listController, extent
     // estimates, viewport — sees the offset change the way it expects.
-    // jumpTo also works but is rawer and produced visible desync.
     final before = pos.pixels;
     pos.pointerScroll(dyDelta);
     if (pos.pixels == before) return;
-    // Extend selection to whatever's now under the (stationary) cursor,
-    // BUT only if a drag is actually in progress.
-    final p = _pickLastPointerPos;
-    if (p == null || _pickDownPos == null) return;
-    final hit = _hitTestCell(p);
-    if (hit == null) return;
-    if (hit.row == _selEndRow && hit.col == _selEndCol) return;
+    // Extend selection to the row now under the stationary cursor. Only
+    // if a drag is in progress (anchor was set).
+    if (_pickDownPos == null) return;
+    final p = _pickLastPointerPos ?? _pickDownPos!;
+    // Direct math instead of _hitTestCell — the cell at p's screen
+    // position after scroll might not be in the LOD cache yet, and
+    // _hitTestRow's cached-offset path would return a stale row.
+    // Headers + checkbox + frozen columns work the same regardless of
+    // scroll, so we can compute the absolute row coordinate purely
+    // from the new scroll offset.
+    final dataY = p.dy - _source.headerRowHeight;
+    if (dataY < 0) return;
+    final absY = pos.pixels + dataY;
+    final rowH = _source.rowHeight > 0 ? _source.rowHeight : 26.0;
+    final maxRow = _effectiveRowCount - 1;
+    if (maxRow < 0) return;
+    final newRow = (absY / rowH).floor().clamp(0, maxRow);
+    if (newRow == _selEndRow) return;
     setState(() {
-      _selEndRow = hit.row;
-      _selEndCol = hit.col;
+      _selEndRow = newRow;
     });
   }
 
