@@ -31,6 +31,12 @@ class SuperTab(ft.LayoutControl):
     # pick (Excel formula-bar behaviour).
     pick_mode_active: bool = field(default=False,
                                     metadata={"data_field": "pick_mode_active"})
+    # ETB-19 marching-ants channel — JSON list of [row, col_name] pairs
+    # the user has picked into the open cell-formula popup. Persists until
+    # the popup is dismissed; Dart paints an animated dashed outline on
+    # each pair.
+    picked_cells: Optional[str] = field(default=None,
+                                    metadata={"data_field": "picked_cells"})
 
     # JSON-encoded column definitions
     columns: Optional[str] = field(default=None, metadata={"data_field": "columns"})

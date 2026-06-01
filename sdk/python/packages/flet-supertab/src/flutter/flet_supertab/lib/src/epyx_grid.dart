@@ -60,7 +60,8 @@ class EpyxGrid extends StatefulWidget {
   State<EpyxGrid> createState() => _EpyxGridState();
 }
 
-class _EpyxGridState extends State<EpyxGrid> {
+class _EpyxGridState extends State<EpyxGrid>
+    with SingleTickerProviderStateMixin {
   // -- Pixel-space LOD cache --
   final GridCache _cache = GridCache();
   int _lastDataVersion = -1;
@@ -136,6 +137,12 @@ class _EpyxGridState extends State<EpyxGrid> {
   double _pickAutoScrollVel = 0;   // pixels per 16 ms tick (sign = dir)
   static const double _pickEdgeZone = 60.0;
   static const double _pickMaxAutoScrollVel = 18.0;
+  // ETB-19 marching-ants: animation driver + parsed picks. Repaint
+  // listenable is the merge of the controller + scroll controllers,
+  // so the painter ticks every frame AND on scroll.
+  late final AnimationController _antsController;
+  List<({int row, String col})> _pickedCells = const [];
+  String _lastPickedCellsJson = '';
 
   // -- ETB-09c: global (window) pixel RECT of the cell whose tap/drag
   //    drove the current selection. Sent in selection_change so the
@@ -203,6 +210,12 @@ class _EpyxGridState extends State<EpyxGrid> {
     _focusNode = FocusNode();
     _setupScrollSync();
     _yController.addListener(_onVerticalScroll);
+    // ETB-19: marching-ants AnimationController. Runs continuously while
+    // _picked_cells is non-empty (started lazily on first paint).
+    _antsController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 900),
+    );
     // Listen for Flet property changes — Control is a ChangeNotifier.
     // When Python pushes new data via _sync_to_control(), the Control
     // notifies listeners. We must rebuild the source to pick up new data.
@@ -235,6 +248,7 @@ class _EpyxGridState extends State<EpyxGrid> {
     _editFocusNode.dispose();
     _focusNode.dispose();
     _pickAutoScrollTimer?.cancel();
+    _antsController.dispose();
     super.dispose();
   }
 
@@ -263,6 +277,7 @@ class _EpyxGridState extends State<EpyxGrid> {
 
   void _onControlChanged() {
     if (!mounted) return;
+    _refreshPickedCells();
 
     // Check for validation errors (red border feedback)
     final valErrors = widget.control.getString("validation_errors");
@@ -1248,7 +1263,12 @@ class _EpyxGridState extends State<EpyxGrid> {
               onPointerCancel: _onPickPointerCancel,
               child: GestureDetector(
               onTapDown: (details) => _onTapDown(details),
-              onSecondaryTapDown: (details) => _onSecondaryTapDown(details),
+              // ETB-19: suppress cell context menu in pick mode — a slow
+              // press can be misread as a secondary tap and pop the menu
+              // mid-drag.
+              onSecondaryTapDown: pickModeActive
+                  ? null
+                  : (details) => _onSecondaryTapDown(details),
               onPanStart: wirePan ? _onPanStart : null,
               onPanUpdate: wirePan ? _onPanUpdate : null,
               onPanEnd: wirePan ? _onPanEnd : null,
@@ -1419,7 +1439,12 @@ class _EpyxGridState extends State<EpyxGrid> {
               onPointerCancel: _onPickPointerCancel,
               child: GestureDetector(
               onTapDown: (details) => _onTapDown(details),
-              onSecondaryTapDown: (details) => _onSecondaryTapDown(details),
+              // ETB-19: suppress cell context menu in pick mode — a slow
+              // press can be misread as a secondary tap and pop the menu
+              // mid-drag.
+              onSecondaryTapDown: pickModeActive
+                  ? null
+                  : (details) => _onSecondaryTapDown(details),
               onPanStart: wirePan ? _onPanStart : null,
               onPanUpdate: wirePan ? _onPanUpdate : null,
               onPanEnd: wirePan ? _onPanEnd : null,
@@ -1459,28 +1484,38 @@ class _EpyxGridState extends State<EpyxGrid> {
                       )
                     else
                       Expanded(
-                        child: SuperListView.builder(
-                          controller: _yController,
-                          listController: _listController,
-                          // ETB-19: scroll yields to drag-pick in pick mode.
-                          physics: allowDragSelect
-                              ? const NeverScrollableScrollPhysics()
-                              : null,
-                          itemCount: scrollableRowCount.clamp(0, itemCount),
-                          extentEstimation: (i, _) => i != null
-                            ? _cache.fastRowHeight(i)
-                            : (_cache.hasHeightOverrides ? 0.0 : _cache.defaultRowHeight),
-                          itemBuilder: (context, index) {
-                            final actualRow = index + frozenRows;
-                            if (cacheActive) {
-                              return _buildCachedRow(actualRow);
-                            }
-                            if (actualRow >= _source.rowCount) {
-                              _requestNextPage();
-                              return lodSpinner();
-                            }
-                            return _buildRow(actualRow);
-                          },
+                        child: Stack(
+                          children: [
+                            SuperListView.builder(
+                              controller: _yController,
+                              listController: _listController,
+                              // ETB-19: scroll yields to drag-pick in pick mode.
+                              physics: allowDragSelect
+                                  ? const NeverScrollableScrollPhysics()
+                                  : null,
+                              itemCount: scrollableRowCount.clamp(0, itemCount),
+                              extentEstimation: (i, _) => i != null
+                                ? _cache.fastRowHeight(i)
+                                : (_cache.hasHeightOverrides ? 0.0 : _cache.defaultRowHeight),
+                              itemBuilder: (context, index) {
+                                final actualRow = index + frozenRows;
+                                if (cacheActive) {
+                                  return _buildCachedRow(actualRow);
+                                }
+                                if (actualRow >= _source.rowCount) {
+                                  _requestNextPage();
+                                  return lodSpinner();
+                                }
+                                return _buildRow(actualRow);
+                              },
+                            ),
+                            if (_pickedCells.isNotEmpty)
+                              Positioned.fill(
+                                child: IgnorePointer(
+                                  child: _buildMarchingAntsOverlay(),
+                                ),
+                              ),
+                          ],
                         ),
                       ),
                     if (summaryValues.isNotEmpty)
@@ -1494,6 +1529,25 @@ class _EpyxGridState extends State<EpyxGrid> {
         ),
         );
       },
+    );
+  }
+
+  /// ETB-19 marching-ants overlay — CustomPaint over the SuperListView.
+  /// Resolves each picked (row, col_name) to its viewport-space rect and
+  /// hands the list to `_MarchingAntsPainter`. Repainted on every animation
+  /// tick AND on vertical scroll, via the merged repaint listenable.
+  Widget _buildMarchingAntsOverlay() {
+    final rects = <Rect>[];
+    for (final p in _pickedCells) {
+      final r = _pickedCellViewportRect(p.row, p.col);
+      if (r != null) rects.add(r);
+    }
+    return CustomPaint(
+      painter: _MarchingAntsPainter(
+        rects: rects,
+        phase: _antsController.value,
+        repaint: Listenable.merge([_antsController, _yController]),
+      ),
     );
   }
 
@@ -2609,26 +2663,48 @@ class _EpyxGridState extends State<EpyxGrid> {
   }
 
   // Compute velocity from pointer's distance into the edge zone and
-  // (re)start the periodic timer that drives the scroll. Stops the
-  // timer when the pointer is back in the middle.
+  // (re)start the periodic timer that drives the scroll. Two triggers:
+  //   (a) pixel-based — pointer held within `_pickEdgeZone` of either
+  //       the viewport top or bottom (uses _yController.position math
+  //       directly, no fragile widget-height arithmetic).
+  //   (b) row-based — the live selection end row has hit the first or
+  //       last visible row (Excel pattern: the selection itself drives
+  //       the scroll, not just the cursor). This kicks in even when the
+  //       user's drag never quite reaches the edge zone.
   void _updatePickAutoScroll(Offset localPos) {
     if (!_yController.hasClients) return;
-    // Approximate row-list region: header sits above, takes up
-    // (widget.height - viewport.height). Good enough for edge detection.
-    final box = context.findRenderObject();
-    if (box is! RenderBox) return;
-    final totalH = box.size.height;
-    final vpH = _yController.position.viewportDimension;
-    final rowsTop = (totalH - vpH).clamp(0.0, totalH);
+    final pos = _yController.position;
+    final vpH = pos.viewportDimension;
+    if (vpH <= 0) return;
+    final yOffset = pos.pixels;
+    final rowH = _source.rowHeight;
+    // localPos.dy is relative to the Listener (whole grid). Convert to
+    // viewport-local by subtracting the header row(s) above. Header total
+    // ≈ totalH - vpH, but the more robust value is headerRowHeight.
+    final headerH = _source.headerRowHeight;
+    final viewportLocalY = localPos.dy - headerH;
     double vel = 0;
-    if (localPos.dy < rowsTop + _pickEdgeZone) {
-      final into = (rowsTop + _pickEdgeZone - localPos.dy)
+    // (a) pixel edge zones
+    if (viewportLocalY < _pickEdgeZone) {
+      final into = (_pickEdgeZone - viewportLocalY)
           .clamp(0.0, _pickEdgeZone);
       vel = -_pickMaxAutoScrollVel * (into / _pickEdgeZone);
-    } else if (localPos.dy > totalH - _pickEdgeZone) {
-      final into = (localPos.dy - (totalH - _pickEdgeZone))
+    } else if (viewportLocalY > vpH - _pickEdgeZone) {
+      final into = (viewportLocalY - (vpH - _pickEdgeZone))
           .clamp(0.0, _pickEdgeZone);
       vel = _pickMaxAutoScrollVel * (into / _pickEdgeZone);
+    }
+    // (b) row-based: if the selection-end row is already at the visible
+    // first/last row, scroll at a steady pace even if the cursor isn't
+    // technically in the edge zone yet.
+    if (vel == 0 && _selEndRow >= 0) {
+      final firstVisible = (yOffset / rowH).floor();
+      final lastVisible = ((yOffset + vpH) / rowH).floor() - 1;
+      if (_selEndRow >= lastVisible) {
+        vel = _pickMaxAutoScrollVel * 0.6;
+      } else if (_selEndRow <= firstVisible) {
+        vel = -_pickMaxAutoScrollVel * 0.6;
+      }
     }
     _pickAutoScrollVel = vel;
     if (vel == 0) {
@@ -2667,6 +2743,71 @@ class _EpyxGridState extends State<EpyxGrid> {
     _pickAutoScrollTimer = null;
     _pickAutoScrollVel = 0;
     _pickLastPointerPos = null;
+  }
+
+  // ── ETB-19 marching ants ─────────────────────────────────────────
+  //
+  // Parses the SuperTab's `picked_cells` JSON ([[row, col_name], …])
+  // pushed by the orchestrator after each pick. Starts the animation
+  // controller when there's anything to paint and stops it once the
+  // set is empty (no point burning frames). Called from
+  // _onControlChanged so it stays in sync with Python pushes.
+  void _refreshPickedCells() {
+    final raw = widget.control.getString("picked_cells") ?? '';
+    if (raw == _lastPickedCellsJson) return;
+    _lastPickedCellsJson = raw;
+    List<({int row, String col})> picks = const [];
+    if (raw.isNotEmpty) {
+      try {
+        final decoded = jsonDecode(raw) as List;
+        picks = [
+          for (final p in decoded)
+            if (p is List && p.length == 2)
+              (row: (p[0] as num).toInt(), col: p[1].toString()),
+        ];
+      } catch (_) {
+        picks = const [];
+      }
+    }
+    _pickedCells = picks;
+    if (picks.isEmpty) {
+      _antsController.stop();
+      _antsController.value = 0;
+    } else if (!_antsController.isAnimating) {
+      _antsController.repeat();
+    }
+    if (mounted) setState(() {});
+  }
+
+  // Resolve a picked cell to its rect in the SuperListView's *viewport*
+  // coordinates (i.e. with vertical scroll already subtracted) so the
+  // CustomPaint sitting on top of the SuperListView can draw at that rect
+  // directly. Horizontal scroll is NOT subtracted because the painter
+  // lives inside the horizontal SingleChildScrollView.
+  ///
+  /// Returns null if the column is unknown OR if the cell is fully
+  /// outside the visible vertical viewport (cheap cull).
+  Rect? _pickedCellViewportRect(int row, String colName) {
+    final colIdx = _source.columnNames.indexOf(colName);
+    if (colIdx < 0) return null;
+    final rowH = _cache.rowHeight(row);
+    final yOffset = _yController.hasClients ? _yController.offset : 0.0;
+    final vpH = _yController.hasClients
+        ? _yController.position.viewportDimension
+        : 0.0;
+    final top = row * _source.rowHeight - yOffset;
+    if (vpH > 0 && (top + rowH < 0 || top > vpH)) return null;
+    // Column horizontal offset within the row body. Match
+    // _cellGlobalRect's accounting: checkbox + frozen cols + remaining.
+    final showCheckbox =
+        widget.control.getBool("show_checkbox_column", false) ?? false;
+    final cbOffset = showCheckbox ? _checkboxColWidth : 0.0;
+    double cumX = cbOffset;
+    for (int i = 0; i < colIdx && i < _source.columnCount; i++) {
+      cumX += _getColumnWidth(i);
+    }
+    final w = _getColumnWidth(colIdx);
+    return Rect.fromLTWH(cumX, top, w, rowH);
   }
 
   // ────────────────────────────────────────────────────────────────
@@ -4097,3 +4238,78 @@ class _BarBgPainter extends CustomPainter {
       rightText != old.rightText;
 }
 
+
+/// ETB-19 marching ants — animated dashed outline around every cell the
+/// user has picked into the open cell-formula popup (Excel pattern).
+/// `rects` are in the SuperListView's viewport coordinate space, supplied
+/// by `_pickedCellViewportRect`. `phase` advances 0→1 each animation
+/// cycle and is reduced modulo the dash length to slide the dashes.
+class _MarchingAntsPainter extends CustomPainter {
+  _MarchingAntsPainter({
+    required this.rects,
+    required this.phase,
+    required Listenable repaint,
+  }) : super(repaint: repaint);
+
+  final List<Rect> rects;
+  final double phase;          // 0..1, animation value
+  static const double _dash = 6.0;
+  static const double _gap = 4.0;
+  static const double _stroke = 1.6;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (rects.isEmpty) return;
+    final period = _dash + _gap;
+    final phasePx = phase * period;
+    final paint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = _stroke
+      ..color = const Color(0xFF57C66B); // Neovim green
+    // Clip to viewport so dashes never bleed over chrome.
+    canvas.save();
+    canvas.clipRect(Offset.zero & size);
+    for (final r in rects) {
+      // Draw the four sides as dashed segments, each starting from a
+      // phase-shifted offset so all four scroll in the same direction.
+      _drawDashedLine(canvas, paint, r.topLeft, r.topRight, phasePx, period);
+      _drawDashedLine(canvas, paint, r.topRight, r.bottomRight, phasePx, period);
+      _drawDashedLine(
+          canvas, paint, r.bottomRight, r.bottomLeft, phasePx, period);
+      _drawDashedLine(canvas, paint, r.bottomLeft, r.topLeft, phasePx, period);
+    }
+    canvas.restore();
+  }
+
+  void _drawDashedLine(Canvas canvas, Paint paint, Offset a, Offset b,
+      double phasePx, double period) {
+    final delta = b - a;
+    final length = delta.distance;
+    if (length == 0) return;
+    final dir = delta / length;
+    // Start at -phasePx so dashes slide in the +direction.
+    double t = -phasePx;
+    while (t < length) {
+      final segStart = math.max(t, 0.0);
+      final segEnd = math.min(t + _dash, length);
+      if (segEnd > segStart) {
+        canvas.drawLine(a + dir * segStart, a + dir * segEnd, paint);
+      }
+      t += period;
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _MarchingAntsPainter old) =>
+      rects.length != old.rects.length ||
+      phase != old.phase ||
+      !_sameRects(rects, old.rects);
+
+  static bool _sameRects(List<Rect> a, List<Rect> b) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) return false;
+    }
+    return true;
+  }
+}
