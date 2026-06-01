@@ -135,8 +135,10 @@ class _EpyxGridState extends State<EpyxGrid>
   Offset? _pickLastPointerPos;
   Timer? _pickAutoScrollTimer;
   double _pickAutoScrollVel = 0;   // pixels per 16 ms tick (sign = dir)
-  static const double _pickEdgeZone = 60.0;
-  static const double _pickMaxAutoScrollVel = 18.0;
+  static const double _pickEdgeZone = 80.0;
+  // 5 px / 16 ms ≈ 312 px/s. Was 18 px / tick (~1080 px/s) which let a
+  // 1000-row grid blow past 30 rows in a heartbeat — uncontrollable.
+  static const double _pickMaxAutoScrollVel = 5.0;
   // ETB-19 marching-ants: animation driver + parsed picks. Repaint
   // listenable is the merge of the controller + scroll controllers,
   // so the painter ticks every frame AND on scroll.
@@ -2662,49 +2664,38 @@ class _EpyxGridState extends State<EpyxGrid>
     _stopPickAutoScroll();
   }
 
-  // Compute velocity from pointer's distance into the edge zone and
-  // (re)start the periodic timer that drives the scroll. Two triggers:
-  //   (a) pixel-based — pointer held within `_pickEdgeZone` of either
-  //       the viewport top or bottom (uses _yController.position math
-  //       directly, no fragile widget-height arithmetic).
-  //   (b) row-based — the live selection end row has hit the first or
-  //       last visible row (Excel pattern: the selection itself drives
-  //       the scroll, not just the cursor). This kicks in even when the
-  //       user's drag never quite reaches the edge zone.
+  // Pixel-based edge autoscroll. Velocity grows quadratically with how
+  // far the pointer is INTO the edge zone — near the boundary it's a
+  // crawl, deep in (or off the widget) it's full speed. Curve choice
+  // matters: a linear ramp at our peak velocity (5 px / tick) still
+  // felt twitchy; squaring the depth gives fine control near the
+  // boundary so the user can park the cursor and inch the selection.
+  //
+  // NOTE: an earlier draft also added a row-based fallback that fired
+  // whenever _selEndRow touched the first/last visible row. That created
+  // a runaway feedback loop on reverse (scroll exposes new rows → hit-
+  // test under stationary cursor picks up the new outermost row →
+  // _selEndRow stays at boundary → keeps firing → cursor "can't catch
+  // it"). Removed.
   void _updatePickAutoScroll(Offset localPos) {
     if (!_yController.hasClients) return;
     final pos = _yController.position;
     final vpH = pos.viewportDimension;
     if (vpH <= 0) return;
-    final yOffset = pos.pixels;
-    final rowH = _source.rowHeight;
     // localPos.dy is relative to the Listener (whole grid). Convert to
-    // viewport-local by subtracting the header row(s) above. Header total
-    // ≈ totalH - vpH, but the more robust value is headerRowHeight.
-    final headerH = _source.headerRowHeight;
-    final viewportLocalY = localPos.dy - headerH;
+    // viewport-local by subtracting the header above.
+    final viewportLocalY = localPos.dy - _source.headerRowHeight;
     double vel = 0;
-    // (a) pixel edge zones
     if (viewportLocalY < _pickEdgeZone) {
       final into = (_pickEdgeZone - viewportLocalY)
           .clamp(0.0, _pickEdgeZone);
-      vel = -_pickMaxAutoScrollVel * (into / _pickEdgeZone);
+      final t = into / _pickEdgeZone;
+      vel = -_pickMaxAutoScrollVel * t * t;
     } else if (viewportLocalY > vpH - _pickEdgeZone) {
       final into = (viewportLocalY - (vpH - _pickEdgeZone))
           .clamp(0.0, _pickEdgeZone);
-      vel = _pickMaxAutoScrollVel * (into / _pickEdgeZone);
-    }
-    // (b) row-based: if the selection-end row is already at the visible
-    // first/last row, scroll at a steady pace even if the cursor isn't
-    // technically in the edge zone yet.
-    if (vel == 0 && _selEndRow >= 0) {
-      final firstVisible = (yOffset / rowH).floor();
-      final lastVisible = ((yOffset + vpH) / rowH).floor() - 1;
-      if (_selEndRow >= lastVisible) {
-        vel = _pickMaxAutoScrollVel * 0.6;
-      } else if (_selEndRow <= firstVisible) {
-        vel = -_pickMaxAutoScrollVel * 0.6;
-      }
+      final t = into / _pickEdgeZone;
+      vel = _pickMaxAutoScrollVel * t * t;
     }
     _pickAutoScrollVel = vel;
     if (vel == 0) {
