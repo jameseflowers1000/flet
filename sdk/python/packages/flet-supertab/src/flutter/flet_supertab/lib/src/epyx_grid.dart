@@ -2616,6 +2616,10 @@ class _EpyxGridState extends State<EpyxGrid>
         widget.control.getBool("pick_mode_active", false) ?? false;
     if (!pickActive) return;
     _pickDownPos = event.localPosition;
+    // Seed last-known pos here too: if the user presses and immediately
+    // trackpad-swipes (no PointerMove yet), _applyPickScroll still has
+    // a valid cursor position to hit-test against.
+    _pickLastPointerPos = event.localPosition;
     _pickIsDragging = false;
   }
 
@@ -2695,15 +2699,17 @@ class _EpyxGridState extends State<EpyxGrid>
   }
 
   void _applyPickScroll(double dyDelta) {
-    if (!_yController.hasClients) return;
+    if (!_yController.hasClients || dyDelta == 0) return;
     final pos = _yController.position;
-    final newOffset =
-        (pos.pixels + dyDelta).clamp(0.0, pos.maxScrollExtent);
-    if (newOffset != pos.pixels) {
-      _yController.jumpTo(newOffset);
-    }
-    // If a drag is in progress, extend selection to whatever's now
-    // under the (stationary) cursor.
+    // Use pointerScroll (Flutter's own Scrollable goes through this) so
+    // the SuperListView's internal state — listController, extent
+    // estimates, viewport — sees the offset change the way it expects.
+    // jumpTo also works but is rawer and produced visible desync.
+    final before = pos.pixels;
+    pos.pointerScroll(dyDelta);
+    if (pos.pixels == before) return;
+    // Extend selection to whatever's now under the (stationary) cursor,
+    // BUT only if a drag is actually in progress.
     final p = _pickLastPointerPos;
     if (p == null || _pickDownPos == null) return;
     final hit = _hitTestCell(p);
