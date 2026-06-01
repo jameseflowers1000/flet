@@ -133,6 +133,13 @@ class _EpyxGridState extends State<EpyxGrid>
   // pixels of the row-list top/bottom. Without this the user can only
   // pick what's already visible.
   Offset? _pickLastPointerPos;
+  // Wall-clock of the last PointerMove during a drag-pick. Used to
+  // gate autoscroll: if the cursor sits still longer than
+  // `_pickMoveIdleMs`, the timer cancels itself. This puts the scroll
+  // under direct user control — hold still to stop, jiggle to keep
+  // going, fling past the edge for fast traversal.
+  DateTime? _pickLastMoveAt;
+  static const int _pickMoveIdleMs = 120;
   Timer? _pickAutoScrollTimer;
   double _pickAutoScrollVel = 0;   // pixels per 16 ms tick (sign = dir)
   static const double _pickEdgeZone = 110.0;
@@ -2632,6 +2639,7 @@ class _EpyxGridState extends State<EpyxGrid>
       _pickIsDragging = true;
     }
     _pickLastPointerPos = event.localPosition;
+    _pickLastMoveAt = DateTime.now();
     _updatePickAutoScroll(event.localPosition);
     // Update the selection end-cell as the pointer moves.
     final hit = _hitTestCell(event.localPosition);
@@ -2717,6 +2725,16 @@ class _EpyxGridState extends State<EpyxGrid>
       _stopPickAutoScroll();
       return;
     }
+    // Motion-gate: if the cursor has been stationary for more than
+    // `_pickMoveIdleMs`, freeze the scroll. The user is in control —
+    // hold still to stop, move again to resume.
+    final lastMove = _pickLastMoveAt;
+    if (lastMove != null &&
+        DateTime.now().difference(lastMove).inMilliseconds >
+            _pickMoveIdleMs) {
+      _stopPickAutoScroll();
+      return;
+    }
     final maxScroll = _yController.position.maxScrollExtent;
     final newOffset =
         (_yController.offset + _pickAutoScrollVel).clamp(0.0, maxScroll);
@@ -2740,6 +2758,7 @@ class _EpyxGridState extends State<EpyxGrid>
     _pickAutoScrollTimer = null;
     _pickAutoScrollVel = 0;
     _pickLastPointerPos = null;
+    _pickLastMoveAt = null;
   }
 
   // ── ETB-19 marching ants ─────────────────────────────────────────
