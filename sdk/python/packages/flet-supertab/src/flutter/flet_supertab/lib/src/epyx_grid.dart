@@ -135,10 +135,16 @@ class _EpyxGridState extends State<EpyxGrid>
   Offset? _pickLastPointerPos;
   Timer? _pickAutoScrollTimer;
   double _pickAutoScrollVel = 0;   // pixels per 16 ms tick (sign = dir)
-  static const double _pickEdgeZone = 80.0;
-  // 5 px / 16 ms ≈ 312 px/s. Was 18 px / tick (~1080 px/s) which let a
-  // 1000-row grid blow past 30 rows in a heartbeat — uncontrollable.
-  static const double _pickMaxAutoScrollVel = 5.0;
+  static const double _pickEdgeZone = 110.0;
+  // 2 px / 16 ms ≈ 125 px/s ≈ 4–5 rows/s at peak. Earlier 5 px/tick
+  // (~12 rows/s) made it impossible to release on the row you wanted —
+  // by the time you reacted, the selection had moved past. With this
+  // peak and a 110 px quadratic ramp:
+  //   10 px in  → ~0.02 row/s  (essentially parked)
+  //   60 px in  → ~1.4 rows/s  (steady navigation)
+  //   110 px in → ~4.6 rows/s  (full speed; only reached when the
+  //                            cursor is at or past the widget edge)
+  static const double _pickMaxAutoScrollVel = 2.0;
   // ETB-19 marching-ants: animation driver + parsed picks. Repaint
   // listenable is the merge of the controller + scroll controllers,
   // so the painter ticks every frame AND on scroll.
