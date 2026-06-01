@@ -1545,8 +1545,8 @@ class _EpyxGridState extends State<EpyxGrid>
     return CustomPaint(
       painter: _MarchingAntsPainter(
         rects: rects,
-        phase: _antsController.value,
-        repaint: Listenable.merge([_antsController, _yController]),
+        animation: _antsController,
+        extraRepaint: _yController,
       ),
     );
   }
@@ -4247,12 +4247,17 @@ class _BarBgPainter extends CustomPainter {
 class _MarchingAntsPainter extends CustomPainter {
   _MarchingAntsPainter({
     required this.rects,
-    required this.phase,
-    required Listenable repaint,
-  }) : super(repaint: repaint);
+    required this.animation,
+    Listenable? extraRepaint,
+  }) : super(
+            repaint: extraRepaint == null
+                ? animation
+                : Listenable.merge([animation, extraRepaint]));
 
   final List<Rect> rects;
-  final double phase;          // 0..1, animation value
+  // Read `.value` at paint time — capturing it at build time would
+  // freeze the phase and the dashes wouldn't march.
+  final Animation<double> animation;
   static const double _dash = 6.0;
   static const double _gap = 4.0;
   static const double _stroke = 1.6;
@@ -4261,7 +4266,7 @@ class _MarchingAntsPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     if (rects.isEmpty) return;
     final period = _dash + _gap;
-    final phasePx = phase * period;
+    final phasePx = animation.value * period;
     final paint = Paint()
       ..style = PaintingStyle.stroke
       ..strokeWidth = _stroke
@@ -4300,9 +4305,12 @@ class _MarchingAntsPainter extends CustomPainter {
   }
 
   @override
+  // Repaints are driven by the `repaint` Listenable in the super
+  // constructor (animation + scroll). When CustomPaint diffs us against
+  // an old painter (rare — only on widget rebuild), we accept the swap
+  // whenever the rect list shape differs.
   bool shouldRepaint(covariant _MarchingAntsPainter old) =>
       rects.length != old.rects.length ||
-      phase != old.phase ||
       !_sameRects(rects, old.rects);
 
   static bool _sameRects(List<Rect> a, List<Rect> b) {
