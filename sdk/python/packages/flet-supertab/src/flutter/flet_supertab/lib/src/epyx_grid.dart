@@ -2662,13 +2662,14 @@ class _EpyxGridState extends State<EpyxGrid>
     // range when drag occurred (anchor!=end). Orchestrator routes
     // based on tl != br in prop.selection.range.
     _fireSelectionChange();
-    // ETB-19: clear the transient drag-select highlight AND flip
-    // physics back to natural (no NeverScrollable) in the same frame.
+    // ETB-19: collapse the range highlight to the anchor — no
+    // lingering blue tint across rows — but KEEP the anchor itself so
+    // a subsequent shift+click has something to extend from
+    // (click anchor → scroll → shift+click endpoint). Also flips
+    // physics back to natural in the same frame.
     setState(() {
-      _selectedRow = -1;
-      _selectedCol = -1;
-      _selEndRow = -1;
-      _selEndCol = -1;
+      _selEndRow = _selectedRow;
+      _selEndCol = _selectedCol;
     });
   }
 
