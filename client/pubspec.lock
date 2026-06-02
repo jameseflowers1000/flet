@@ -481,6 +481,13 @@ packages:
       relative: true
     source: path
     version: "0.1.0"
+  flet_marching_ants:
+    dependency: "direct main"
+    description:
+      path: "../sdk/python/packages/flet-marching-ants/src/flutter/flet_marching_ants"
+      relative: true
+    source: path
+    version: "0.1.0"
   flet_markdown:
     dependency: "direct main"
     description:

@@ -45,6 +45,7 @@ import 'package:flet_resizable_panel/flet_resizable_panel.dart' as flet_resizabl
 import 'package:flet_pane/flet_pane.dart' as flet_pane;
 import 'package:flet_thumbnail/flet_thumbnail.dart' as flet_thumbnail;
 import 'package:flet_markdown/flet_markdown.dart' as flet_markdown;
+import 'package:flet_marching_ants/flet_marching_ants.dart' as flet_marching_ants;
 import 'package:flet_vim_editor/flet_vim_editor.dart' as flet_vim_editor;
 import 'package:flet_window_manager/flet_window_manager.dart' as flet_window_manager;
 import 'package:syncfusion_flutter_core/core.dart';
@@ -82,6 +83,7 @@ List<FletExtension> _buildExtensions() {
     flet_pane.Extension(),
     flet_thumbnail.Extension(),
     flet_markdown.Extension(),
+    flet_marching_ants.Extension(),
     flet_vim_editor.Extension(),
     flet_window_manager.Extension(),
     flet_secure_storage.Extension(),
