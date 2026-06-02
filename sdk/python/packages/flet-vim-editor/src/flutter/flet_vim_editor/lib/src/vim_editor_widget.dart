@@ -287,7 +287,9 @@ class _VimEditorFletWidgetState extends State<VimEditorFletWidget> {
       final text = widget.control.getString("pending_insert_text") ?? '';
       final replaceLen =
           widget.control.getInt("pending_insert_replace_len", 0) ?? 0;
-      if (text.isNotEmpty) {
+      // ETB-19 ESC undo path: empty text + replaceLen > 0 = pure delete
+      // of N chars before cursor.
+      if (text.isNotEmpty || replaceLen > 0) {
         _handleInsertAtCursor(text, replaceLen);
       }
     }

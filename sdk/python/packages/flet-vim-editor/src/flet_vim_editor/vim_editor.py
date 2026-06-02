@@ -83,9 +83,12 @@ class VimEditor(ft.LayoutControl):
         """Insert `text` at the editor's current cursor. If `replace_len`
         is non-zero, delete that many characters immediately before the
         cursor first (Excel-style: each new pick replaces the previously
-        picked reference). Used by the cell-formula popup's pick path."""
-        if not text:
-            return
+        picked reference). Pure-delete form: `insert_at_cursor('',
+        replace_len=N)` removes N chars before cursor — used by the
+        ETB-19 ESC handler to back out the most recent pick.
+        Used by the cell-formula popup's pick path."""
+        if not text and replace_len <= 0:
+            return  # nothing to do
         self.pending_insert_replace_len = int(replace_len or 0)
         self.pending_insert_seq = int(self.pending_insert_seq or 0) + 1
         self.pending_insert_text = text
