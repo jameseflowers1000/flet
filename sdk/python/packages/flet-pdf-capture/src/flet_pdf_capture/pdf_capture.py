@@ -56,6 +56,11 @@ class PdfCaptureSurface(ft.LayoutControl):
     `event.data` carries `{page_count}`. The host then pulls the bytes via
     `get_document_bytes()`, re-extracts, and pushes fragments back."""
 
+    on_selection: Optional[ft.ControlEventHandler["PdfCaptureSurface"]] = None
+    """Fired when the user commits a drag-rectangle selection. `event.data`
+    carries `{page, rect_pts:[x0,top,x1,bottom]}` (canonical PDF points).
+    Python hit-tests + reconstructs reading-order text (Python-authoritative)."""
+
     on_result: Optional[ft.ControlEventHandler["PdfCaptureSurface"]] = None
     """Fired when the user presses a button (milestone 4). `event.data`
     carries `{buttonId, cancelled, selections:[{mode?,page,rect_pts}]}` —
@@ -86,6 +91,11 @@ class PdfCaptureSurface(ft.LayoutControl):
         await self._invoke_method(
             "set_debug_overlay", arguments={"on": bool(on)},
         )
+
+    async def set_status(self, text: str) -> None:
+        """Show a short status string in the surface (e.g. the reading-order
+        text Python extracted for the latest selection — milestone 3 proof)."""
+        await self._invoke_method("set_status", arguments={"text": text or ""})
 
     # ── imperative pulls (Dart → Python) ─────────────────────────────
     async def get_document_bytes(self) -> Optional[bytes]:
