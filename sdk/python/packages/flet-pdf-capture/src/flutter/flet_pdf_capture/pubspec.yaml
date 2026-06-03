@@ -1,0 +1,30 @@
+name: flet_pdf_capture
+description: Generic PDF capture surface (pdfrx render + geometric selection) for Flet
+version: 0.1.0
+publish_to: none
+
+environment:
+  sdk: '>=3.3.0 <4.0.0'
+  flutter: ">=1.17.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  flet:
+    path: ../../../../../../../packages/flet
+
+  # Native PDF rendering (bundles the PDFium XCFramework on macOS).
+  # Pinned to the 2.2.x line: pdfrx >=2.3.0 requires Flutter >=3.41, but the
+  # client is on 3.38.2. 2.2.x has the same PdfViewer.data + pageOverlaysBuilder API.
+  pdfrx: '>=2.2.24 <2.3.0'
+
+  # Native "Open PDF" file picker (front-end owns file access). The macOS
+  # app is un-sandboxed with files.user-selected.read-write already granted.
+  # Matches flet's own file_picker constraint, so it's already in the client.
+  file_picker: ^10.3.10
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0

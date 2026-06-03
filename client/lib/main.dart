@@ -48,6 +48,7 @@ import 'package:flet_markdown/flet_markdown.dart' as flet_markdown;
 import 'package:flet_marching_ants/flet_marching_ants.dart' as flet_marching_ants;
 import 'package:flet_vim_editor/flet_vim_editor.dart' as flet_vim_editor;
 import 'package:flet_window_manager/flet_window_manager.dart' as flet_window_manager;
+import 'package:flet_pdf_capture/flet_pdf_capture.dart' as flet_pdf_capture;
 import 'package:syncfusion_flutter_core/core.dart';
 
 import 'orchestrator_overlay.dart';
@@ -86,6 +87,7 @@ List<FletExtension> _buildExtensions() {
     flet_marching_ants.Extension(),
     flet_vim_editor.Extension(),
     flet_window_manager.Extension(),
+    flet_pdf_capture.Extension(),
     flet_secure_storage.Extension(),
     flet_webview.Extension(),
     _EpyxLogoExtension(),

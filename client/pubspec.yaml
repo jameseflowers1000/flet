@@ -133,6 +133,9 @@ dependencies:
   flet_window_manager:
     path: ../sdk/python/packages/flet-window-manager/src/flutter/flet_window_manager
 
+  flet_pdf_capture:
+    path: ../sdk/python/packages/flet-pdf-capture/src/flutter/flet_pdf_capture
+
   cupertino_icons: ^1.0.6
   syncfusion_flutter_core: any
   wakelock_plus: ^1.4.0

@@ -1,0 +1,33 @@
+[project]
+name = "flet-pdf-capture"
+version = "0.1.0"
+description = "Generic PDF capture surface (pdfrx render + geometric selection) for Flet"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [
+    { name = "Epyx contributors", email = "hello@flet.dev" }
+]
+dependencies = [
+    "flet",
+]
+
+[dependency-groups]
+dev = [
+    "flet[all]",
+    "pytest",
+    "playwright",
+]
+
+[project.urls]
+Homepage = "https://flet.dev"
+Repository = "https://github.com/flet-dev/flet"
+
+[tool.setuptools.package-data]
+"flutter.flet_pdf_capture" = ["**/*"]
+
+[tool.setuptools]
+license-files = []
+
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
