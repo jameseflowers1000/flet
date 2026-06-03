@@ -33,8 +33,13 @@ class _PdfCaptureWidgetState extends State<PdfCaptureWidget> {
   List<PdfFragment> _fragments = const [];
   bool _debugOverlay = false;
 
-  // ── geometric selection (milestone 3) ─────────────────────────────
-  /// Global indices into [_fragments] that are currently highlighted.
+  // ── geometric selection (milestone 3+) ────────────────────────────
+  /// Committed region rectangles (canonical PDF points), in selection order.
+  /// Single mode holds at most one; multi accumulates. This is what a commit
+  /// returns to the agent; [_selected] is the derived highlight set.
+  final List<({int page, Rect pts})> _regions = [];
+
+  /// Global indices into [_fragments] highlighted by the current regions.
   final Set<int> _selected = {};
   // In-progress drag, page-local pixels, on page [_dragPage].
   Offset? _dragStart;
@@ -43,8 +48,17 @@ class _PdfCaptureWidgetState extends State<PdfCaptureWidget> {
   // Status line (e.g. the reading-order text Python extracted).
   String? _status;
 
+  // Request config pushed via the invoke channel (Python→Dart PROPERTY sync
+  // does not deliver for this control; invoke methods do). These override the
+  // same-named control properties when present.
+  String? _buttonsJson;
+  String? _instructionsText;
+  String? _selectionModeOverride;
+
   String get _selectionMode =>
-      widget.control.getString('selection_mode') ?? 'single';
+      _selectionModeOverride ??
+      widget.control.getString('selection_mode') ??
+      'single';
 
   @override
   void initState() {
@@ -86,6 +100,7 @@ class _PdfCaptureWidgetState extends State<PdfCaptureWidget> {
           setState(() {
             _pdfBytes = bytes;
             _docVersion++;
+            _regions.clear();
             _selected.clear();
             _status = null;
           });
@@ -109,6 +124,18 @@ class _PdfCaptureWidgetState extends State<PdfCaptureWidget> {
 
       case 'set_status':
         setState(() => _status = args['text'] as String?);
+        return null;
+
+      case 'set_buttons':
+        setState(() => _buttonsJson = args['buttons'] as String?);
+        return null;
+
+      case 'set_instructions':
+        setState(() => _instructionsText = args['text'] as String?);
+        return null;
+
+      case 'set_selection_mode':
+        setState(() => _selectionModeOverride = args['mode'] as String?);
         return null;
 
       case 'get_document_bytes':
@@ -137,6 +164,7 @@ class _PdfCaptureWidgetState extends State<PdfCaptureWidget> {
       _pdfBytes = bytes;
       _docVersion++;
       _fragments = const []; // cleared until Python re-extracts
+      _regions.clear();
       _selected.clear();
       _status = null;
     });
@@ -177,22 +205,15 @@ class _PdfCaptureWidgetState extends State<PdfCaptureWidget> {
     }
     final ptsRect = transform.localRectToBbox(rectPx);
 
-    final caught = <int>{};
-    for (var i = 0; i < _fragments.length; i++) {
-      final f = _fragments[i];
-      if (f.page != pageIndex) continue;
-      final fr = Rect.fromLTRB(f.x0, f.top, f.x1, f.bottom);
-      if (fr.overlaps(ptsRect)) caught.add(i);
-    }
-
     setState(() {
       if (_selectionMode == 'multi') {
-        _selected.addAll(caught);
+        _regions.add((page: pageIndex, pts: ptsRect));
       } else {
-        _selected
+        _regions
           ..clear()
-          ..addAll(caught);
+          ..add((page: pageIndex, pts: ptsRect));
       }
+      _recomputeHighlight();
       _dragStart = null;
       _dragCurrent = null;
       _dragPage = null;
@@ -215,6 +236,63 @@ class _PdfCaptureWidgetState extends State<PdfCaptureWidget> {
     });
   }
 
+  /// Rebuild the highlighted-fragment set from the current regions.
+  void _recomputeHighlight() {
+    _selected.clear();
+    for (final region in _regions) {
+      for (var i = 0; i < _fragments.length; i++) {
+        final f = _fragments[i];
+        if (f.page != region.page) continue;
+        if (Rect.fromLTRB(f.x0, f.top, f.x1, f.bottom).overlaps(region.pts)) {
+          _selected.add(i);
+        }
+      }
+    }
+  }
+
+  // ── dynamic button bar / commit (milestone 4) ──────────────────────
+  String _instructions() =>
+      _instructionsText ?? widget.control.getString('instructions') ?? '';
+
+  List<Map<String, dynamic>> _buttons() {
+    final raw = _buttonsJson ?? widget.control.getString('buttons');
+    if (raw == null || raw.isEmpty) return const [];
+    try {
+      final list = jsonDecode(raw);
+      if (list is List) {
+        return [for (final b in list) if (b is Map) b.cast<String, dynamic>()];
+      }
+    } catch (_) {}
+    return const [];
+  }
+
+  /// Press an agent-authored button: emit a CaptureResult (geometry only —
+  /// Python extracts). A `cancel`-role button returns no selections.
+  void _onButton(Map<String, dynamic> button) {
+    final cancelled = button['role'] == 'cancel';
+    widget.control.triggerEventWithoutSubscribers(
+      'result',
+      jsonEncode({
+        'buttonId': button['id'],
+        'cancelled': cancelled,
+        'selections': cancelled
+            ? const []
+            : [
+                for (final r in _regions)
+                  {
+                    'page': r.page,
+                    'rect_pts': [
+                      r.pts.left,
+                      r.pts.top,
+                      r.pts.right,
+                      r.pts.bottom
+                    ],
+                  }
+              ],
+      }),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Stack(
@@ -231,25 +309,81 @@ class _PdfCaptureWidgetState extends State<PdfCaptureWidget> {
             ),
           ),
         ),
-        if (_status != null && _status!.isNotEmpty)
+        // Agent-authored instruction banner (top, clearing the Open PDF button).
+        if (_instructions().isNotEmpty)
           Positioned(
-            left: 0,
-            right: 0,
-            bottom: 0,
-            child: Container(
-              color: const Color(0xE6101418),
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-              constraints: const BoxConstraints(maxHeight: 160),
-              child: SingleChildScrollView(
-                child: SelectableText(
-                  _status!,
-                  style: const TextStyle(
-                      color: Color(0xFFB8E0FF), fontSize: 13, height: 1.3),
+            top: 8,
+            left: 120,
+            right: 8,
+            child: SafeArea(
+              child: Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                decoration: BoxDecoration(
+                  color: const Color(0xCC101418),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Text(
+                  _instructions(),
+                  style: const TextStyle(color: Colors.white, fontSize: 13),
                 ),
               ),
             ),
           ),
+        // Extracted-text status + dynamic, agent-authored button bar (bottom).
+        Positioned(left: 0, right: 0, bottom: 0, child: _buildBottomPanel()),
       ],
+    );
+  }
+
+  Widget _buildBottomPanel() {
+    final buttons = _buttons();
+    final hasStatus = _status != null && _status!.isNotEmpty;
+    if (!hasStatus && buttons.isEmpty) return const SizedBox.shrink();
+    return Container(
+      color: const Color(0xF0101418),
+      padding: const EdgeInsets.all(8),
+      child: SafeArea(
+        top: false,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            if (hasStatus)
+              ConstrainedBox(
+                constraints: const BoxConstraints(maxHeight: 140),
+                child: SingleChildScrollView(
+                  child: SelectableText(
+                    _status!,
+                    style: const TextStyle(
+                        color: Color(0xFFB8E0FF), fontSize: 13, height: 1.3),
+                  ),
+                ),
+              ),
+            if (buttons.isNotEmpty) ...[
+              if (hasStatus) const SizedBox(height: 8),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  for (final b in buttons)
+                    Padding(
+                      padding: const EdgeInsets.only(left: 8),
+                      child: ElevatedButton(
+                        onPressed: () => _onButton(b),
+                        style: b['role'] == 'cancel'
+                            ? ElevatedButton.styleFrom(
+                                backgroundColor: const Color(0xFF444A52),
+                                foregroundColor: Colors.white)
+                            : null,
+                        child: Text('${b['label'] ?? b['id'] ?? 'OK'}'),
+                      ),
+                    ),
+                ],
+              ),
+            ],
+          ],
+        ),
+      ),
     );
   }
 
