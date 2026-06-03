@@ -11,6 +11,10 @@ class SelectionPainter extends CustomPainter {
   final List<PdfFragment> selected;
   final PdfPageTransform transform;
 
+  /// Committed region rectangles on THIS page, in canonical PDF points —
+  /// drawn as outlines so multiple accumulated selections are distinct.
+  final List<Rect> regionsPts;
+
   /// In-progress drag rect in page-local pixels (null when not dragging
   /// this page).
   final Rect? liveDragPx;
@@ -18,6 +22,7 @@ class SelectionPainter extends CustomPainter {
   SelectionPainter({
     required this.selected,
     required this.transform,
+    this.regionsPts = const [],
     this.liveDragPx,
   });
 
@@ -36,6 +41,17 @@ class SelectionPainter extends CustomPainter {
       final r = transform.bboxToLocalRect(f.x0, f.top, f.x1, f.bottom);
       canvas.drawRect(r, fill);
       canvas.drawRect(r, stroke);
+    }
+
+    // Committed region boundaries (so accumulated regions read as discrete).
+    final regionStroke = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.5
+      ..color = const Color(0xCC1166CC);
+    for (final pts in regionsPts) {
+      canvas.drawRect(
+          transform.bboxToLocalRect(pts.left, pts.top, pts.right, pts.bottom),
+          regionStroke);
     }
 
     final drag = liveDragPx;
@@ -58,5 +74,6 @@ class SelectionPainter extends CustomPainter {
   bool shouldRepaint(covariant SelectionPainter old) =>
       old.liveDragPx != liveDragPx ||
       !identical(old.selected, selected) ||
+      old.regionsPts.length != regionsPts.length ||
       old.transform.pageSizePx != transform.pageSizePx;
 }

@@ -236,6 +236,15 @@ class _PdfCaptureWidgetState extends State<PdfCaptureWidget> {
     });
   }
 
+  /// Remove one accumulated region (multi mode per-region affordance).
+  void _removeRegion(int index) {
+    if (index < 0 || index >= _regions.length) return;
+    setState(() {
+      _regions.removeAt(index);
+      _recomputeHighlight();
+    });
+  }
+
   /// Rebuild the highlighted-fragment set from the current regions.
   void _recomputeHighlight() {
     _selected.clear();
@@ -387,6 +396,30 @@ class _PdfCaptureWidgetState extends State<PdfCaptureWidget> {
     );
   }
 
+  /// Small red ✕ at a region's top-right corner to remove that region.
+  Widget _regionRemoveButton(int index, Rect localRect) {
+    return Positioned(
+      left: localRect.right - 11,
+      top: localRect.top - 11,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: () => _removeRegion(index),
+        child: Container(
+          width: 22,
+          height: 22,
+          decoration: const BoxDecoration(
+            color: Color(0xFFD33A3A),
+            shape: BoxShape.circle,
+            boxShadow: [
+              BoxShadow(color: Color(0x66000000), blurRadius: 2),
+            ],
+          ),
+          child: const Icon(Icons.close, size: 15, color: Colors.white),
+        ),
+      ),
+    );
+  }
+
   Widget _buildViewer() {
     final bytes = _pdfBytes;
     if (bytes == null) {
@@ -420,11 +453,18 @@ class _PdfCaptureWidgetState extends State<PdfCaptureWidget> {
             for (final i in _selected)
               if (_fragments[i].page == pageIndex) _fragments[i]
           ];
+          // Committed regions on this page, with their global index (for remove).
+          final regionsHere = <({int index, Rect pts})>[
+            for (var i = 0; i < _regions.length; i++)
+              if (_regions[i].page == pageIndex)
+                (index: i, pts: _regions[i].pts)
+          ];
           final liveDrag = (_dragPage == pageIndex &&
                   _dragStart != null &&
                   _dragCurrent != null)
               ? Rect.fromPoints(_dragStart!, _dragCurrent!)
               : null;
+          final multi = _selectionMode == 'multi';
 
           return [
             Positioned.fill(
@@ -434,10 +474,11 @@ class _PdfCaptureWidgetState extends State<PdfCaptureWidget> {
                 onPanUpdate: (d) => _onPanUpdate(d.localPosition),
                 onPanEnd: (_) => _onPanEnd(pageIndex, transform),
                 child: CustomPaint(
-                  // selection highlight + live drag rect
+                  // selection highlight + region outlines + live drag rect
                   painter: SelectionPainter(
                     selected: selectedHere,
                     transform: transform,
+                    regionsPts: [for (final r in regionsHere) r.pts],
                     liveDragPx: liveDrag,
                   ),
                   // optional alignment debug overlay, drawn on top
@@ -448,6 +489,13 @@ class _PdfCaptureWidgetState extends State<PdfCaptureWidget> {
                 ),
               ),
             ),
+            // Per-region remove buttons (multi mode), at each region's
+            // top-right corner. On top of the gesture layer so taps land here.
+            if (multi)
+              for (final r in regionsHere)
+                _regionRemoveButton(r.index,
+                    transform.bboxToLocalRect(
+                        r.pts.left, r.pts.top, r.pts.right, r.pts.bottom)),
           ];
         },
       ),
