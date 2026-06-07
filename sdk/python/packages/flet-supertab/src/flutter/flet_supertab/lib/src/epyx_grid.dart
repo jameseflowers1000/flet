@@ -1012,12 +1012,41 @@ class _EpyxGridState extends State<EpyxGrid>
           final unbounded = constraints.maxHeight == double.infinity;
 
           if (unbounded && _pixelLodActive) {
-            // LOD + Natural mode: force bounded height to prevent
-            // shrinkWrap from building all items every frame.
+            // LOD + Natural mode: we MUST bound the height so the virtual list
+            // doesn't shrinkWrap-build every row each frame (the whole reason
+            // this branch exists — random-million regressed when this bound was
+            // miscomputed).
             final screenH = MediaQuery.sizeOf(context).height;
-            final tableH = (screenH * 0.6).clamp(200.0, screenH - 100.0);
+            final ceiling = (screenH * 0.6).clamp(200.0, screenH - 100.0);
+            final summaryH =
+                summaryValues.isNotEmpty ? _source.rowHeight : 0.0;
+            // gridBody = column-header row + data rows + (summary footer).
+            final contentH =
+                _source.headerRowHeight + _cache.totalHeight + summaryH;
+            // Only treat as "small" when the ENTIRE table provably fits under
+            // the ceiling with a known height. Everything else (large tables,
+            // and the pre-load frame where the height isn't known yet) takes
+            // the ORIGINAL, untouched ceiling path below — zero behavior change
+            // for random-million.
+            final knownSmall = _cache.totalRows > 0 &&
+                _cache.totalHeight > 0.0 &&
+                contentH <= ceiling;
+            if (knownSmall) {
+              // Small table: hug its content so the summary footer sits right
+              // below the last row instead of being stranded at the bottom of
+              // a fixed 60%-screen box.
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  headerBar,
+                  SizedBox(height: contentH, child: gridBody),
+                ],
+              );
+            }
+            // ORIGINAL behavior (unchanged) for large / not-yet-measured tables.
             return SizedBox(
-              height: tableH,
+              height: ceiling,
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [

@@ -47,6 +47,8 @@ class _PdfCaptureWidgetState extends State<PdfCaptureWidget> {
   int? _dragPage;
   // Status line (e.g. the reading-order text Python extracted).
   String? _status;
+  // Surfaced error from the Open-PDF picker (else it fails silently).
+  String? _pickError;
 
   // Request config pushed via the invoke channel (Python→Dart PROPERTY sync
   // does not deliver for this control; invoke methods do). These override the
@@ -151,27 +153,41 @@ class _PdfCaptureWidgetState extends State<PdfCaptureWidget> {
   /// so it can pull the bytes (`get_document_bytes`), extract, and push
   /// fragments back. The surface itself stays domain-agnostic.
   Future<void> _pickPdf() async {
-    final result = await FilePicker.platform.pickFiles(
-      type: FileType.custom,
-      allowedExtensions: ['pdf'],
-      withData: true,
-    );
-    if (result == null || result.files.isEmpty) return;
-    final picked = result.files.first;
-    final bytes = picked.bytes;
-    if (bytes == null) return;
-    setState(() {
-      _pdfBytes = bytes;
-      _docVersion++;
-      _fragments = const []; // cleared until Python re-extracts
-      _regions.clear();
-      _selected.clear();
-      _status = null;
-    });
-    widget.control.triggerEventWithoutSubscribers(
-      'document_changed',
-      jsonEncode({'name': picked.name}),
-    );
+    try {
+      final result = await FilePicker.platform.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: ['pdf'],
+        withData: true,
+      );
+      if (result == null || result.files.isEmpty) return; // user cancelled
+      final picked = result.files.first;
+      // On desktop, file_picker often returns a path with bytes == null even
+      // when withData is requested — read the file ourselves in that case.
+      Uint8List? bytes = picked.bytes;
+      if (bytes == null && picked.path != null) {
+        bytes = await File(picked.path!).readAsBytes();
+      }
+      if (bytes == null) {
+        setState(() => _pickError = 'Open PDF: no bytes and no path for '
+            '"${picked.name}"');
+        return;
+      }
+      setState(() {
+        _pickError = null;
+        _pdfBytes = bytes;
+        _docVersion++;
+        _fragments = const []; // cleared until Python re-extracts
+        _regions.clear();
+        _selected.clear();
+        _status = null;
+      });
+      widget.control.triggerEventWithoutSubscribers(
+        'document_changed',
+        jsonEncode({'name': picked.name}),
+      );
+    } catch (e) {
+      setState(() => _pickError = 'Open PDF failed: $e');
+    }
   }
 
   // ── drag-rectangle selection ───────────────────────────────────────
@@ -318,6 +334,21 @@ class _PdfCaptureWidgetState extends State<PdfCaptureWidget> {
             ),
           ),
         ),
+        if (_pickError != null)
+          Positioned(
+            top: 52,
+            left: 8,
+            right: 8,
+            child: SafeArea(
+              child: Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                color: const Color(0xEEAA0033),
+                child: SelectableText(_pickError!,
+                    style: const TextStyle(color: Colors.white, fontSize: 12)),
+              ),
+            ),
+          ),
         // Agent-authored instruction banner (top, clearing the Open PDF button).
         if (_instructions().isNotEmpty)
           Positioned(
@@ -332,7 +363,7 @@ class _PdfCaptureWidgetState extends State<PdfCaptureWidget> {
                   color: const Color(0xCC101418),
                   borderRadius: BorderRadius.circular(6),
                 ),
-                child: Text(
+                child: SelectableText(
                   _instructions(),
                   style: const TextStyle(color: Colors.white, fontSize: 13),
                 ),
