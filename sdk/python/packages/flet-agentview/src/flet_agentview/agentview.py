@@ -52,6 +52,10 @@ class AgentView(ft.LayoutControl):
     # Whether this view is the active/visible layer (triggers input focus)
     active: bool = True
 
+    # The user's name — labels their turns in the right-click "Copy
+    # conversation" output (the agent's turns are labelled "Orch:").
+    user_name: str = "You"
+
     # Agent mode label shown as a chip in the composer (e.g. "General")
     mode_label: str = ""
 

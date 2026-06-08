@@ -33,6 +33,8 @@ class ChatComposer extends StatefulWidget {
   final String modeIcon;
   final List<Map<String, dynamic>> breadcrumb;
   final ValueChanged<int>? onBreadcrumbTap;
+  // Right-click "Copy conversation" → copies the whole chat to the clipboard.
+  final VoidCallback? onCopyConversation;
 
   const ChatComposer({
     super.key,
@@ -44,6 +46,7 @@ class ChatComposer extends StatefulWidget {
     this.modeIcon = '',
     this.breadcrumb = const [],
     this.onBreadcrumbTap,
+    this.onCopyConversation,
   });
 
   @override
@@ -560,6 +563,25 @@ class _ChatComposerState extends State<ChatComposer> {
                   maxLines: 5,
                   minLines: 1,
                   onChanged: _onTextChanged,
+                  // Add "Copy conversation" to the field's right-click menu,
+                  // next to the native Paste/Cut/Copy. This is where the user
+                  // actually right-clicks.
+                  contextMenuBuilder: (context, editableState) {
+                    final items = editableState.contextMenuButtonItems;
+                    return AdaptiveTextSelectionToolbar.buttonItems(
+                      anchors: editableState.contextMenuAnchors,
+                      buttonItems: <ContextMenuButtonItem>[
+                        ContextMenuButtonItem(
+                          label: 'Copy conversation',
+                          onPressed: () {
+                            ContextMenuController.removeAny();
+                            widget.onCopyConversation?.call();
+                          },
+                        ),
+                        ...items,
+                      ],
+                    );
+                  },
                   style: const TextStyle(color: Colors.white, fontSize: 13),
                   decoration: InputDecoration(
                     hintText: widget.hintText,

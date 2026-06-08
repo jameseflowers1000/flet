@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import 'package:flet/flet.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import 'chat_composer.dart';
 import 'message_list.dart';
@@ -208,6 +209,21 @@ class _AgentViewControlState extends State<AgentViewControl> {
     );
   }
 
+  /// Right-click → Copy conversation. Serializes the whole chat to the
+  /// clipboard, labelling the user's turns with their name and the agent's
+  /// with "Orch:".
+  void _copyConversation() {
+    final name = widget.control.getString("user_name") ?? "You";
+    final buf = StringBuffer();
+    for (final m in _messages) {
+      final speaker =
+          (m.role == 'user' || m.role == 'request') ? name : 'Orch';
+      buf.writeln('$speaker: ${m.content}');
+      buf.writeln();
+    }
+    Clipboard.setData(ClipboardData(text: buf.toString().trimRight()));
+  }
+
   @override
   Widget build(BuildContext context) {
     // Send version to Python once
@@ -252,6 +268,7 @@ class _AgentViewControlState extends State<AgentViewControl> {
               modeIcon: _modeIcon,
               breadcrumb: _breadcrumb,
               onBreadcrumbTap: _onContextNav,
+              onCopyConversation: _copyConversation,
             ),
           ],
         ),
