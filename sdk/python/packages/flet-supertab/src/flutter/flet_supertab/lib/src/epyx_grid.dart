@@ -1684,6 +1684,38 @@ class _EpyxGridState extends State<EpyxGrid>
             : w == 'w900' ? FontWeight.w900 : weight;
       }
     }
+    // Scale-to-fit with a floor, never blank. Keep the requested size where it
+    // fits (a wide Item/total column at size 70 stays 70). Where the value is
+    // too wide, shrink the font to fit — but only down to kMinSummaryFont;
+    // past that, scaling to a sub-pixel speck is pointless, so hold at the
+    // floor and let the ellipsis clip ("The value is 1…") instead.
+    //
+    // FittedBox does the actual fitting (it measures real layout, so it fits
+    // exactly — a TextPainter estimate misses font-weight/text-scaler and
+    // leaves the ellipsis biting). A cheap TextPainter estimate only DECIDES
+    // which branch: scale (worth it) vs. floor+ellipsis (too small).
+    const double kMinSummaryFont = 5.0;
+    final textStyle = TextStyle(
+      color: fg,
+      fontSize: size,
+      fontFamily: font,
+      fontWeight: weight,
+      fontStyle: italic ? FontStyle.italic : FontStyle.normal,
+    );
+    final align = _source.isNumericColumn(i)
+        ? Alignment.centerRight
+        : Alignment.centerLeft;
+    double estSize = size;
+    final availW = _getColumnWidth(i) - 2 * _source.cellPaddingH;
+    if (text.isNotEmpty && availW > 0) {
+      final tp = TextPainter(
+        text: TextSpan(text: text, style: textStyle),
+        maxLines: 1,
+        textDirection: TextDirection.ltr,
+      )..layout();
+      if (tp.width > availW) estSize = size * (availW / tp.width);
+    }
+    final bool scaleToFit = estSize >= kMinSummaryFont;
     return Container(
       width: _getColumnWidth(i),
       height: rowHeight,
@@ -1698,20 +1730,23 @@ class _EpyxGridState extends State<EpyxGrid>
               color: _source.gridLineColor, width: _source.gridLineWidth),
         ),
       ),
-      alignment: _source.isNumericColumn(i)
-          ? Alignment.centerRight
-          : Alignment.centerLeft,
-      child: Text(
-        text,
-        style: TextStyle(
-          color: fg,
-          fontSize: size,
-          fontFamily: font,
-          fontWeight: weight,
-          fontStyle: italic ? FontStyle.italic : FontStyle.normal,
-        ),
-        overflow: TextOverflow.ellipsis,
-      ),
+      // FittedBox needs tight constraints, so it owns the alignment; the
+      // floor branch is a plain Text and leans on Container.alignment.
+      alignment: scaleToFit ? null : align,
+      child: scaleToFit
+          ? FittedBox(
+              fit: BoxFit.scaleDown,
+              alignment: align,
+              child: Text(text,
+                  maxLines: 1, softWrap: false, style: textStyle),
+            )
+          : Text(
+              text,
+              maxLines: 1,
+              softWrap: false,
+              overflow: TextOverflow.ellipsis,
+              style: textStyle.copyWith(fontSize: kMinSummaryFont),
+            ),
     );
   }
 
