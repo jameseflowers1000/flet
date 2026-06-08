@@ -1448,6 +1448,29 @@ class _EpyxGridState extends State<EpyxGrid>
         final frozenRows = widget.control.getInt("frozen_rows_count", 0) ?? 0;
         final scrollableRowCount = itemCount - frozenRows;
 
+        // Bounded height for the scrollable list: when the viewport is taller
+        // than (column header + rows + summary), size the list to its content
+        // so the summary row sits DIRECTLY below the last data row instead of
+        // being pushed to the bottom of the viewport. When content overflows,
+        // it fills the remaining space and scrolls (summary stays pinned).
+        double _frozenRowsH = 0;
+        for (int i = 0; i < frozenRows && i < _effectiveRowCount; i++) {
+          _frozenRowsH += _getRowHeight(i);
+        }
+        final _summaryH =
+            summaryValues.isEmpty ? 0.0 : _summaryRowHeight(summaryValues);
+        final _scrollContentH =
+            (_cache.totalHeight - _frozenRowsH).clamp(0.0, double.infinity);
+        final _availForList = (constraints.maxHeight -
+                _source.headerRowHeight - _summaryH - _frozenRowsH)
+            .clamp(0.0, double.infinity);
+        // Hug content when it fits; fill (and scroll) when it overflows or the
+        // content height isn't known yet (pre-load frame), so the list is never
+        // momentarily empty.
+        final boundedListH = _scrollContentH > 0
+            ? math.min(_scrollContentH, _availForList)
+            : _availForList;
+
         // ETB-01 legacy flag.
         final allowLegacyDragSelect =
             widget.control.getBool("allow_drag_select", false) ?? false;
@@ -1522,7 +1545,8 @@ class _EpyxGridState extends State<EpyxGrid>
                         },
                       )
                     else
-                      Expanded(
+                      SizedBox(
+                        height: boundedListH,
                         child: Stack(
                           children: [
                             SuperListView.builder(
@@ -1588,15 +1612,32 @@ class _EpyxGridState extends State<EpyxGrid>
     );
   }
 
+  /// Height the summary/footer row needs (grows to fit the largest
+  /// the.cell.size; 1.4× covers ascenders + descenders).
+  double _summaryRowHeight(List<String> values,
+      {int colStart = 0, int? colEnd}) {
+    final endCol = colEnd ?? _source.columnCount;
+    double maxSize = _source.cellFontSize;
+    for (int i = colStart; i < endCol; i++) {
+      if (_source.isColumnHidden(i)) continue;
+      final s = _evalSummaryRender(i, values)?['size']; // cached per cell
+      final d = s == null ? null : double.tryParse(s);
+      if (d != null && d > maxSize) maxSize = d;
+    }
+    return math.max(_source.rowHeight, maxSize * 1.4 + 2 * _source.cellPaddingV);
+  }
+
   /// Summary row — fixed footer with aggregated values.
   Widget _buildSummaryRow(List<String> values,
       {int colStart = 0, int? colEnd}) {
     final endCol = colEnd ?? _source.columnCount;
     final headerBg =
         _color("header_bg_color", context, const Color(0xFF2D2D30));
+    final rowHeight =
+        _summaryRowHeight(values, colStart: colStart, colEnd: colEnd);
 
     return Container(
-      height: _source.rowHeight,
+      height: rowHeight,
       decoration: BoxDecoration(
         color: headerBg,
         border: Border(
@@ -1608,35 +1649,68 @@ class _EpyxGridState extends State<EpyxGrid>
         children: [
           for (int i = colStart; i < endCol; i++)
             if (!_source.isColumnHidden(i))
-              Container(
-                width: _getColumnWidth(i),
-                height: _source.rowHeight,
-                padding: EdgeInsets.symmetric(
-                  horizontal: _source.cellPaddingH,
-                  vertical: _source.cellPaddingV,
-                ),
-                decoration: BoxDecoration(
-                  border: Border(
-                    right: BorderSide(
-                        color: _source.gridLineColor,
-                        width: _source.gridLineWidth),
-                  ),
-                ),
-                alignment: _source.isNumericColumn(i)
-                    ? Alignment.centerRight
-                  : Alignment.centerLeft,
-              child: Text(
-                i < values.length ? values[i] : '',
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: _source.cellFontSize,
-                  fontFamily: _source.fontFamily,
-                  fontWeight: FontWeight.w600,
-                ),
-                overflow: TextOverflow.ellipsis,
-              ),
-            ),
+              _buildSummaryCell(i, values, rowHeight),
         ],
+      ),
+    );
+  }
+
+  /// One footer cell, styled by the same render code the data cells use, run
+  /// with is_summary=true (so `if the.cell.is_summary: the.cell.size = 28`
+  /// applies here).
+  Widget _buildSummaryCell(int i, List<String> values, double rowHeight) {
+    final sr = _evalSummaryRender(i, values);
+    Color fg = Colors.white;
+    Color? cellBg;
+    double size = _source.cellFontSize;
+    FontWeight weight = FontWeight.w600;
+    String? font = _source.fontFamily;
+    bool italic = false;
+    String text = i < values.length ? values[i] : '';
+    if (sr != null) {
+      if (sr['fg'] != null) fg = _parseHexColor(sr['fg']!) ?? fg;
+      if (sr['bg'] != null) cellBg = _parseHexColor(sr['bg']!);
+      if (sr['size'] != null) size = double.tryParse(sr['size']!) ?? size;
+      if (sr['font'] != null) font = sr['font'];
+      if (sr['italic'] != null) italic = sr['italic'] == 'true';
+      if (sr['display'] != null) text = sr['display']!;
+      final w = sr['weight'];
+      if (w != null) {
+        weight = w == 'bold' ? FontWeight.bold
+            : w == 'w100' ? FontWeight.w100 : w == 'w200' ? FontWeight.w200
+            : w == 'w300' ? FontWeight.w300 : w == 'w400' ? FontWeight.w400
+            : w == 'w500' ? FontWeight.w500 : w == 'w600' ? FontWeight.w600
+            : w == 'w700' ? FontWeight.w700 : w == 'w800' ? FontWeight.w800
+            : w == 'w900' ? FontWeight.w900 : weight;
+      }
+    }
+    return Container(
+      width: _getColumnWidth(i),
+      height: rowHeight,
+      padding: EdgeInsets.symmetric(
+        horizontal: _source.cellPaddingH,
+        vertical: _source.cellPaddingV,
+      ),
+      decoration: BoxDecoration(
+        color: cellBg,
+        border: Border(
+          right: BorderSide(
+              color: _source.gridLineColor, width: _source.gridLineWidth),
+        ),
+      ),
+      alignment: _source.isNumericColumn(i)
+          ? Alignment.centerRight
+          : Alignment.centerLeft,
+      child: Text(
+        text,
+        style: TextStyle(
+          color: fg,
+          fontSize: size,
+          fontFamily: font,
+          fontWeight: weight,
+          fontStyle: italic ? FontStyle.italic : FontStyle.normal,
+        ),
+        overflow: TextOverflow.ellipsis,
       ),
     );
   }
@@ -3744,9 +3818,27 @@ class _EpyxGridState extends State<EpyxGrid>
   }
 
   /// Row height: cache-aware. Uses cache height in LOD mode, else source.
+  /// Then grows to fit the largest `the.cell.size` any cell in the row sets,
+  /// so a bigger font isn't clipped (reuses the same render plane / per-cell
+  /// size the cells already compute). Only called for BUILT rows (the visible
+  /// window), so it never evaluates renders for the millions of unrendered
+  /// rows that extentEstimation probes — LOD-safe.
   double _getRowHeight(int row) {
-    if (_pixelLodActive) return _cache.rowHeight(row);
-    return _source.getRowHeight(row);
+    final base =
+        _pixelLodActive ? _cache.rowHeight(row) : _source.getRowHeight(row);
+    if (_renderProjection == null) return base;
+    double maxSize = 0;
+    for (int c = 0; c < _source.columnCount; c++) {
+      if (_source.isColumnHidden(c)) continue;
+      final s = _evalCellRender(row, c)?['size']; // cached; reused by _buildCell
+      final d = s == null ? null : double.tryParse(s);
+      if (d != null && d > maxSize) maxSize = d;
+    }
+    if (maxSize <= 0) return base;
+    // 1.4× the font covers the full line box (ascenders + descenders) so
+    // glyph tails like g/y/p aren't clipped; then add vertical padding.
+    final needed = maxSize * 1.4 + 2 * _source.cellPaddingV;
+    return needed > base ? needed : base;
   }
 
   /// Column width: use drag override if set, else source default.
@@ -3958,6 +4050,7 @@ class _EpyxGridState extends State<EpyxGrid>
       'is_editing': _isEditing && isAnchorCell,
       'is_focused': isAnchorCell,
       'is_overridden': _cache.hasOverride(rowIndex, colNameForCtx),
+      'is_summary': false,
     };
     try {
       // Exec the function def + call together (f-strings with format specs
@@ -3979,6 +4072,69 @@ class _EpyxGridState extends State<EpyxGrid>
             style[dartKey] = config[prop].toString();
             final z = config['${prop}_z'];
             if (z != null) style['${dartKey}_z'] = z.toString();
+          }
+        }
+        _cellRenderCache[key] = style.isEmpty ? null : style;
+        return _cellRenderCache[key];
+      }
+    } catch (_) {}
+    _cellRenderCache[key] = null;
+    return null;
+  }
+
+  /// Evaluate the SAME render code for a summary-footer cell, with
+  /// `is_summary` true. Lets `if the.cell.is_summary: the.cell.size = 28`
+  /// style the footer through the identical render plane the data cells use.
+  Map<String, String>? _evalSummaryRender(
+      int colIndex, List<String> summaryValues) {
+    if (_renderProjection == null || !MicroPythonService.isReady) return null;
+    final key = 'summary:$colIndex';
+    if (_cellRenderCache.containsKey(key)) return _cellRenderCache[key];
+
+    final proj = _renderProjection!;
+    final execBody = proj['exec'] as String? ?? '';
+    final evalExpr = proj['eval'] as String? ?? '';
+    if (evalExpr.isEmpty) {
+      _cellRenderCache[key] = null;
+      return null;
+    }
+    final colName =
+        colIndex < _source.columnCount ? _source.columnName(colIndex) : '';
+    final cellValue =
+        colIndex < summaryValues.length ? summaryValues[colIndex] : '';
+    final ctlIdStr = widget.control.id?.toString();
+    final pushedCtx =
+        ctlIdStr == null ? null : RenderPlaneControl.getContext(ctlIdStr);
+    final ctx = <String, dynamic>{
+      if (pushedCtx != null) ...pushedCtx,
+      'value': cellValue,
+      'row': summaryValues,
+      'col_name': colName,
+      'col_index': colIndex,
+      'row_index': _effectiveRowCount, // footer sits after the last data row
+      'is_selected': false,
+      'is_hovered': false,
+      'is_hovered_cell': false,
+      'hovered_col': -1,
+      'total_rows': _effectiveRowCount,
+      'total_cols': _source.columnCount,
+      'viewport_pos': 0,
+      'viewport_count': 1,
+      'is_editing': false,
+      'is_focused': false,
+      'is_overridden': false,
+      'is_summary': true,
+    };
+    try {
+      final config = MicroPythonService.execEval(
+          'cell._reset()\n$execBody\n$evalExpr\n', 'cell._to_config()', ctx);
+      if (config is Map && config.isNotEmpty) {
+        final style = <String, String>{};
+        for (final prop in ['bg', 'color', 'weight', 'size', 'font',
+                            'italic', 'tooltip', 'display']) {
+          if (config[prop] != null) {
+            final dartKey = prop == 'color' ? 'fg' : prop;
+            style[dartKey] = config[prop].toString();
           }
         }
         _cellRenderCache[key] = style.isEmpty ? null : style;
