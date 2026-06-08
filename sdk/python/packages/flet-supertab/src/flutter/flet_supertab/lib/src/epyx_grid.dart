@@ -1266,6 +1266,23 @@ class _EpyxGridState extends State<EpyxGrid>
           final frozenWidth = _frozenColumnsWidth(frozenCount);
           final scrollableWidth = _scrollableColumnsWidth(frozenCount);
 
+          // Bound the row-list height so the summary row sits directly below
+          // the last data row when the viewport is taller than the content,
+          // instead of being pushed to the bottom of the viewport. Mirrors the
+          // no-frozen-columns path below. Frozen COLUMNS only — this path has
+          // no frozen ROWS, so there's no frozen-rows term. Used by the bounded
+          // (!unbounded) branches; unbounded panels shrink-wrap as before.
+          final summaryH = summaryValues.isEmpty
+              ? 0.0
+              : _summaryRowHeight(summaryValues);
+          final scrollContentH = _cache.totalHeight.clamp(0.0, double.infinity);
+          final availForList =
+              (constraints.maxHeight - _source.headerRowHeight - summaryH)
+                  .clamp(0.0, double.infinity);
+          final boundedListH = scrollContentH > 0
+              ? math.min(scrollContentH, availForList)
+              : availForList;
+
           // ETB-01 legacy flag.
           final allowLegacyDragSelect =
               widget.control.getBool("allow_drag_select", false) ?? false;
@@ -1339,7 +1356,8 @@ class _EpyxGridState extends State<EpyxGrid>
                             },
                           )
                         else
-                          Expanded(
+                          SizedBox(
+                            height: boundedListH,
                             child: SuperListView.builder(
                               controller: _getFrozenController(),
                               // ETB-19: same as the scrollable panel below
@@ -1403,7 +1421,8 @@ class _EpyxGridState extends State<EpyxGrid>
                                 },
                               )
                             else
-                              Expanded(
+                              SizedBox(
+                                height: boundedListH,
                                 child: SuperListView.builder(
                                   controller: _yController,
                                   listController: _listController,
