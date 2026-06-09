@@ -2170,7 +2170,13 @@ class _EpyxGridState extends State<EpyxGrid>
                 : _wrapTooltip(renderTooltip, _wrapIcon(renderIcon, Text(
                     cellText,
                     style: TextStyle(
-                      color: textColor == Colors.transparent ? null : textColor,
+                      // No explicit cell color → default to white. The grid bg
+                      // is always dark (page #26252D, header #2D2D30), and both
+                      // header cells (l.1779) and summary cells (l.1682) already
+                      // default white. Relying on the ambient DefaultTextStyle
+                      // here diverged web (dark) from macOS (white) — the cause
+                      // of "dark-on-dark / invisible cell text" on the web build.
+                      color: textColor == Colors.transparent ? Colors.white : textColor,
                       fontSize: renderSize ?? _source.cellFontSize,
                       fontFamily: renderFont ?? _source.fontFamily,
                       fontWeight: renderWeight,
