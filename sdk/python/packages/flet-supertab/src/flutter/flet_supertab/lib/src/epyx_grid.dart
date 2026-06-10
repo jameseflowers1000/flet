@@ -370,7 +370,8 @@ class _EpyxGridState extends State<EpyxGrid>
     final newStyles = widget.control.getString("cell_styles") ?? '';
     final newOverrides = widget.control.getString("override_cells") ?? '';
     final newHidden = widget.control.getString("hidden_columns") ?? '';
-    final newSummary = widget.control.getString("summary_row") ?? '';
+    final newSummary = (widget.control.getString("summary_row") ?? '') +
+        '|' + (widget.control.getString("summary_rows") ?? '');
     // Note: row_heights is excluded from the data key because it's page-scoped
     // LOD data (changes on every page_request), not table structure. Including
     // it causes false rebuilds that lose cached heights.
@@ -908,7 +909,8 @@ class _EpyxGridState extends State<EpyxGrid>
       _lastStylesJson = widget.control.getString("cell_styles") ?? '';
       _lastOverridesJson = widget.control.getString("override_cells") ?? '';
       _lastHiddenJson = widget.control.getString("hidden_columns") ?? '';
-      _lastSummaryJson = widget.control.getString("summary_row") ?? '';
+      _lastSummaryJson = (widget.control.getString("summary_row") ?? '') +
+          '|' + (widget.control.getString("summary_rows") ?? '');
       _sourceInitialized = true;
     }
     // Tab-nav metadata mirrored from the host ETab Property. The whole
@@ -965,15 +967,31 @@ class _EpyxGridState extends State<EpyxGrid>
         label, ctype, sortIndicator, filterActive, rowPositionText, context,
         bannerText: _bannerText, bannerFg: _bannerFg, bannerIcon: _bannerIcon);
 
-    // -- Summary row data --
-    final summaryJson = widget.control.getString("summary_row") ?? "";
-    List<String> summaryValues = [];
-    if (summaryJson.isNotEmpty) {
+    // -- Summary/footer row data --
+    // Prefer `summary_rows` (list-of-lists — multiple footer rows, one per
+    // `the.summary = the.Row(...)`); fall back to the single `summary_row`.
+    List<List<String>> summaryRows = [];
+    final summaryRowsJson = widget.control.getString("summary_rows") ?? "";
+    if (summaryRowsJson.isNotEmpty) {
       try {
-        summaryValues = (jsonDecode(summaryJson) as List)
-            .map<String>((e) => e?.toString() ?? '')
+        summaryRows = (jsonDecode(summaryRowsJson) as List)
+            .map<List<String>>((r) => (r as List)
+                .map<String>((e) => e?.toString() ?? '')
+                .toList())
             .toList();
       } catch (_) {}
+    }
+    if (summaryRows.isEmpty) {
+      final summaryJson = widget.control.getString("summary_row") ?? "";
+      if (summaryJson.isNotEmpty) {
+        try {
+          summaryRows = [
+            (jsonDecode(summaryJson) as List)
+                .map<String>((e) => e?.toString() ?? '')
+                .toList()
+          ];
+        } catch (_) {}
+      }
     }
 
     // -- Grid body --
@@ -986,7 +1004,7 @@ class _EpyxGridState extends State<EpyxGrid>
         ? const Center(
             child: Text("No data",
                 style: TextStyle(color: Colors.grey, fontSize: 14)))
-        : _buildGridBody(context, summaryValues: summaryValues);
+        : _buildGridBody(context, summaryRows: summaryRows);
 
     // Use LayoutBuilder to handle bounded vs unbounded height.
     // Bounded (Gallery/Fit): Expanded fills available space.
@@ -1018,8 +1036,7 @@ class _EpyxGridState extends State<EpyxGrid>
             // miscomputed).
             final screenH = MediaQuery.sizeOf(context).height;
             final ceiling = (screenH * 0.6).clamp(200.0, screenH - 100.0);
-            final summaryH =
-                summaryValues.isNotEmpty ? _source.rowHeight : 0.0;
+            final summaryH = _summaryBlockHeight(summaryRows);
             // gridBody = column-header row + data rows + (summary footer).
             final contentH =
                 _source.headerRowHeight + _cache.totalHeight + summaryH;
@@ -1236,7 +1253,7 @@ class _EpyxGridState extends State<EpyxGrid>
   // ────────────────────────────────────────────────────────────────
 
   Widget _buildGridBody(BuildContext context,
-      {List<String> summaryValues = const []}) {
+      {List<List<String>> summaryRows = const []}) {
     final showRowNumbers =
         widget.control.getBool("show_row_numbers", false) ?? false;
     final rowNumWidth = showRowNumbers ? _rowNumberWidth() : 0.0;
@@ -1272,9 +1289,7 @@ class _EpyxGridState extends State<EpyxGrid>
           // no-frozen-columns path below. Frozen COLUMNS only — this path has
           // no frozen ROWS, so there's no frozen-rows term. Used by the bounded
           // (!unbounded) branches; unbounded panels shrink-wrap as before.
-          final summaryH = summaryValues.isEmpty
-              ? 0.0
-              : _summaryRowHeight(summaryValues);
+          final summaryH = _summaryBlockHeight(summaryRows);
           final scrollContentH = _cache.totalHeight.clamp(0.0, double.infinity);
           final availForList =
               (constraints.maxHeight - _source.headerRowHeight - summaryH)
@@ -1383,8 +1398,8 @@ class _EpyxGridState extends State<EpyxGrid>
                               },
                             ),
                           ),
-                        if (summaryValues.isNotEmpty)
-                          _buildSummaryRow(summaryValues, colEnd: frozenCount),
+                        if (summaryRows.isNotEmpty)
+                          _buildSummaryBlock(summaryRows, colEnd: frozenCount),
                       ],
                     ),
                   ),
@@ -1449,8 +1464,8 @@ class _EpyxGridState extends State<EpyxGrid>
                                   },
                                 ),
                               ),
-                            if (summaryValues.isNotEmpty)
-                              _buildSummaryRow(summaryValues, colStart: frozenCount),
+                            if (summaryRows.isNotEmpty)
+                              _buildSummaryBlock(summaryRows, colStart: frozenCount),
                           ],
                         ),
                       ),
@@ -1476,8 +1491,7 @@ class _EpyxGridState extends State<EpyxGrid>
         for (int i = 0; i < frozenRows && i < _effectiveRowCount; i++) {
           _frozenRowsH += _getRowHeight(i);
         }
-        final _summaryH =
-            summaryValues.isEmpty ? 0.0 : _summaryRowHeight(summaryValues);
+        final _summaryH = _summaryBlockHeight(summaryRows);
         final _scrollContentH =
             (_cache.totalHeight - _frozenRowsH).clamp(0.0, double.infinity);
         final _availForList = (constraints.maxHeight -
@@ -1600,8 +1614,8 @@ class _EpyxGridState extends State<EpyxGrid>
                           ],
                         ),
                       ),
-                    if (summaryValues.isNotEmpty)
-                      _buildSummaryRow(summaryValues),
+                    if (summaryRows.isNotEmpty)
+                      _buildSummaryBlock(summaryRows),
                   ],
                 ),
               ),
@@ -1633,27 +1647,49 @@ class _EpyxGridState extends State<EpyxGrid>
 
   /// Height the summary/footer row needs (grows to fit the largest
   /// the.cell.size; 1.4× covers ascenders + descenders).
-  double _summaryRowHeight(List<String> values,
+  /// Total height of ALL footer rows (each `the.summary =` adds one).
+  double _summaryBlockHeight(List<List<String>> rows,
+      {int colStart = 0, int? colEnd}) {
+    double total = 0.0;
+    for (int k = 0; k < rows.length; k++) {
+      total += _summaryRowHeight(rows[k], k, colStart: colStart, colEnd: colEnd);
+    }
+    return total;
+  }
+
+  /// All footer rows stacked, in declaration order.
+  Widget _buildSummaryBlock(List<List<String>> rows,
+      {int colStart = 0, int? colEnd}) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        for (int k = 0; k < rows.length; k++)
+          _buildSummaryRow(rows[k], k, colStart: colStart, colEnd: colEnd),
+      ],
+    );
+  }
+
+  double _summaryRowHeight(List<String> values, int summaryIndex,
       {int colStart = 0, int? colEnd}) {
     final endCol = colEnd ?? _source.columnCount;
     double maxSize = _source.cellFontSize;
     for (int i = colStart; i < endCol; i++) {
       if (_source.isColumnHidden(i)) continue;
-      final s = _evalSummaryRender(i, values)?['size']; // cached per cell
+      final s = _evalSummaryRender(i, values, summaryIndex)?['size']; // cached
       final d = s == null ? null : double.tryParse(s);
       if (d != null && d > maxSize) maxSize = d;
     }
     return math.max(_source.rowHeight, maxSize * 1.4 + 2 * _source.cellPaddingV);
   }
 
-  /// Summary row — fixed footer with aggregated values.
-  Widget _buildSummaryRow(List<String> values,
+  /// One footer row (the `summaryIndex`-th). Multiple `the.summary =` stack.
+  Widget _buildSummaryRow(List<String> values, int summaryIndex,
       {int colStart = 0, int? colEnd}) {
     final endCol = colEnd ?? _source.columnCount;
     final headerBg =
         _color("header_bg_color", context, const Color(0xFF2D2D30));
     final rowHeight =
-        _summaryRowHeight(values, colStart: colStart, colEnd: colEnd);
+        _summaryRowHeight(values, summaryIndex, colStart: colStart, colEnd: colEnd);
 
     return Container(
       height: rowHeight,
@@ -1668,7 +1704,7 @@ class _EpyxGridState extends State<EpyxGrid>
         children: [
           for (int i = colStart; i < endCol; i++)
             if (!_source.isColumnHidden(i))
-              _buildSummaryCell(i, values, rowHeight),
+              _buildSummaryCell(i, values, rowHeight, summaryIndex),
         ],
       ),
     );
@@ -1677,8 +1713,9 @@ class _EpyxGridState extends State<EpyxGrid>
   /// One footer cell, styled by the same render code the data cells use, run
   /// with is_summary=true (so `if the.cell.is_summary: the.cell.size = 28`
   /// applies here).
-  Widget _buildSummaryCell(int i, List<String> values, double rowHeight) {
-    final sr = _evalSummaryRender(i, values);
+  Widget _buildSummaryCell(
+      int i, List<String> values, double rowHeight, int summaryIndex) {
+    final sr = _evalSummaryRender(i, values, summaryIndex);
     Color fg = Colors.white;
     Color? cellBg;
     double size = _source.cellFontSize;
@@ -4111,6 +4148,7 @@ class _EpyxGridState extends State<EpyxGrid>
       'is_focused': isAnchorCell,
       'is_overridden': _cache.hasOverride(rowIndex, colNameForCtx),
       'is_summary': false,
+      'summary_index': -1, // data cells aren't footer rows
     };
     try {
       // Exec the function def + call together (f-strings with format specs
@@ -4146,9 +4184,11 @@ class _EpyxGridState extends State<EpyxGrid>
   /// `is_summary` true. Lets `if the.cell.is_summary: the.cell.size = 28`
   /// style the footer through the identical render plane the data cells use.
   Map<String, String>? _evalSummaryRender(
-      int colIndex, List<String> summaryValues) {
+      int colIndex, List<String> summaryValues, int summaryIndex) {
     if (_renderProjection == null || !MicroPythonService.isReady) return null;
-    final key = 'summary:$colIndex';
+    // Cache per (footer-row, column) — different footer rows can style
+    // differently via `the.summary_index`.
+    final key = 'summary:$summaryIndex:$colIndex';
     if (_cellRenderCache.containsKey(key)) return _cellRenderCache[key];
 
     final proj = _renderProjection!;
@@ -4184,6 +4224,7 @@ class _EpyxGridState extends State<EpyxGrid>
       'is_focused': false,
       'is_overridden': false,
       'is_summary': true,
+      'summary_index': summaryIndex,
     };
     try {
       final config = MicroPythonService.execEval(

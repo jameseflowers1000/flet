@@ -125,6 +125,11 @@ class SuperTab(ft.LayoutControl):
     # JSON-encoded summary row values (list of strings in column order) for footer display
     summary_row: str = field(default="", metadata={"data_field": "summary_row"})
 
+    # JSON-encoded MULTIPLE footer rows: list-of-lists (one inner list per footer
+    # row, values in visible-column order). Each `the.summary = the.Row(...)` adds
+    # one. Takes precedence over `summary_row` when non-empty.
+    summary_rows: str = field(default="", metadata={"data_field": "summary_rows"})
+
     # Event: called when a cell is edited
     # Event data (in e.data as JSON): {"row_index": int, "column_name": str, "old_value": str, "new_value": str}
     on_cell_edit: Optional[ft.ControlEventHandler["SuperTab"]] = None
