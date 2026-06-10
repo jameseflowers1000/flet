@@ -336,15 +336,17 @@ class _EpyxGridState extends State<EpyxGrid>
 
       // Request data for current viewport position.
       // The initial page covers rows 0-149 but user may be elsewhere.
+      // FORCE the request on every version bump: the page_data blob merged
+      // above can be stale relative to this version (a State recreation may
+      // merge it before the new push lands), so re-pull the server's current
+      // page to converge — same effect as a manual reload, which always works.
       if (newTotalRows > 0) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (!mounted) return;
           final currentRow = _yController.hasClients
               ? (_yController.offset / newRowHeight).floor().clamp(0, newTotalRows - 1)
               : 0;
-          if (!_cache.has(currentRow)) {
-            _requestPixelPage(currentRow);
-          }
+          _requestPixelPage(currentRow, force: true);
         });
       }
 
@@ -594,11 +596,15 @@ class _EpyxGridState extends State<EpyxGrid>
 
   /// Request a pixel-space page centered on targetRow from Python.
   /// Context adapts to viewport size via _dynamicPageSize.
-  void _requestPixelPage(int targetRow) {
+  void _requestPixelPage(int targetRow, {bool force = false}) {
     final int context = (_dynamicPageSize / 2).ceil();
-    // Dedup: skip if target falls inside the range already in flight
-    if (_cache.has(targetRow)) return; // already cached — no request needed
-    if (targetRow >= _pendingRangeStart && targetRow < _pendingRangeEnd) return;
+    // Dedup: skip if target falls inside the range already in flight.
+    // `force` bypasses the cache-hit dedup so a data_version bump can pull the
+    // server's CURRENT page even when a (possibly stale) page_data blob was
+    // already merged — fixes an intermittent race where an edited cell kept
+    // its old value until reload (see _onControlChanged Path 1).
+    if (!force && _cache.has(targetRow)) return; // already cached — no request needed
+    if (!force && targetRow >= _pendingRangeStart && targetRow < _pendingRangeEnd) return;
 
     // Mark the range we're about to request
     _pendingRangeStart = math.max(0, targetRow - context);
