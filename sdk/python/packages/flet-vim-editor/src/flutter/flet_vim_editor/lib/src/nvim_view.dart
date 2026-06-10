@@ -821,15 +821,21 @@ class NvimViewState extends State<NvimView> {
     rpc.notify('nvim_input', [encoded]);
 
     // Schedule a completion poll for INSERT mode based on the typed char.
+    // '(' and ',' are call-argument triggers: typing `the.Row(` (or a comma
+    // between args) immediately pops the available keyword args — for a row
+    // constructor those are the table's columns, so they're discoverable
+    // without having to guess the first letter.
     final ch = event.character ?? '';
-    final isWordOrDot = ch.length == 1 &&
+    final isCompletionTrigger = ch.length == 1 &&
         (ch == '.' ||
             ch == '_' ||
+            ch == '(' ||
+            ch == ',' ||
             (ch.codeUnitAt(0) >= 0x30 && ch.codeUnitAt(0) <= 0x39) ||
             (ch.codeUnitAt(0) >= 0x41 && ch.codeUnitAt(0) <= 0x5a) ||
             (ch.codeUnitAt(0) >= 0x61 && ch.codeUnitAt(0) <= 0x7a));
     final isBackspace = event.logicalKey == LogicalKeyboardKey.backspace;
-    if (isWordOrDot || isBackspace) {
+    if (isCompletionTrigger || isBackspace) {
       _pollCompletions();
     } else {
       VimCompletionPopup.dismiss();

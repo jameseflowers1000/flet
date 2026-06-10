@@ -464,7 +464,20 @@ String vimWordPrefix(String line, int col) {
 /// pop completions?" without depending on this file's private state.
 bool vimShouldComplete(String line, int col) {
   final prefix = vimWordPrefix(line, col);
-  if (prefix.isEmpty) return false;
+  if (prefix.isEmpty) {
+    // Empty word prefix is normally not a completion site — EXCEPT a call-arg
+    // position: the char before the cursor (skipping spaces) is '(' or ','.
+    // There the server offers the call's keyword args (for `the.Row(` those
+    // are the table's columns), so the user can browse them without typing.
+    int j = col - 1;
+    while (j >= 0 && j < line.length && line[j] == ' ') {
+      j--;
+    }
+    if (!(j >= 0 && j < line.length && (line[j] == '(' || line[j] == ','))) {
+      return false;
+    }
+    // fall through to the string/comment guard below
+  }
   // Don't trigger inside strings/comments — same heuristic as EZ.
   // (Slimmer here; EZ has the f-string-aware version.)
   String? quote;
