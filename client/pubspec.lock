@@ -537,6 +537,13 @@ packages:
       relative: true
     source: path
     version: "0.1.0"
+  flet_spy:
+    dependency: "direct main"
+    description:
+      path: "../sdk/python/packages/flet-spy/src/flutter/flet_spy"
+      relative: true
+    source: path
+    version: "0.1.0"
   flet_superplot:
     dependency: "direct main"
     description:
