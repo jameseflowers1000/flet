@@ -22,6 +22,7 @@ class Radio(LayoutControl, AdaptiveControl):
     """
     Radio buttons let people select a single option from two or more choices.
 
+    Example:
     ```python
     ft.RadioGroup(
         content=ft.Row(
@@ -30,7 +31,6 @@ class Radio(LayoutControl, AdaptiveControl):
         )
     )
     ```
-
     """
 
     label: str = ""
@@ -63,7 +63,8 @@ class Radio(LayoutControl, AdaptiveControl):
 
     fill_color: Optional[ControlStateValue[ColorValue]] = None
     """
-    The color that fills the radio, in all or specific [`ControlState`][flet.] states.
+    The color that fills the radio, in all or specific :class:`~flet.ControlState` \
+    states.
     """
 
     active_color: Optional[ColorValue] = None
@@ -73,7 +74,8 @@ class Radio(LayoutControl, AdaptiveControl):
 
     overlay_color: Optional[ControlStateValue[ColorValue]] = None
     """
-    The overlay color of this radio in all or specific [`ControlState`][flet.] states.
+    The overlay color of this radio in all or specific :class:`~flet.ControlState` \
+    states.
     """
 
     hover_color: Optional[ColorValue] = None

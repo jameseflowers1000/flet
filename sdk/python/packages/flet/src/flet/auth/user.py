@@ -3,13 +3,15 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from flet.auth.group import Group
 
+__all__ = ["User"]
+
 
 class User(dict):
     """
     Authenticated user profile used by Flet authorization flows.
 
     The instance is a mutable mapping with provider-specific user fields and
-    normalized attributes such as [`id`][(c).] and [`groups`][(c).].
+    normalized attributes such as :attr:`id` and :attr:`groups`.
 
     Args:
         kwargs: Provider-specific user fields to store in the mapping.

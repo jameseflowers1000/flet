@@ -1,8 +1,9 @@
 import math
-from dataclasses import dataclass, field
+from dataclasses import field
 from enum import Enum
 from typing import Optional
 
+from flet.controls.base_control import value
 from flet.controls.blur import BlurValue
 from flet.controls.gradients import GradientTileMode
 from flet.controls.transform import OffsetValue
@@ -26,7 +27,7 @@ __all__ = [
 
 class PaintingStyle(Enum):
     """
-    Strategy used by [`Paint.style`][flet.] when drawing geometry.
+    Strategy used by :attr:`flet.Paint.style` when drawing geometry.
 
     Determines whether a shape is rendered as a filled interior or as an
     outlined contour.
@@ -44,27 +45,27 @@ class PaintingStyle(Enum):
     Paint only the shape outline.
 
     Stroke thickness and joins/caps are controlled by properties such as
-    [`Paint.stroke_width`][flet.], [`Paint.stroke_join`][flet.], and
-    [`Paint.stroke_cap`][flet.].
+    :attr:`flet.Paint.stroke_width`, :attr:`flet.Paint.stroke_join`, and
+    :attr:`flet.Paint.stroke_cap`.
     """
 
 
-@dataclass(kw_only=True)
+@value(kw_only=True)
 class PaintGradient:
     """
-    Base class for gradients applied via [`Paint.gradient`][flet.].
+    Base class for gradients applied via :attr:`flet.Paint.gradient`.
 
     Use one of its concrete variants:
-    - [`PaintLinearGradient`][flet.]
-    - [`PaintRadialGradient`][flet.]
-    - [`PaintSweepGradient`][flet.]
+    - :class:`~flet.PaintLinearGradient`
+    - :class:`~flet.PaintRadialGradient`
+    - :class:`~flet.PaintSweepGradient`
     """
 
     _type: Optional[str] = field(init=False, repr=False, compare=False, default=None)
     """Internal gradient kind discriminator serialized to Flutter."""
 
 
-@dataclass
+@value
 class PaintLinearGradient(PaintGradient):
     """
     More information on Linear gradient
@@ -83,11 +84,11 @@ class PaintLinearGradient(PaintGradient):
 
     colors: list[ColorValue]
     """
-    The colors the gradient should obtain at each of \
-    the stops. This list must contain at least two colors.
+    The colors the gradient should obtain at each of the stops. This list must contain \
+    at least two colors.
 
     Note:
-        If [`color_stops`][(c).] is not `None`,
+        If :attr:`color_stops` is not `None`,
         this list must have the same length as `color_stops`.
     """
 
@@ -97,7 +98,7 @@ class PaintLinearGradient(PaintGradient):
 
     Note:
         If non-none, this list must have the same length as
-        [`colors`][(c).].
+        :attr:`colors`.
         If the first value is not `0.0`, then a stop with position `0.0` and a color
         equal to the first color in `colors` is implied. If the last value is not
         `1.0`, then a stop with position `1.0` and a color equal to the last color
@@ -106,8 +107,8 @@ class PaintLinearGradient(PaintGradient):
 
     tile_mode: GradientTileMode = GradientTileMode.CLAMP
     """
-    How this gradient should tile the plane beyond in the \
-    region before [`begin`][(c).] and after [`end`][(c).].
+    How this gradient should tile the plane beyond in the region before :attr:`begin` \
+    and after :attr:`end`.
     """
 
     def __post_init__(self):
@@ -136,7 +137,7 @@ class PaintLinearGradient(PaintGradient):
         )
 
 
-@dataclass
+@value
 class PaintRadialGradient(PaintGradient):
     """
     More information on Radial gradient \
@@ -225,7 +226,7 @@ class PaintRadialGradient(PaintGradient):
         )
 
 
-@dataclass
+@value
 class PaintSweepGradient(PaintGradient):
     """
     More information on Sweep gradient \
@@ -239,10 +240,10 @@ class PaintSweepGradient(PaintGradient):
 
     colors: list[str]
     """
-    The colors the gradient should obtain at each of \
-    the stops. This list must contain at least two colors.
+    The colors the gradient should obtain at each of the stops. This list must contain \
+    at least two colors.
 
-    If [`color_stops`][(c).color_stops] is provided, this list must have the same
+    If :attr:`color_stops` is provided, this list must have the same
     length as `color_stops`.
     """
 
@@ -310,7 +311,7 @@ class PaintSweepGradient(PaintGradient):
         )
 
 
-@dataclass
+@value
 class Paint:
     """
     A description of the style to use when drawing a shape on the canvas.
@@ -327,7 +328,7 @@ class Paint:
     """
     A blend mode to apply when a shape is drawn or a layer is composited.
 
-    Defaults to [`BlendMode.SRC_OVER`][flet.BlendMode.SRC_OVER].
+    Defaults to :attr:`flet.BlendMode.SRC_OVER`.
     """
 
     blur_image: Optional[BlurValue] = None

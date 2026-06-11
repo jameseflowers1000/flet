@@ -1,4 +1,4 @@
-from dataclasses import dataclass, field
+from dataclasses import field
 from typing import Any, Optional, Union
 
 import flet as ft
@@ -7,17 +7,17 @@ from flet_charts.types import ChartDataPointTooltip, ChartPointShape
 __all__ = ["ScatterChartSpot", "ScatterChartSpotTooltip"]
 
 
-@dataclass
+@ft.value
 class ScatterChartSpotTooltip(ChartDataPointTooltip):
     """
-    Tooltip configuration for the [`ScatterChartSpot`][(p).].
+    Tooltip configuration for the :class:`~flet_charts.ScatterChartSpot`.
     """
 
     text: Optional[str] = None
     """
     The text to display in the tooltip.
 
-    When `None`, defaults to [`ScatterChartSpot.y`][(p).].
+    When `None`, defaults to :attr:`flet_charts.ScatterChartSpot.y`.
     """
 
     bottom_margin: ft.Number = 8
@@ -68,7 +68,7 @@ class ScatterChartSpot(ft.BaseControl):
 
     visible: bool = True
     """
-    Determines wether to show or hide the spot.
+    Determines whether to show or hide the spot.
     """
 
     radius: Optional[ft.Number] = None
@@ -114,7 +114,7 @@ class ScatterChartSpot(ft.BaseControl):
 
     show_tooltip: bool = True
     """
-    Wether to show the tooltip.
+    Whether to show the tooltip.
     """
 
     label_text: str = ""

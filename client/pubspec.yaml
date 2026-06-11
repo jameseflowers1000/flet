@@ -139,10 +139,7 @@ dependencies:
   flet_pdf_capture:
     path: ../sdk/python/packages/flet-pdf-capture/src/flutter/flet_pdf_capture
 
-  cupertino_icons: ^1.0.6
   syncfusion_flutter_core: any
-  wakelock_plus: ^1.4.0
-  package_info_plus: ^9.0.0
 
   integration_test:
     sdk: flutter
@@ -150,7 +147,6 @@ dependencies:
 dependency_overrides:
   flet:
     path: ../packages/flet
-  package_info_plus: ^9.0.0
 
 dev_dependencies:
   flutter_test:

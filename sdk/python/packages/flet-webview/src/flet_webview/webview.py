@@ -51,7 +51,7 @@ class WebView(ft.LayoutControl):
     """
     Fires soon as the first loading process of the webview page is started.
 
-    The [`data`][flet.Event.] property of the event handler argument is of type
+    The :attr:`~flet.Event.data` property of the event handler argument is of type
     `str` and contains the URL.
 
     Note:
@@ -62,7 +62,7 @@ class WebView(ft.LayoutControl):
     """
     Fires when all the webview page loading processes are ended.
 
-    The [`data`][flet.Event.] property of the event handler argument is of type
+    The :attr:`~flet.Event.data` property of the event handler argument is of type
     `str` and contains the URL.
 
     Note:
@@ -73,7 +73,7 @@ class WebView(ft.LayoutControl):
     """
     Fires when there is error with loading a webview page resource.
 
-    The [`data`][flet.Event.] property of the event handler argument is of type
+    The :attr:`~flet.Event.data` property of the event handler argument is of type
     `str` and contains the error message.
 
     Note:
@@ -84,7 +84,7 @@ class WebView(ft.LayoutControl):
     """
     Fires when the progress of the webview page loading is changed.
 
-    The [`data`][flet.Event.] property of the event handler argument is of type
+    The :attr:`~flet.Event.data` property of the event handler argument is of type
     `int` and contains the progress value.
 
     Note:
@@ -95,7 +95,7 @@ class WebView(ft.LayoutControl):
     """
     Fires when the URL of the webview page is changed.
 
-    The [`data`][flet.Event.] property of the event handler argument is of type
+    The :attr:`~flet.Event.data` property of the event handler argument is of type
     `str` and contains the new URL.
 
     Note:
@@ -190,7 +190,7 @@ class WebView(ft.LayoutControl):
     async def go_forward(self):
         """
         Goes forward in the history of the webview,
-        if [`can_go_forward()`][(c).can_go_forward] is `True`.
+        if :meth:`can_go_forward` is `True`.
 
         Note:
             Works only on the following platforms: iOS, Android, and macOS.

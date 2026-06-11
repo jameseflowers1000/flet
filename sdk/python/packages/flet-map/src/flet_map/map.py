@@ -2,8 +2,10 @@ from dataclasses import field
 from typing import Optional
 
 import flet as ft
+from flet.utils import from_dict
 from flet_map.map_layer import MapLayer
 from flet_map.types import (
+    Camera,
     CameraFit,
     InteractionConfiguration,
     MapEvent,
@@ -43,7 +45,8 @@ class Map(ft.LayoutControl):
     initial_zoom: ft.Number = 13.0
     """
     The zoom when the map is first loaded.
-    If initial_camera_fit is defined this has no effect.
+
+    If :attr:`initial_camera_fit` is non-`None` this has no effect.
     """
 
     interaction_configuration: InteractionConfiguration = field(
@@ -62,8 +65,8 @@ class Map(ft.LayoutControl):
     """
     Whether to enable the built in keep-alive functionality.
 
-    If the map is within a complex layout, such as a [`ListView`][flet.ListView],
-    the map will reset to it's inital position after it appears back into view.
+    If the map is within a complex layout, such as a :class:`~flet.ListView`,
+    the map will reset to its initial position after it appears back into view.
     To ensure this doesn't happen, enable this flag to prevent it from rebuilding.
     """
 
@@ -82,9 +85,9 @@ class Map(ft.LayoutControl):
     animation_curve: ft.AnimationCurve = ft.AnimationCurve.FAST_OUT_SLOWIN
     """
     The default animation curve to be used for map-animations
-    when calling instance methods like [`zoom_in()`][(c).zoom_in],
-    [`rotate_from()`][(c).rotate_from],
-    [`move_to()`][(c).move_to] etc.
+    when calling instance methods like :meth:`zoom_in`,
+    :meth:`rotate_from`,
+    :meth:`move_to` etc.
     """
 
     animation_duration: ft.DurationValue = field(
@@ -92,15 +95,15 @@ class Map(ft.LayoutControl):
     )
     """
     The default animation duration to be used for map-animations
-    when calling instance methods like [`zoom_in()`][(c).zoom_in],
-    [`rotate_from()`][(c).rotate_from],
-    [`move_to()`][(c).move_to] etc.
+    when calling instance methods like :meth:`zoom_in`,
+    :meth:`rotate_from`,
+    :meth:`move_to` etc.
     """
 
     initial_camera_fit: Optional[CameraFit] = None
     """
     Defines the visible bounds when the map is first loaded.
-    Takes precedence over [`initial_center`][(c).]/[`initial_zoom`][(c).].
+    Takes precedence over :attr:`initial_center`/:attr:`initial_zoom`.
     """
 
     on_init: Optional[ft.ControlEventHandler["Map"]] = None
@@ -135,7 +138,7 @@ class Map(ft.LayoutControl):
 
     on_position_change: Optional[ft.EventHandler[MapPositionChangeEvent]] = None
     """
-    Fires when the map position changes.
+    Fires when the map position changes, e.g. when the user pans or zooms the map.
     """
 
     on_pointer_down: Optional[ft.EventHandler[MapPointerEvent]] = None
@@ -166,9 +169,10 @@ class Map(ft.LayoutControl):
         Args:
             degree: The number of degrees to increment to the current rotation.
             animation_curve: The curve of the animation. If None (the default),
-                [`Map.animation_curve`][(p).] will be used.
+                :attr:`flet_map.Map.animation_curve` will be used.
             animation_duration: The duration of the animation.
-                If None (the default), [`Map.animation_duration`][(p).] will be used.
+                If None (the default), :attr:`flet_map.Map.animation_duration` will be \
+                used.
             cancel_ongoing_animations: Whether to cancel/stop all
                 ongoing map-animations before starting this new one.
         """
@@ -193,9 +197,10 @@ class Map(ft.LayoutControl):
 
         Args:
             animation_curve: The curve of the animation. If None (the default),
-                [`Map.animation_curve`][(p).] will be used.
+                :attr:`flet_map.Map.animation_curve` will be used.
             animation_duration: The duration of the animation.
-                If None (the default), [`Map.animation_duration`][(p).] will be used.
+                If None (the default), :attr:`flet_map.Map.animation_duration` will be \
+                used.
             cancel_ongoing_animations: Whether to cancel/stop all
                 ongoing map-animations before starting this new one.
         """
@@ -219,9 +224,9 @@ class Map(ft.LayoutControl):
 
         Args:
             animation_curve: The curve of the animation. If None (the default),
-                [`Map.animation_curve`][(p).] will be used.
-            animation_duration: The duration of the animation.
-                If None (the default), [`Map.animation_duration`][(p).] will be used.
+                :attr:`flet_map.Map.animation_curve` will be used.
+            animation_duration: The duration of the animation. If None (the default),
+                :attr:`flet_map.Map.animation_duration` will be used.
             cancel_ongoing_animations: Whether to cancel/stop all
                 ongoing map-animations before starting this new one.
         """
@@ -245,9 +250,10 @@ class Map(ft.LayoutControl):
 
         Args:
             animation_curve: The curve of the animation. If `None` (the default),
-                [`Map.animation_curve`][(p).] will be used.
+                :attr:`flet_map.Map.animation_curve` will be used.
             animation_duration: The duration of the animation.
-                If None (the default), [`Map.animation_duration`][(p).] will be used.
+                If None (the default), :attr:`flet_map.Map.animation_duration` will be \
+                used.
             cancel_ongoing_animations: Whether to cancel/stop all
                 ongoing map-animations before starting this new one.
         """
@@ -273,9 +279,10 @@ class Map(ft.LayoutControl):
         Args:
             zoom: The zoom level to zoom to.
             animation_curve: The curve of the animation. If `None` (the default),
-                [`Map.animation_curve`][(p).] will be used.
+                :attr:`flet_map.Map.animation_curve` will be used.
             animation_duration: The duration of the animation.
-                If None (the default), [`Map.animation_duration`][(p).] will be used.
+                If None (the default), :attr:`flet_map.Map.animation_duration` will be \
+                used.
             cancel_ongoing_animations: Whether to cancel/stop all
                 ongoing map-animations before starting this new one.
         """
@@ -309,9 +316,10 @@ class Map(ft.LayoutControl):
             rotation: Rotation (in degrees) to be applied.
             offset: The offset to be used. Only works when `rotation` is `None`.
             animation_curve: The curve of the animation. If None (the default),
-                [`Map.animation_curve`][(p).] will be used.
+                :attr:`flet_map.Map.animation_curve` will be used.
             animation_duration: The duration of the animation.
-                If None (the default), [`Map.animation_duration`][(p).] will be used.
+                If None (the default), :attr:`flet_map.Map.animation_duration` will be \
+                used.
             cancel_ongoing_animations: Whether to cancel/stop all
                 ongoing map-animations before starting this new one.
 
@@ -348,9 +356,10 @@ class Map(ft.LayoutControl):
             point: The point on which to center the map.
             zoom: The zoom level to be applied.
             animation_curve: The curve of the animation. If `None` (the default),
-                [`Map.animation_curve`][(p).] will be used.
+                :attr:`flet_map.Map.animation_curve` will be used.
             animation_duration: The duration of the animation.
-                If None (the default), [`Map.animation_duration`][(p).] will be used.
+                If None (the default), :attr:`flet_map.Map.animation_duration` will be \
+                used.
             cancel_ongoing_animations: Whether to cancel/stop all
                 ongoing map-animations before starting this new one.
         """
@@ -364,3 +373,13 @@ class Map(ft.LayoutControl):
                 "cancel_ongoing_animations": cancel_ongoing_animations,
             },
         )
+
+    async def get_camera(self) -> Camera:
+        """
+        Gets the current camera snapshot of the map.
+
+        Returns:
+            The current camera state.
+        """
+        camera = await self._invoke_method("get_camera")
+        return from_dict(Camera, camera)

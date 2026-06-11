@@ -1,3 +1,176 @@
+## 0.85.3
+
+### Improvements
+
+* Allow `[tool.flet.android.permission]` values to be TOML inline tables in addition to booleans — each `key = "value"` entry adds an `android:<key>="<value>"` attribute to the generated `<uses-permission>` element, unlocking modifiers like `android:maxSdkVersion` and `android:usesPermissionFlags` that real-world Android permissions (e.g. Bluetooth LE) require. The boolean form and the `--android-permissions` CLI flag are unchanged; a non-empty inline table is always emitted, an empty table (`{}`) is treated as `false`, and invalid value types fail the build with a clear error ([#6550](https://github.com/flet-dev/flet/issues/6550), [#6551](https://github.com/flet-dev/flet/pull/6551)) by @FeodorFitsner.
+* Add `[tool.flet.android.provider]` for declaring custom `<provider>` entries in the generated `AndroidManifest.xml`. Each table key is the provider's `android:name`; entries become `android:<key>="<value>"` attributes on the generated element. A reserved `meta_data` sub-table emits nested `<meta-data>` children (scalar values render as `android:value="…"`; inline-table values render as `android:<k>="<v>"` so `android:resource="@xml/…"` works). `false` / `{}` skip the entry; `true` and invalid value types fail the build with a clear error. The built-in `androidx.core.content.FileProvider` block is unchanged ([#6556](https://github.com/flet-dev/flet/issues/6556), [#6559](https://github.com/flet-dev/flet/pull/6559)) by @FeodorFitsner.
+* Upgrade the bundled Pyodide runtime in the `flet build web` template from `0.27.5` to `0.27.7` (includes `micropip` `0.9.0`) ([#6549](https://github.com/flet-dev/flet/pull/6549)) by @FeodorFitsner.
+* Drop generated `web/canvaskit/` build artifacts (`canvaskit.js`/`.wasm`/`.symbols` and the `chromium/` and `skwasm`/`skwasm_st` variants) from the `flet build web` template — these are produced by the Flutter web build and should not have been committed into the cookiecutter template ([#6549](https://github.com/flet-dev/flet/pull/6549)) by @FeodorFitsner.
+* Cache the downloaded `flet-build-template.zip` across builds. The build template is bound to an exact Flet version and is immutable, so on every `flet build` / `flet debug` after the first, the CLI now uses a previously-downloaded zip from `$FLET_CACHE_DIR/build-template/v<flet-version>/` (defaulting to `~/.flet/cache/build-template/v<flet-version>/`) instead of re-fetching it via cookiecutter. The CLI also exports `FLET_CACHE_DIR` into the child Gradle process, so `serious_python_android` >= 1.0.1 lands its Python dist tarballs (`python-android-dart-<py>-<abi>.tar.gz`) in the same cache root by default — fixing the multi-minute "Creating app shell" / `downloadDistArchive_*` delay on every Android debug build. Custom `--template` URLs and the local-dev template path are unchanged ([#6555](https://github.com/flet-dev/flet/discussions/6555), [#6558](https://github.com/flet-dev/flet/pull/6558)) by @FeodorFitsner.
+* Bump the bundled build template's `serious_python` dependency from `1.0.0` to `1.0.1` so Android builds pick up the new persistent Python-tarball cache + conditional-GET revalidation introduced in [`serious_python` 1.0.1](https://github.com/flet-dev/serious-python/blob/main/src/serious_python_android/CHANGELOG.md) ([#6558](https://github.com/flet-dev/flet/pull/6558)) by @FeodorFitsner.
+
+### Bug fixes
+
+* Fix `flet.Router`'s default `on_view_pop` navigating to the wrong URL when an `outlet=True` layout sits between two views in `manage_views=True` mode. Popping such a view now targets the previous view entry's resolved URL — skipping outlet layouts and componentless grouping routes — instead of `chain[-2]`, which could equal the current view's URL and strand the page route, making the next navigation to it a no-op ([#6533](https://github.com/flet-dev/flet/pull/6533)) by @FeodorFitsner.
+* Fix `flet-audio.Audio.play()`/`seek()` timing out when replaying after playback had completed: under the default `ReleaseMode.RELEASE` the source is freed on completion and is now re-prepared on replay ([#6536](https://github.com/flet-dev/flet/issues/6536), [#6538](https://github.com/flet-dev/flet/pull/6538)) by @ndonkoHenri.
+* Fix `ft.run(view=ft.AppView.FLET_APP_HIDDEN)` briefly flashing the native window in the top-left corner during Windows desktop startup. The Windows runner now respects `FLET_HIDE_WINDOW_ON_START` and skips the first-frame `Show()` call so the window stays hidden until `page.window.visible = True`, matching the Linux desktop behavior; the same fix is applied to the `flet build windows` template runner so generated apps behave consistently. On Linux, pre-show window placement actions (`page.window.center()`, `page.window.alignment`) are now deferred until the window first becomes visible to avoid an analogous flash, and the window's `focused` state is preserved when a `prevent_close` handler cancels a close attempt ([#5897](https://github.com/flet-dev/flet/issues/5897), [#5914](https://github.com/flet-dev/flet/issues/5914), [#6527](https://github.com/flet-dev/flet/pull/6527)) by @ihmily.
+
+## 0.85.2
+
+### New features
+
+* Add `Route(modal=True)` to `flet.Router` for fullscreen-dialog modal overlays that don't replace the underlying view stack — closing the modal pops it without rebuilding the views underneath. Two flavours by placement: top-level modals are *global* (the base stack is rebuilt from the Router's last non-modal location), nested-child modals are *local* (the base stack is the chain above the modal in the route tree, so deep-link works from URL alone) ([#6516](https://github.com/flet-dev/flet/pull/6516)) by @FeodorFitsner.
+* Add `Route(recursive=True)` to `flet.Router` so a route can match itself as its own descendant — one `View` per consumed URL segment, ideal for tree-shaped URLs of unbounded depth (`/folder/a/b/c` produces a 4-View stack; back-swipe walks one segment at a time). Non-recursive children are tried before self-recursion at every depth, so a specific sibling (e.g. `example/:gp*`) wins over the recursive `:slug` without duplicating it at every level ([#6516](https://github.com/flet-dev/flet/pull/6516)) by @FeodorFitsner.
+
+### Improvements
+
+* `flet.Router`'s default `on_view_pop` now navigates to the matched chain's parent (`chain[-2].resolved_path`) instead of `views[-2].route`, which is robust against apps that share a `View.route` value between sibling tab roots to suppress switch transitions. Apps that install their own `page.on_view_pop` before `page.render_views()` still take precedence. Each sub-chain (base + modal) renders with its own `LocationInfo`, so `is_route_active(...)` inside a base view sees the base URL while a global modal is open over it ([#6516](https://github.com/flet-dev/flet/pull/6516)) by @FeodorFitsner.
+
+### Bug fixes
+
+* Fix cross-tab session contamination on Flet web: opening the same app URL in a duplicated browser tab no longer steals the original tab's output connection via `sessionStorage`-cloned `_flet_session_id`. `REGISTER_CLIENT` now rejects session reuse when the existing session still has a live `connection`, allocating a fresh session for the second tab while preserving legitimate single-tab reconnect after refresh or network blip (where `connection` is already `None`) ([#6512](https://github.com/flet-dev/flet/issues/6512), [#6513](https://github.com/flet-dev/flet/pull/6513)) by @ihmily.
+
+## 0.85.1
+
+### Bug fixes
+
+* Fix `TooltipTheme.decoration` so it applies to controls using `ft.Tooltip(...)` when the tooltip does not explicitly set `decoration` or `bgcolor` ([#6432](https://github.com/flet-dev/flet/issues/6432), [#6482](https://github.com/flet-dev/flet/pull/6482)) by @ndonkoHenri.
+* Fix `flet-geolocator.Geolocator` reliability on web and desktop: `get_last_known_position()` no longer crashes with `TypeError: argument after ** must be a mapping, not NoneType` and now returns `Optional[GeolocatorPosition]`; `get_current_position()` no longer hangs forever on web (Dart-side workaround for the upstream [`geolocator_web` 4.1.3](https://pub.dev/packages/geolocator_web) `inMicroseconds`/`inMilliseconds` timeout typo) and uses sensible web defaults (`time_limit: 30s`, `maximum_age: 5m`); the previously-dropped `configuration` argument now actually reaches `getCurrentPosition` on the Dart side; the position stream is gated behind a registered `on_position_change`/`on_error` handler (with cancel-on-update to prevent leaks); and platform exceptions (`LocationServiceDisabledException`, `PermissionDeniedException`, `PermissionDefinitionsNotFoundException`, `PermissionRequestInProgressException`, `PositionUpdateException`, `TimeoutException`) are now translated into actionable error messages and surfaced to Python as `RuntimeError` without the default `Exception:` prefix ([#6487](https://github.com/flet-dev/flet/pull/6487)) by @FeodorFitsner.
+* Fix PEP 508 markers on `flet`'s `oauthlib`/`httpx` deps not actually excluding those packages under Pyodide: the `flet build web` package platform has been renamed from `Pyodide` to `Emscripten` to match `platform.system()` inside the Pyodide runtime, and the markers now use `platform_system != 'Emscripten'`, so the exclusion works both via `flet build` and a direct `micropip.install("flet")` in a Pyodide REPL. Requires `serious_python` `>= 1.0.0`, which is now pinned in the `flet build` template ([#6492](https://github.com/flet-dev/flet/pull/6492)) by @FeodorFitsner.
+
+## 0.85.0
+
+### New features
+
+* Add configurable built-in, custom, hidden, and normal/fullscreen-specific controls to `flet-video`; `Video.take_screenshot()` for capturing video frames; and `Video.on_position_change`/`Video.on_duration_change` events ([#6463](https://github.com/flet-dev/flet/pull/6463)) by @ndonkoHenri.
+* Add declarative `ft.Router` component for `@ft.component` apps with nested routes, layout routes with outlets, dynamic segments, optional segments, splats, custom regex constraints, data loaders, active link detection, authentication patterns, and `manage_views=True` mode for view-stack navigation with swipe-back gestures and `AppBar` back button on mobile ([#6406](https://github.com/flet-dev/flet/pull/6406)) by @FeodorFitsner.
+* Add `ft.use_dialog()` hook for declarative dialog management from within `@ft.component` functions, with frozen-diff reactive updates and automatic open/close lifecycle ([#6335](https://github.com/flet-dev/flet/pull/6335)) by @FeodorFitsner.
+* Add `scrollable`, `pin_leading_to_top`, and `pin_trailing_to_bottom` properties to `NavigationRail` for scrollable content with optional pinned leading/trailing controls ([#1923](https://github.com/flet-dev/flet/issues/1923), [#6356](https://github.com/flet-dev/flet/pull/6356)) by @ndonkoHenri.
+* Add scroll support to `ResponsiveRow` for responsive layouts whose content exceeds the available height ([#2590](https://github.com/flet-dev/flet/issues/2590), [#6417](https://github.com/flet-dev/flet/pull/6417)) by @ndonkoHenri.
+* Add `issues` property to `CodeEditor` (along with `Issue` and `IssueType` types) for displaying code analysis error markers in the gutter, with analysis performed on the Python side ([#6407](https://github.com/flet-dev/flet/pull/6407)) by @FeodorFitsner.
+* Add `Page.pop_views_until()` to pop multiple views and return a result to the destination view ([#6326](https://github.com/flet-dev/flet/issues/6326), [#6347](https://github.com/flet-dev/flet/pull/6347)) by @brunobrown.
+* Make `NavigationDrawerDestination.label` accept custom controls and add `NavigationDrawerTheme.icon_theme` ([#6379](https://github.com/flet-dev/flet/issues/6379), [#6395](https://github.com/flet-dev/flet/pull/6395)) by @ndonkoHenri.
+* Add `local_position` and `global_position` to `DragTargetEvent` for target-relative and global pointer coordinates ([#6387](https://github.com/flet-dev/flet/issues/6387), [#6401](https://github.com/flet-dev/flet/pull/6401)) by @ndonkoHenri.
+* Added PCM16 streaming to `AudioRecorder`, including `on_stream` chunks and direct upload support via `AudioRecorderUploadSettings` ([#5858](https://github.com/flet-dev/flet/issues/5858), [#6423](https://github.com/flet-dev/flet/pull/6423)) by @ndonkoHenri.
+* Add `Page.theme_animation_style` for customizing the duration and curve of the theme cross-fade between `theme` and `dark_theme` (or disabling it with `AnimationStyle.no_animation()`), exposing Flutter's `MaterialApp.themeAnimationStyle` ([#6476](https://github.com/flet-dev/flet/pull/6476)) by @FeodorFitsner.
+
+### Breaking changes
+
+* Remove deprecated module-level `margin`, `padding`, `border`, and `border_radius` helper functions (`all()`, `symmetric()`, `only()`, `horizontal()`, `vertical()`) in favor of the corresponding `Margin`, `Padding`, `Border`, and `BorderRadius` classmethods ([#6425](https://github.com/flet-dev/flet/pull/6425)) by @ndonkoHenri.
+
+### Deprecations
+
+* Deprecate `DragTargetEvent.x`, `DragTargetEvent.y`, and `DragTargetEvent.offset`; use `local_position` for target-relative coordinates or `global_position` for global coordinates instead. These APIs are scheduled for removal in `0.88.0` ([#6387](https://github.com/flet-dev/flet/issues/6387), [#6401](https://github.com/flet-dev/flet/pull/6401)) by @ndonkoHenri.
+* Deprecate `Video.show_controls`; set `Video.controls` to `None` to hide controls. This API is scheduled for removal in `0.88.0` ([#6463](https://github.com/flet-dev/flet/pull/6463)) by @ndonkoHenri.
+* Deprecate `Video.playlist_add()` and `Video.playlist_remove()`; mutate `Video.playlist` directly with list methods such as `append()` and `pop()`. These APIs are scheduled for removal in `0.88.0` ([#6463](https://github.com/flet-dev/flet/pull/6463)) by @ndonkoHenri.
+
+### Bug fixes
+
+* Fix control diffing for controls nested inside `@value` dataclass objects so they keep the nearest control parent/page context, and restore optional structured properties that are cleared to `None` and later set again ([#6463](https://github.com/flet-dev/flet/pull/6463)) by @ndonkoHenri.
+* Fix `Page` and `View` vertical centering when scrolling is enabled, including hidden scrollbars, so short content remains centered in the viewport ([#6446](https://github.com/flet-dev/flet/issues/6446), [#6450](https://github.com/flet-dev/flet/pull/6450)) by @ndonkoHenri.
+* Reduce Linux memory retention when repeatedly removing `flet_video.Video` controls by linking `media_kit` video apps against mimalloc in run and build flows ([#6164](https://github.com/flet-dev/flet/issues/6164), [#6416](https://github.com/flet-dev/flet/pull/6416)) by @ndonkoHenri.
+* Fix `flet build` and `flet publish` dependency parsing for `project.dependencies` and Poetry constraints with `<`/`<=`, and add coverage for normalized requirement handling ([#6332](https://github.com/flet-dev/flet/issues/6332), [#6340](https://github.com/flet-dev/flet/pull/6340)) by @td3447.
+* Fix `CodeEditor` background not filling the entire area when `expand=True` ([#6407](https://github.com/flet-dev/flet/pull/6407)) by @FeodorFitsner.
+* Handle unbounded width in `ResponsiveRow` with an explicit error, treat child controls with `col=0` as hidden, and clarify `Container` expansion behavior when `alignment` is set ([#1951](https://github.com/flet-dev/flet/issues/1951), [#3805](https://github.com/flet-dev/flet/issues/3805), [#5209](https://github.com/flet-dev/flet/issues/5209), [#6354](https://github.com/flet-dev/flet/pull/6354)) by @ndonkoHenri.
+* Fix `find_platform_image` selecting incompatible icon formats (e.g. `.icns` on Windows) by ranking glob results per target platform ([#6381](https://github.com/flet-dev/flet/pull/6381)) by @HG-ha.
+* Fix `page.window.destroy()` taking several seconds to close Windows desktop apps when `prevent_close` is enabled ([#5459](https://github.com/flet-dev/flet/issues/5459), [#6428](https://github.com/flet-dev/flet/pull/6428)) by @ndonkoHenri.
+* Fix `Page.show_drawer()`, `close_drawer()`, and root/top view accessors (`appbar`, `drawer`, `navigation_bar`, `controls`, ...) failing with `TypeError` under `Page.render_views()` by unwrapping component-wrapped views and normalizing single-view returns ([#6413](https://github.com/flet-dev/flet/issues/6413), [#6414](https://github.com/flet-dev/flet/pull/6414)) by @FeodorFitsner.
+* Fix `auto_scroll` on scrollable controls silently doing nothing unless `scroll` was also explicitly set ([#6397](https://github.com/flet-dev/flet/issues/6397), [#6404](https://github.com/flet-dev/flet/pull/6404)) by @ndonkoHenri.
+* Fix Flet web returning `index.html` with a `200 OK` for missing asset files; requests for paths with a file extension other than `.html` now return a proper `404`, while route-like paths still fall back to `index.html` for SPA routing ([#6425](https://github.com/flet-dev/flet/pull/6425)) by @ndonkoHenri.
+* Fix `Lottie` failing to load local asset files on Windows desktop (and unreliably on other desktop platforms), so animations referenced by `src="file.json"` from the app's `assets/` directory now display correctly ([#6386](https://github.com/flet-dev/flet/issues/6386), [#6426](https://github.com/flet-dev/flet/pull/6426)) by @ndonkoHenri.
+* Fix `Page.on_resize` and `Page.on_media_change` not firing after mobile orientation changes ([#6457](https://github.com/flet-dev/flet/issues/6457), [#6423](https://github.com/flet-dev/flet/pull/6423)) by @ndonkoHenri.
+* Fix `flet pack` desktop packaging so Windows and Linux bundles include the expected client archive, and Windows taskbar pins point to the packed app instead of the cached `flet.exe` ([#5151](https://github.com/flet-dev/flet/issues/5151), [#6403](https://github.com/flet-dev/flet/pull/6403)) by @ndonkoHenri.
+* Fix environment variable priority in `flet build` template: inherit from `Platform.environment` and use `putIfAbsent` for FLET_* variables so pre-set system env vars are not overwritten ([#6394](https://github.com/flet-dev/flet/pull/6394)) by @Bahtya.
+* Fix `NavigationBarDestination.selected_icon` rendering wrongly when provided as an `Icon` control ([#6460](https://github.com/flet-dev/flet/issues/6460), [#6468](https://github.com/flet-dev/flet/pull/6468)) by @ndonkoHenri.
+* Fix 3- and 4-digit hex color shorthand (e.g. `#c00`, `#fc00`) rendering as invisible by expanding them to their full 6/8-digit forms ([#6419](https://github.com/flet-dev/flet/issues/6419), [#6421](https://github.com/flet-dev/flet/pull/6421)) by @ndonkoHenri.
+* Fix `LineChartEvent.spots` returning undecoded MessagePack extension values instead of `LineChartEventSpot` objects ([#6443](https://github.com/flet-dev/flet/issues/6443), [#6468](https://github.com/flet-dev/flet/pull/6468)) by @ndonkoHenri.
+* Fix `LineChart` (and other charts) silently dropping custom `ChartAxisLabel` entries whose `value` matched a tick only after floating-point rounding (e.g. `0.1`, `0.2`, `0.3`) by switching label lookup to a tolerance-based comparison scaled to the axis interval ([#6445](https://github.com/flet-dev/flet/issues/6445), [#6459](https://github.com/flet-dev/flet/pull/6459)) by @KangZhaoKui.
+* Fix absolute-path `src` (e.g. `Image(src="/images/foo.svg")`) breaking on web when the app is mounted at a non-root URL, pass `data:`/`blob:` URIs through the asset resolver unchanged, preserve origin-relative semantics when `assets_dir` is unset, and add a `window.flet.assetsDir` JS-interop bridge so embedding hosts can supply `assets_dir` to the top-level `FletApp` ([#6470](https://github.com/flet-dev/flet/pull/6470)) by @FeodorFitsner.
+* Fix unbounded browser memory growth in `MatplotlibChart` on Flutter web (CanvasKit/WASM) during animations by replacing the `Canvas` + `capture()` rendering path with a dedicated `MatplotlibChartCanvas` widget that composites matplotlib diff frames in CPU memory; also fixes Safari async PNG decode (`EncodingError: Loading error.`), a render/`figure.savefig()` race that crashed the toolbar Download, and pan/zoom playback lag from buffered pointer events ([#6473](https://github.com/flet-dev/flet/pull/6473)) by @FeodorFitsner.
+* Fix `Duration` fields (and other `int`-typed properties) silently decoding to `0` when given a Python `float` (e.g. `Duration(seconds=2.0)` causing `Page.theme_animation_style` to end instantly) by coercing `double` to `int` in the Dart-side `parseInt` ([#6478](https://github.com/flet-dev/flet/issues/6478), [#6480](https://github.com/flet-dev/flet/pull/6480)) by @FeodorFitsner.
+
+### Documentation
+
+* Improve CrocoDocs API reference rendering with formatted signatures, modern type annotations, and cleaner cross-reference labels for extension packages ([#6442](https://github.com/flet-dev/flet/pull/6442)) by @ndonkoHenri.
+* Add `crocodocs watch` command for hot-reload docs development with file-watching, debounced regeneration, and optional child process management ([#6402](https://github.com/flet-dev/flet/pull/6402)) by @ndonkoHenri.
+
+### Other changes
+
+* Add a declarative `ReorderableListView` app example showing add, remove, and reorder flows with stable item identity ([#6374](https://github.com/flet-dev/flet/pull/6374)) by @FeodorFitsner.
+* Centralize Linux apt dependencies in `flet.utils.linux_deps` and update CI workflows and publish docs to consume them dynamically ([#6357](https://github.com/flet-dev/flet/issues/6357), [#6383](https://github.com/flet-dev/flet/pull/6383)) by @ndonkoHenri.
+* Bump `serious_python` to `0.9.12` in the `flet build` template ([#6461](https://github.com/flet-dev/flet/pull/6461)) by @FeodorFitsner.
+
+## 0.84.0
+
+### Improvements
+
+* Migrate Flet docs from MkDocs to Docusaurus for a more maintainable documentation pipeline ([#6359](https://github.com/flet-dev/flet/pull/6359)) by @FeodorFitsner.
+* Migrate examples into standalone projects with metadata, dependencies, and assets to improve discovery and make every sample runnable as-is ([#6281](https://github.com/flet-dev/flet/issues/6281), [#6355](https://github.com/flet-dev/flet/pull/6355)) by @InesaFitsner.
+
+### Bug fixes
+
+* Fix `flet pack` on macOS after the move to GitHub Releases by handling extracted app bundles, matching the cached tarball name, and cleaning up loose frameworks during packaging ([#6358](https://github.com/flet-dev/flet/issues/6358), [#6361](https://github.com/flet-dev/flet/pull/6361)) by @FeodorFitsner.
+
+## 0.83.1
+
+### Bug fixes
+
+* Fix solitaire tutorial and drag examples to use `local_delta.x` and `local_delta.y` instead of removed `delta_x` and `delta_y` ([#6317](https://github.com/flet-dev/flet/issues/6317), [#6344](https://github.com/flet-dev/flet/pull/6344)) by @Krishnachaitanyakc.
+* Fix inherited dataclass field validation rules applying to overridden subclass fields and breaking `flet-datatable2` on `0.83.0` ([#6349](https://github.com/flet-dev/flet/issues/6349), [#6350](https://github.com/flet-dev/flet/pull/6350)) by @ndonkoHenri.
+
+## 0.83.0
+
+### New features
+
+* Add customizable scrollbars for scrollable controls and pages ([#5912](https://github.com/flet-dev/flet/issues/5912), [#6282](https://github.com/flet-dev/flet/pull/6282)) by [@ndonkoHenri](https://github.com/ndonkoHenri).
+* Add scrolling support and richer change events to `ExpansionPanelList` ([#6294](https://github.com/flet-dev/flet/pull/6294)) by [@ndonkoHenri](https://github.com/ndonkoHenri).
+* Expand `SharedPreferences` to support `int`, `float`, `bool`, and `list[str]` values ([#6304](https://github.com/flet-dev/flet/issues/6304), [#6267](https://github.com/flet-dev/flet/pull/6267)) by [@ndonkoHenri](https://github.com/ndonkoHenri).
+
+### Improvements
+
+* Speed up control diffing and nested value tracking with sparse `Prop` updates and `@value` types ([#6098](https://github.com/flet-dev/flet/issues/6098), [#6270](https://github.com/flet-dev/flet/issues/6270), [#6117](https://github.com/flet-dev/flet/issues/6117), [#6296](https://github.com/flet-dev/flet/pull/6296)) by [@FeodorFitsner](https://github.com/FeodorFitsner).
+* Consolidate app/build templates into the monorepo and publish pre-release `flet` packages and template artifacts from CI ([#6306](https://github.com/flet-dev/flet/issues/6306), [#6331](https://github.com/flet-dev/flet/pull/6331)) by [@FeodorFitsner](https://github.com/FeodorFitsner).
+* Move desktop client binaries from PyPI wheels to GitHub Releases and unify desktop packaging around `flet-desktop` ([#6290](https://github.com/flet-dev/flet/issues/6290), [#6309](https://github.com/flet-dev/flet/pull/6309)) by [@FeodorFitsner](https://github.com/FeodorFitsner).
+* Lightweight dataclass validation and deprecation with `Annotated` + auto-added deprecation admonitions in docs ([#6278](https://github.com/flet-dev/flet/pull/6278))  by [@ndonkoHenri](https://github.com/ndonkoHenri).
+
+
+### Bug fixes
+
+* Align Dart-side default values with Python across core and extension packages ([#6329](https://github.com/flet-dev/flet/issues/6329), [#6330](https://github.com/flet-dev/flet/pull/6330)) by [@FeodorFitsner](https://github.com/FeodorFitsner).
+* Skip redundant page auto-updates after handlers call `.update()` explicitly ([#6236](https://github.com/flet-dev/flet/issues/6236), [#6298](https://github.com/flet-dev/flet/pull/6298)) by [@FeodorFitsner](https://github.com/FeodorFitsner).
+* Fix `ReorderableListView` reorder event deserialization for start/end callbacks ([#6177](https://github.com/flet-dev/flet/issues/6177), [#6315](https://github.com/flet-dev/flet/pull/6315)) by [@ndonkoHenri](https://github.com/ndonkoHenri).
+* Skip loading `micropip` for Pyodide apps that already define dependencies in `pyproject.toml` ([#6259](https://github.com/flet-dev/flet/issues/6259), [#6300](https://github.com/flet-dev/flet/pull/6300)) by [@FeodorFitsner](https://github.com/FeodorFitsner).
+
+## 0.82.2
+
+### Bug fixes
+
+* Lazy-load optional auth dependencies to avoid import-time failures in web/Pyodide startup ([#6258](https://github.com/flet-dev/flet/issues/6258), [#6280](https://github.com/flet-dev/flet/pull/6280)) by [@ndonkoHenri](https://github.com/ndonkoHenri).
+* Pin `binaryornot` below `0.5` to fix build-template UTF-8 decode errors ([#6276](https://github.com/flet-dev/flet/issues/6276), [#6279](https://github.com/flet-dev/flet/pull/6279)) by [@ndonkoHenri](https://github.com/ndonkoHenri).
+
+## 0.82.0
+
+### New features
+
+* Add Auth0 `audience` support through OAuth `authorization_params` ([#3775](https://github.com/flet-dev/flet/issues/3775), [#6205](https://github.com/flet-dev/flet/pull/6205)).
+* Add `Map.get_camera()`, `MapEventType`, and richer `MapEvent` payloads in `flet-map` ([#6196](https://github.com/flet-dev/flet/issues/6196), [#6208](https://github.com/flet-dev/flet/pull/6208)).
+
+### Improvements
+
+* Refactor ads controls: `InterstitialAd` is now a `Service`, and `BannerAd` is now a `LayoutControl` ([#6194](https://github.com/flet-dev/flet/issues/6194), [#6235](https://github.com/flet-dev/flet/pull/6235)).
+* Improve `CodeEditor` with Chinese pinyin input support and aligned gutter rendering ([#6211](https://github.com/flet-dev/flet/issues/6211), [#6243](https://github.com/flet-dev/flet/issues/6243), [#6244](https://github.com/flet-dev/flet/pull/6244)).
+* Add the `Trolli` app declarative example rewrite ([#6242](https://github.com/flet-dev/flet/pull/6242)).
+
+### Bug fixes
+
+* Fix disabled-state handling across `Tabs`, `TabBar`, `Tab`, and `TabBarView` ([#6220](https://github.com/flet-dev/flet/issues/6220), [#6224](https://github.com/flet-dev/flet/pull/6224)).
+* Fix a `WebView` null-check crash (`Null check operator used on a null value`) ([#6238](https://github.com/flet-dev/flet/pull/6238)).
+
+### Other changes
+
+* Pin internal Flet package dependencies across all Flet packages ([#6222](https://github.com/flet-dev/flet/issues/6222), [#6247](https://github.com/flet-dev/flet/pull/6247)).
+* Update Flutter to 3.41.4 and refresh dependencies ([#6245](https://github.com/flet-dev/flet/issues/6245)).
+
 ## 0.81.0
 
 ### New features
@@ -803,7 +976,7 @@ from flet.auth.providers import GitHubOAuthProvider
 * Pyodide publishing fixes and improvements ([#953](https://github.com/flet-dev/flet/issues/953))
 * feat: Add PaddingValue to __init__.py ([#936](https://github.com/flet-dev/flet/issues/936))
 * Standalone Flet web apps with Pyodide ([#913](https://github.com/flet-dev/flet/issues/913))
-* modified `tooltip` attribute from `prefere*` to `prefer*` ([#909](https://github.com/flet-dev/flet/issues/909))
+* modified `tooltip` attribute from `prefer*` to `preferred*` ([#909](https://github.com/flet-dev/flet/issues/909))
 * Fix unicode encoding in `FletTcpSocketServerProtocol`
 * Fix relative assets path in desktop app
 * PDM changed to Poetry

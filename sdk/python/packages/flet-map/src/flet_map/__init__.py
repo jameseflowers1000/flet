@@ -2,6 +2,12 @@ from flet_map.circle_layer import CircleLayer, CircleMarker
 from flet_map.map import Map
 from flet_map.map_layer import MapLayer
 from flet_map.marker_layer import Marker, MarkerLayer
+from flet_map.overlay_image_layer import (
+    BaseOverlayImage,
+    OverlayImage,
+    OverlayImageLayer,
+    RotatedOverlayImage,
+)
 from flet_map.polygon_layer import PolygonLayer, PolygonMarker
 from flet_map.polyline_layer import PolylineLayer, PolylineMarker
 from flet_map.rich_attribution import RichAttribution
@@ -27,6 +33,7 @@ from flet_map.types import (
     KeyboardConfiguration,
     MapEvent,
     MapEventSource,
+    MapEventType,
     MapHoverEvent,
     MapLatitudeLongitude,
     MapLatitudeLongitudeBounds,
@@ -39,10 +46,12 @@ from flet_map.types import (
     StrokePattern,
     TileDisplay,
     TileLayerEvictErrorTileStrategy,
+    WMSTileLayerConfiguration,
 )
 
 __all__ = [
     "AttributionAlignment",
+    "BaseOverlayImage",
     "Camera",
     "CameraFit",
     "CircleLayer",
@@ -60,6 +69,7 @@ __all__ = [
     "Map",
     "MapEvent",
     "MapEventSource",
+    "MapEventType",
     "MapHoverEvent",
     "MapLatitudeLongitude",
     "MapLatitudeLongitudeBounds",
@@ -70,12 +80,15 @@ __all__ = [
     "Marker",
     "MarkerLayer",
     "MultiFingerGesture",
+    "OverlayImage",
+    "OverlayImageLayer",
     "PatternFit",
     "PolygonLayer",
     "PolygonMarker",
     "PolylineLayer",
     "PolylineMarker",
     "RichAttribution",
+    "RotatedOverlayImage",
     "SimpleAttribution",
     "SolidStrokePattern",
     "SourceAttribution",
@@ -84,4 +97,5 @@ __all__ = [
     "TileDisplay",
     "TileLayer",
     "TileLayerEvictErrorTileStrategy",
+    "WMSTileLayerConfiguration",
 ]

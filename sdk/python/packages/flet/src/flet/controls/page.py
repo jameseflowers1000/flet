@@ -99,7 +99,7 @@ class ServiceRegistry(Service):
     Internal container that hosts page-level service controls.
 
     Services register themselves through this registry so they can be mounted
-    under [`Page`][flet.Page] and synchronized with the frontend service
+    under :class:`~flet.Page` and synchronized with the frontend service
     bindings.
     """
 
@@ -125,7 +125,7 @@ class ServiceRegistry(Service):
                 f"Registering service {service._c}({service._i}) to registry {self._i}"
             )
             self._services.append(service)
-            self.update()
+            self.__internal_update()
 
     def unregister_services(self):
         """
@@ -145,14 +145,27 @@ class ServiceRegistry(Service):
             ]
             removed_count = original_len - len(self._services)
             if removed_count > 0:
-                logger.debug(f"Removed {removed_count} services from the registry")
-                self.update()
+                logger.debug("Removed %s services from the registry", removed_count)
+                self.__internal_update()
+
+    def __internal_update(self):
+        """
+        Push an update without marking the handler's update-called flag.
+
+        Why: service (un)registration is internal bookkeeping, not a user-driven
+        `.update()`. Leaving the flag untouched keeps the auto-update behavior
+        based solely on whether the user called `.update()` themselves.
+        """
+        was_called = context.was_update_called()
+        self.update()
+        if not was_called:
+            context.reset_update_called()
 
 
 @dataclass
 class RouteChangeEvent(Event["Page"]):
     """
-    Event payload for [`Page.on_route_change`][flet.Page.on_route_change].
+    Event payload for :attr:`flet.Page.on_route_change`.
     """
 
     route: str
@@ -167,7 +180,7 @@ class PlatformBrightnessChangeEvent(Event["Page"]):
     Event payload for platform brightness changes.
 
     Delivered to
-    [`Page.on_platform_brightness_change`][flet.Page.on_platform_brightness_change].
+    :attr:`flet.Page.on_platform_brightness_change`.
     """
 
     brightness: Brightness
@@ -182,7 +195,7 @@ class LocaleChangeEvent(Event["Page"]):
     Event payload describing a change in the host platform's locale preferences.
 
     See also:
-    - [`Page.on_locale_change`][flet.]: event called when locale preferences/settings
+    - :attr:`flet.Page.on_locale_change`: event called when locale preferences/settings
         of the host platform have changed.
     """
 
@@ -199,7 +212,7 @@ class ViewPopEvent(Event["Page"]):
     """
     Event payload for view-pop navigation actions.
 
-    Delivered to [`Page.on_view_pop`][flet.Page.on_view_pop] when the top view
+    Delivered to :attr:`flet.Page.on_view_pop` when the top view
     is being popped by system or app-bar back behavior.
     """
 
@@ -210,7 +223,33 @@ class ViewPopEvent(Event["Page"]):
 
     view: Optional[View] = None
     """
-    Matched [`View`][flet.View] instance for `route`, if found on the page.
+    Matched :class:`~flet.View` instance for `route`, if found on the page.
+    """
+
+
+@dataclass
+class ViewsPopUntilEvent(Event["Page"]):
+    """
+    Event payload delivered when :meth:`~flet.Page.pop_views_until` completes \
+    navigation.
+
+    Carries the result value back to the destination view.
+    """
+
+    route: str
+    """
+    Route of the destination view that remained on the stack.
+    """
+
+    result: Any = None
+    """
+    The result value passed from the caller of
+    :meth:`~flet.Page.pop_views_until`.
+    """
+
+    view: Optional[View] = None
+    """
+    Matched :class:`~flet.View` instance for `route`, if found on the page.
     """
 
 
@@ -219,7 +258,7 @@ class KeyboardEvent(Event["Page"]):
     """
     Event payload for keyboard key-down notifications.
 
-    Delivered to [`Page.on_keyboard_event`][flet.Page.on_keyboard_event].
+    Delivered to :attr:`flet.Page.on_keyboard_event`.
     """
 
     key: str
@@ -253,7 +292,7 @@ class LoginEvent(Event["Page"]):
     """
     Event payload for OAuth login completion.
 
-    Emitted to [`Page.on_login`][flet.Page.on_login] for both successful and
+    Emitted to :attr:`flet.Page.on_login` for both successful and
     failed authorization attempts.
     """
 
@@ -299,7 +338,7 @@ class AppLifecycleStateChangeEvent(Event["Page"]):
     Event payload for app lifecycle transitions.
 
     Delivered to
-    [`Page.on_app_lifecycle_state_change`][flet.Page.on_app_lifecycle_state_change].
+    :attr:`flet.Page.on_app_lifecycle_state_change`.
     """
 
     state: AppLifecycleState
@@ -313,7 +352,7 @@ class MultiViewAddEvent(Event["Page"]):
     """
     Event payload emitted when a new multi-view is created.
 
-    Delivered to [`Page.on_multi_view_add`][flet.].
+    Delivered to :attr:`flet.Page.on_multi_view_add`.
     """
 
     view_id: int
@@ -332,7 +371,7 @@ class MultiViewRemoveEvent(Event["Page"]):
     """
     Event payload emitted when a multi-view is removed.
 
-    Delivered to [`Page.on_multi_view_remove`][flet.].
+    Delivered to :attr:`flet.Page.on_multi_view_remove`.
     """
 
     view_id: int
@@ -344,7 +383,7 @@ class MultiViewRemoveEvent(Event["Page"]):
 @control("Page", isolated=True, post_init_args=2)
 class Page(BasePage):
     """
-    Page is a container for [`View`][flet.] controls.
+    Page is a container for :class:`~flet.View` controls.
 
     A page instance and the root view are automatically created when a new
     user session started.
@@ -469,7 +508,7 @@ class Page(BasePage):
         local asset. The following font file formats are supported `.ttc`, `.ttf`
         and `.otf`.
 
-    Usage example [here](https://docs.flet.dev/cookbook/fonts#importing-fonts).
+    Usage example [here](https://flet.dev/docs/cookbook/fonts#importing-fonts).
     """
 
     on_platform_brightness_change: Optional[
@@ -502,7 +541,15 @@ class Page(BasePage):
 
     on_view_pop: Optional[EventHandler[ViewPopEvent]] = None
     """
-    Called when the user clicks automatic "Back" button in [`AppBar`][flet.] control.
+    Called when the user clicks automatic "Back" button in :class:`~flet.AppBar` \
+    control.
+    """
+
+    on_views_pop_until: Optional[EventHandler[ViewsPopUntilEvent]] = None
+    """
+    Called when :meth:`pop_views_until` reaches the destination view.
+
+    The event carries the result value passed by the caller.
     """
 
     on_keyboard_event: Optional[EventHandler[KeyboardEvent]] = None
@@ -543,7 +590,7 @@ class Page(BasePage):
     """
     Called upon successful or failed OAuth authorization flow.
 
-    See [Authentication](https://docs.flet.dev/cookbook/authentication#checking-authentication-results)
+    See [Authentication](https://flet.dev/docs/cookbook/authentication#checking-authentication-results)
     guide for more information and examples.
     """  # noqa: E501
 
@@ -596,7 +643,7 @@ class Page(BasePage):
 
     def render(
         self,
-        component: Callable[..., Union[list[View], View, list[Control], Control]],
+        component: Callable[..., Any],
         *args: Any,
         **kwargs: Any,
     ):
@@ -619,7 +666,7 @@ class Page(BasePage):
 
     def render_views(
         self,
-        component: Callable[..., Union[list[View], View, list[Control], Control]],
+        component: Callable[..., Any],
         *args: Any,
         **kwargs: Any,
     ):
@@ -667,6 +714,7 @@ class Page(BasePage):
             *controls: Specific controls to patch. When omitted, patches the
                 whole page state.
         """
+        context.mark_update_called()
 
         if len(controls) == 0:
             self.__update(self)
@@ -712,7 +760,7 @@ class Page(BasePage):
             self.__last_route = e.route
             self.query()
 
-        elif isinstance(e, ViewPopEvent):
+        elif isinstance(e, ViewPopEvent | ViewsPopUntilEvent):
             for v in unwrap_component(self.views):
                 v = unwrap_component(v)
                 if v.route == e.route:
@@ -902,6 +950,85 @@ class Page(BasePage):
             arguments={"route": new_route},
         )
 
+    def navigate(self, route: str, **kwargs: Any) -> None:
+        """
+        Navigate to a new route (sync convenience wrapper).
+
+        Equivalent to `asyncio.create_task(page.push_route(route, **kwargs))`.
+        Use this in synchronous callbacks (e.g. `on_click`) where awaiting
+        is not possible.
+
+        Args:
+            route: New navigation route.
+            **kwargs: Additional query string parameters to be added to the route.
+        """
+        asyncio.create_task(self.push_route(route, **kwargs))
+
+    async def pop_views_until(self, route: str, result: Any = None) -> None:
+        """
+        Pops views from the navigation stack until a view with the given
+        `route` is found, then delivers `result` via the
+        :attr:`on_views_pop_until` event.
+
+        Example:
+            ```python
+            import flet as ft
+
+
+            def main(page: ft.Page):
+                def on_pop_result(e: ft.ViewsPopUntilEvent):
+                    page.show_dialog(ft.SnackBar(ft.Text(f"Result: {e.result}")))
+
+                page.on_views_pop_until = on_pop_result
+
+                # ... later, from a deeply nested view:
+                async def go_back(ev):
+                    await page.pop_views_until("/", result="Done!")
+            ```
+
+        Args:
+            route: Target route to navigate back to. Must match the `route`
+                of an existing :class:`~flet.View` in :attr:`~flet.Page.views`.
+            result: Optional value delivered to
+                :attr:`on_views_pop_until` on the destination view.
+
+        Raises:
+            ValueError: If no view with the given `route` exists in
+                :attr:`~flet.Page.views`.
+        """
+        views = unwrap_component(self.views)
+
+        # Find the target view (first match from bottom of the stack)
+        target_idx = None
+        for i, v in enumerate(views):
+            v = unwrap_component(v)
+            if v.route == route:
+                target_idx = i
+                break
+
+        if target_idx is None:
+            raise ValueError(f"No view found with route '{route}' in page.views")
+
+        # Remove views above the target
+        del self.views[target_idx + 1 :]
+
+        # Update browser URL
+        await self.push_route(route)
+
+        # Fire on_views_pop_until for the destination view
+        if self.on_views_pop_until:
+            target_view = unwrap_component(views[target_idx])
+            e = ViewsPopUntilEvent(
+                name="views_pop_until",
+                control=self,
+                route=route,
+                result=result,
+                view=target_view,
+            )
+            await self._trigger_event("views_pop_until", event_data=None, e=e)
+
+        self.update()
+
     def get_upload_url(self, file_name: str, expires: int) -> str:
         """
         Generates presigned upload URL for built-in upload storage:
@@ -940,7 +1067,7 @@ class Page(BasePage):
         """
         Starts OAuth flow.
 
-        See [Authentication](https://docs.flet.dev/cookbook/authentication)
+        See [Authentication](https://flet.dev/docs/cookbook/authentication)
         guide for more information and examples.
         """
         self.__authorization = authorization(
@@ -1023,7 +1150,7 @@ class Page(BasePage):
     def logout(self) -> None:
         """
         Clears current authentication context. See \
-        [Authentication](https://docs.flet.dev/cookbook/authentication#signing-out) \
+        [Authentication](https://flet.dev/docs/cookbook/authentication#signing-out) \
         guide for more information and examples.
         """  # noqa: E501
         self.__authorization = None
@@ -1051,10 +1178,9 @@ class Page(BasePage):
         Args:
             url: The URL to open.
             web_popup_window_name: Window tab/name to open URL in. Use
-                [`UrlTarget.SELF`][flet.]
-                for the same browser tab, [`UrlTarget.BLANK`][flet.]
-                for a new browser tab (or in external application on mobile device),
-                or a custom name for a named tab.
+                :attr:`flet.UrlTarget.SELF` for the same browser tab,
+                :attr:`flet.UrlTarget.BLANK` for a new browser tab (or in external
+                application on a mobile device), or a custom name for a named tab.
             web_popup_window: Display the URL in a browser popup window.
             web_popup_window_width: Popup window width.
             web_popup_window_height: Popup window height.
@@ -1168,51 +1294,70 @@ class Page(BasePage):
         return self.session.pubsub_client
 
     @property
-    @deprecated("Use UrlLauncher() instead.", version="0.80.0", delete_version="0.90.0")
+    @deprecated(
+        reason="Use UrlLauncher() instead.",
+        docs_reason="Use :class:`~flet.UrlLauncher` instead.",
+        version="0.80.0",
+        delete_version="0.90.0",
+    )
     def url_launcher(self) -> UrlLauncher:
         """
-        DEPRECATED: The UrlLauncher service for the current page.
+        The UrlLauncher service for the current page.
         """
         return UrlLauncher()
 
     @property
     @deprecated(
-        "Use BrowserContextMenu() instead.", version="0.80.0", delete_version="0.90.0"
+        reason="Use BrowserContextMenu() instead.",
+        docs_reason="Use :class:`~flet.BrowserContextMenu` instead.",
+        version="0.80.0",
+        delete_version="0.90.0",
     )
     def browser_context_menu(self):
         """
-        DEPRECATED: The BrowserContextMenu service for the current page.
+        The BrowserContextMenu service for the current page.
         """
 
         return BrowserContextMenu()
 
     @property
     @deprecated(
-        "Use SharedPreferences() instead.", version="0.80.0", delete_version="0.90.0"
+        reason="Use SharedPreferences() instead.",
+        docs_reason="Use :class:`~flet.SharedPreferences` instead.",
+        version="0.80.0",
+        delete_version="0.90.0",
     )
     def shared_preferences(self):
         """
-        DEPRECATED: The SharedPreferences service for the current page.
+        The SharedPreferences service for the current page.
         """
 
         return SharedPreferences()
 
     @property
-    @deprecated("Use Clipboard() instead.", version="0.80.0", delete_version="0.90.0")
+    @deprecated(
+        reason="Use Clipboard() instead.",
+        docs_reason="Use :class:`~flet.Clipboard` instead.",
+        version="0.80.0",
+        delete_version="0.90.0",
+    )
     def clipboard(self):
         """
-        DEPRECATED: The Clipboard service for the current page.
+        The Clipboard service for the current page.
         """
 
         return Clipboard()
 
     @property
     @deprecated(
-        "Use StoragePaths() instead.", version="0.80.0", delete_version="0.90.0"
+        reason="Use StoragePaths() instead.",
+        docs_reason="Use :class:`~flet.StoragePaths` instead.",
+        version="0.80.0",
+        delete_version="0.90.0",
     )
     def storage_paths(self):
         """
-        DEPRECATED: The StoragePaths service for the current page.
+        The StoragePaths service for the current page.
         """
 
         return StoragePaths()

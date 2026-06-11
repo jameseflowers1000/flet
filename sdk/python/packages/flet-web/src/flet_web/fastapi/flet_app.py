@@ -255,9 +255,13 @@ class FletApp(Connection):
 
             # try to retrieve existing session
             if req.session_id:
-                self.__session = await app_manager.get_session(
+                candidate = await app_manager.get_session(
                     self.__get_unique_session_id(req.session_id)
                 )
+                if candidate is not None and candidate.connection is None:
+                    self.__session = candidate
+                else:
+                    self.__session = None
 
             oauth_state = None
             if self.__oauth_state_id:
@@ -433,7 +437,7 @@ class FletApp(Connection):
         )
         app_manager.store_state(state_id, state)
 
-    def __get_unique_session_id(self, session_id: str):
+    def __get_unique_session_id(self, session_id: str) -> str:
         """
         Compose a stable unique session key scoped to page and client identity.
 

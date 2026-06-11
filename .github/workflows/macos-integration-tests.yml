@@ -41,16 +41,15 @@ jobs:
         suite:
         - apps
         - examples/apps
-        - examples/core
-        - examples/cupertino
+        - examples/controls/core
+        - examples/controls/cupertino
+        - examples/controls/material
         - examples/extensions
-        - examples/material
         - controls/core
         - controls/cupertino
         - controls/material
         - controls/services
         - controls/theme
-        - controls/types
         - extensions
 
     name: ${{ matrix.suite }} Integration Tests
@@ -70,6 +69,12 @@ jobs:
       - name: Show tool versions
         run: |
           uv --version && uv run python --version && pod --version && flutter --version
+
+      - name: Show macOS display resolution
+        run: |
+          system_profiler SPDisplaysDataType | grep Resolution || true
+          screencapture /tmp/screen.png
+          sips -g pixelWidth -g pixelHeight /tmp/screen.png
 
       - name: Run integration tests (${{ matrix.suite }})
         working-directory: sdk/python

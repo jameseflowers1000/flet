@@ -153,6 +153,7 @@ void main([List<String>? args]) async {
     if (routeUrlStrategy == "path") {
       usePathUrlStrategy();
     }
+    assetsDir = getAssetsDir();
   }
 
   FletAppErrorsHandler errorsHandler = FletAppErrorsHandler();

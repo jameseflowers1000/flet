@@ -1,4 +1,5 @@
 import argparse
+import copy
 import glob
 import os
 import platform
@@ -7,7 +8,6 @@ from pathlib import Path
 from typing import Optional, cast
 
 import yaml
-from packaging import version
 from packaging.requirements import Requirement
 from rich.panel import Panel
 from rich.table import Column, Table
@@ -23,15 +23,20 @@ from flet_cli.commands.flutter_base import (
     verbose2_style,
     warning_style,
 )
+from flet_cli.utils.cli import parse_cli_bool_value
 from flet_cli.utils.hash_stamp import HashStamp
 from flet_cli.utils.merge import merge_dict
+from flet_cli.utils.plist import is_supported_plist_value, parse_cli_plist_value
 from flet_cli.utils.project_dependencies import (
     get_poetry_dependencies,
     get_project_dependencies,
 )
 from flet_cli.utils.pyproject_toml import load_pyproject_toml
 
-DEFAULT_TEMPLATE_URL = "gh:flet-dev/flet-build-template"
+DEFAULT_TEMPLATE_URL = (
+    "https://github.com/flet-dev/flet/releases/download/"
+    "v{version}/flet-build-template.zip"
+)
 
 
 class BaseBuildCommand(BaseFlutterCommand):
@@ -90,7 +95,7 @@ class BaseBuildCommand(BaseFlutterCommand):
                 "can_be_run_on": ["Linux"],
             },
             "web": {
-                "package_platform": "Pyodide",
+                "package_platform": "Emscripten",
                 "config_platform": "web",
                 "flutter_build_command": "web",
                 "status_text": "web app",
@@ -138,11 +143,12 @@ class BaseBuildCommand(BaseFlutterCommand):
 
         self.cross_platform_permissions = {
             "location": {
-                "info_plist": {
-                    "NSLocationWhenInUseUsageDescription": "This app uses location "
-                    "service when in use.",
-                    "NSLocationAlwaysAndWhenInUseUsageDescription": "This app uses "
-                    "location service.",
+                "ios_info_plist": {
+                    "NSLocationWhenInUseUsageDescription": "This app uses location service when in use.",  # noqa: E501
+                    "NSLocationAlwaysAndWhenInUseUsageDescription": "This app uses location service.",  # noqa: E501
+                },
+                "macos_info_plist": {
+                    "NSLocationUsageDescription": "This app needs access to your location.",  # noqa: E501
                 },
                 "macos_entitlements": {
                     "com.apple.security.personal-information.location": True
@@ -158,9 +164,11 @@ class BaseBuildCommand(BaseFlutterCommand):
                 },
             },
             "camera": {
-                "info_plist": {
-                    "NSCameraUsageDescription": "This app uses the camera to capture "
-                    "photos and videos."
+                "ios_info_plist": {
+                    "NSCameraUsageDescription": "This app uses the camera to capture photos and videos."  # noqa: E501
+                },
+                "macos_info_plist": {
+                    "NSCameraUsageDescription": "This app uses the camera to capture photos and videos."  # noqa: E501
                 },
                 "macos_entitlements": {"com.apple.security.device.camera": True},
                 "android_permissions": {"android.permission.CAMERA": True},
@@ -173,9 +181,11 @@ class BaseBuildCommand(BaseFlutterCommand):
                 },
             },
             "microphone": {
-                "info_plist": {
-                    "NSMicrophoneUsageDescription": "This app uses microphone to "
-                    "record sounds.",
+                "ios_info_plist": {
+                    "NSMicrophoneUsageDescription": "This app uses microphone to record sounds.",  # noqa: E501
+                },
+                "macos_info_plist": {
+                    "NSMicrophoneUsageDescription": "This app uses microphone to record sounds.",  # noqa: E501
                 },
                 "macos_entitlements": {"com.apple.security.device.audio-input": True},
                 "android_permissions": {
@@ -186,9 +196,11 @@ class BaseBuildCommand(BaseFlutterCommand):
                 "android_features": {},
             },
             "photo_library": {
-                "info_plist": {
-                    "NSPhotoLibraryUsageDescription": "This app saves photos and "
-                    "videos to the photo library."
+                "ios_info_plist": {
+                    "NSPhotoLibraryUsageDescription": "This app saves photos and videos to the photo library."  # noqa: E501
+                },
+                "macos_info_plist": {
+                    "NSPhotoLibraryUsageDescription": "This app saves photos and videos to the photo library."  # noqa: E501
                 },
                 "macos_entitlements": {
                     "com.apple.security.personal-information.photos-library": True
@@ -243,8 +255,8 @@ class BaseBuildCommand(BaseFlutterCommand):
             action="extend",
             nargs="+",
             default=[],
-            help="Files and/or directories to exclude from the package "
-            "(can be used multiple times)",
+            help="Files and/or directories to exclude from the package"
+            "; can be used multiple times",
         )
         parser.add_argument(
             "--clear-cache",
@@ -457,8 +469,8 @@ class BaseBuildCommand(BaseFlutterCommand):
         parser.add_argument(
             "--cleanup-app-files",
             dest="cleanup_app_files",
-            action="append",
-            nargs="*",
+            action="extend",
+            nargs="+",
             help="The list of globs to delete extra app files and directories",
         )
         parser.add_argument(
@@ -471,8 +483,8 @@ class BaseBuildCommand(BaseFlutterCommand):
         parser.add_argument(
             "--cleanup-package-files",
             dest="cleanup_package_files",
-            action="append",
-            nargs="*",
+            action="extend",
+            nargs="+",
             help="The list of globs to delete extra package files and directories",
         )
         parser.add_argument(
@@ -492,42 +504,49 @@ class BaseBuildCommand(BaseFlutterCommand):
         parser.add_argument(
             "--info-plist",
             dest="info_plist",
+            action="extend",
             nargs="+",
             default=[],
-            help="The list of `<key>=<value>|True|False` pairs to add to Info.plist "
-            "for macOS and iOS builds (macos, ipa and ios-simulator only)",
+            help="The list of `<key>=<value>` pairs to add to Info.plist. Values can "
+            "be booleans, strings, numbers, TOML arrays, or TOML inline tables "
+            "(macos, ipa and ios-simulator only); can be used multiple times",
         )
         parser.add_argument(
             "--macos-entitlements",
             dest="macos_entitlements",
+            action="extend",
             nargs="+",
             default=[],
-            help="The list of `<key>=<value>|True|False` entitlements for "
-            "macOS builds (macos only)",
+            help="The list of `<key>=<value>` entitlements. Values can be booleans, "
+            "strings, numbers, TOML arrays, or TOML inline tables "
+            "(macos only); can be used multiple times",
         )
         parser.add_argument(
             "--android-features",
             dest="android_features",
+            action="extend",
             nargs="+",
             default=[],
-            help="The list of `<feature_name>=True|False` features to add to "
-            "AndroidManifest.xml for Android builds (android only)",
+            help="The list of `<feature_name>=true|false` features to add to "
+            "AndroidManifest.xml (android only); can be used multiple times",
         )
         parser.add_argument(
             "--android-permissions",
             dest="android_permissions",
+            action="extend",
             nargs="+",
             default=[],
-            help="The list of `<permission_name>=True|False` permissions to add to "
-            "AndroidManifest.xml for Android builds (android only)",
+            help="The list of `<permission_name>=true|false` permissions to add to "
+            "AndroidManifest.xml (android only); can be used multiple times",
         )
         parser.add_argument(
             "--android-meta-data",
             dest="android_meta_data",
+            action="extend",
             nargs="+",
             default=[],
             help="The list of `<name>=<value>` app meta-data entries to add to "
-            "AndroidManifest.xml for Android builds (android only)",
+            "AndroidManifest.xml (android only); can be used multiple times",
         )
         parser.add_argument(
             "--permissions",
@@ -807,6 +826,7 @@ class BaseBuildCommand(BaseFlutterCommand):
             "android.hardware.touchscreen": False,
         }
         android_meta_data = {}
+        android_providers = {}
 
         # merge values from "--permissions" arg:
         for p in (
@@ -815,7 +835,11 @@ class BaseBuildCommand(BaseFlutterCommand):
             or []
         ):
             if p in self.cross_platform_permissions:
-                info_plist.update(self.cross_platform_permissions[p]["info_plist"])
+                permission_config = self.cross_platform_permissions[p]
+                info_plist.update(
+                    permission_config.get(f"{self.config_platform}_info_plist", {})
+                    or permission_config.get("info_plist", {})
+                )
                 macos_entitlements.update(
                     self.cross_platform_permissions[p]["macos_entitlements"]
                 )
@@ -842,9 +866,19 @@ class BaseBuildCommand(BaseFlutterCommand):
             if i > -1:
                 k = p[:i]
                 v = p[i + 1 :]
-                info_plist[k] = True if v == "True" else False if v == "False" else v
+                info_plist[k] = parse_cli_plist_value(v)
             else:
                 self.cleanup(1, f"Invalid Info.plist option: {p}")
+
+        for key, value in info_plist.items():
+            if not is_supported_plist_value(value):
+                self.cleanup(
+                    1,
+                    "Unsupported Info.plist value type for "
+                    f"{key}: {type(value).__name__}. Supported types are "
+                    "string, boolean, integer, float, dictionary, and arrays "
+                    "containing those values.",
+                )
 
         macos_entitlements = merge_dict(
             macos_entitlements,
@@ -855,9 +889,19 @@ class BaseBuildCommand(BaseFlutterCommand):
         for p in self.options.macos_entitlements:
             i = p.find("=")
             if i > -1:
-                macos_entitlements[p[:i]] = p[i + 1 :] == "True"
+                macos_entitlements[p[:i]] = parse_cli_plist_value(p[i + 1 :])
             else:
                 self.cleanup(1, f"Invalid macOS entitlement option: {p}")
+
+        for key, value in macos_entitlements.items():
+            if not is_supported_plist_value(value):
+                self.cleanup(
+                    1,
+                    "Unsupported macOS entitlement value type for "
+                    f"{key}: {type(value).__name__}. Supported types are "
+                    "string, boolean, integer, float, dictionary, and arrays "
+                    "containing those values.",
+                )
 
         android_permissions = merge_dict(
             android_permissions,
@@ -868,9 +912,35 @@ class BaseBuildCommand(BaseFlutterCommand):
         for p in self.options.android_permissions:
             i = p.find("=")
             if i > -1:
-                android_permissions[p[:i]] = p[i + 1 :] == "True"
+                try:
+                    android_permissions[p[:i]] = parse_cli_bool_value(p[i + 1 :])
+                except ValueError:
+                    self.cleanup(
+                        1,
+                        f"Invalid Android permission option value for {p[:i]}: "
+                        f"{p[i + 1 :]}. Expected true or false.",
+                    )
             else:
                 self.cleanup(1, f"Invalid Android permission option: {p}")
+
+        for key, value in android_permissions.items():
+            if isinstance(value, bool):
+                continue
+            if isinstance(value, dict):
+                for ak, av in value.items():
+                    if not isinstance(av, (str, bool, int, float)):
+                        self.cleanup(
+                            1,
+                            f"Invalid Android permission attribute value for "
+                            f"{key}.{ak}: {type(av).__name__}. "
+                            "Expected string, boolean, or number.",
+                        )
+                continue
+            self.cleanup(
+                1,
+                f"Invalid Android permission value for {key}: "
+                f"{type(value).__name__}. Expected boolean or inline table.",
+            )
 
         android_features = merge_dict(
             android_features,
@@ -881,7 +951,14 @@ class BaseBuildCommand(BaseFlutterCommand):
         for p in self.options.android_features:
             i = p.find("=")
             if i > -1:
-                android_features[p[:i]] = p[i + 1 :] == "True"
+                try:
+                    android_features[p[:i]] = parse_cli_bool_value(p[i + 1 :])
+                except ValueError:
+                    self.cleanup(
+                        1,
+                        f"Invalid Android feature option value for {p[:i]}: "
+                        f"{p[i + 1 :]}. Expected true or false.",
+                    )
             else:
                 self.cleanup(1, f"Invalid Android feature option: {p}")
 
@@ -897,6 +974,88 @@ class BaseBuildCommand(BaseFlutterCommand):
                 android_meta_data[p[:i]] = p[i + 1 :]
             else:
                 self.cleanup(1, f"Invalid Android meta-data option: {p}")
+
+        android_providers = merge_dict(
+            android_providers,
+            self.get_pyproject("tool.flet.android.provider") or {},
+        )
+
+        def _xml_attr_value(v):
+            # Android XML expects lowercase booleans.
+            if isinstance(v, bool):
+                return "true" if v else "false"
+            return v
+
+        normalized_providers = {}
+        for key, value in android_providers.items():
+            if value is False or value == {}:
+                continue
+            if value is True:
+                self.cleanup(
+                    1,
+                    f"Invalid Android provider value for {key}: 'true' is not "
+                    "supported. Use an inline table of attributes, or 'false' "
+                    "to skip.",
+                )
+            if not isinstance(value, dict):
+                self.cleanup(
+                    1,
+                    f"Invalid Android provider value for {key}: "
+                    f"{type(value).__name__}. Expected boolean or inline table.",
+                )
+            normalized = {}
+            for ak, av in value.items():
+                if ak == "name":
+                    self.cleanup(
+                        1,
+                        f"Invalid Android provider attribute for {key}: "
+                        "'name' is reserved and is taken from the table key.",
+                    )
+                if ak == "meta_data":
+                    if not isinstance(av, dict):
+                        self.cleanup(
+                            1,
+                            f"Invalid Android provider meta_data for {key}: "
+                            f"{type(av).__name__}. Expected inline table.",
+                        )
+                    normalized_meta = {}
+                    for mk, mv in av.items():
+                        if isinstance(mv, (str, bool, int, float)):
+                            normalized_meta[mk] = _xml_attr_value(mv)
+                            continue
+                        if isinstance(mv, dict):
+                            normalized_attrs = {}
+                            for attr_key, attr_value in mv.items():
+                                if not isinstance(attr_value, (str, bool, int, float)):
+                                    self.cleanup(
+                                        1,
+                                        f"Invalid Android provider meta-data "
+                                        f"attribute value for "
+                                        f"{key}.meta_data.{mk}.{attr_key}: "
+                                        f"{type(attr_value).__name__}. "
+                                        "Expected string, boolean, or number.",
+                                    )
+                                normalized_attrs[attr_key] = _xml_attr_value(attr_value)
+                            normalized_meta[mk] = normalized_attrs
+                            continue
+                        self.cleanup(
+                            1,
+                            f"Invalid Android provider meta-data value for "
+                            f"{key}.meta_data.{mk}: {type(mv).__name__}. "
+                            "Expected string, boolean, number, or inline table.",
+                        )
+                    normalized["meta_data"] = normalized_meta
+                    continue
+                if not isinstance(av, (str, bool, int, float)):
+                    self.cleanup(
+                        1,
+                        f"Invalid Android provider attribute value for "
+                        f"{key}.{ak}: {type(av).__name__}. "
+                        "Expected string, boolean, or number.",
+                    )
+                normalized[ak] = _xml_attr_value(av)
+            normalized_providers[key] = normalized
+        android_providers = normalized_providers
 
         deep_linking_scheme = (
             self.get_pyproject("tool.flet.ios.deep_linking.scheme")
@@ -1050,6 +1209,7 @@ class BaseBuildCommand(BaseFlutterCommand):
                 "android_permissions": android_permissions,
                 "android_features": android_features,
                 "android_meta_data": android_meta_data,
+                "android_providers": android_providers,
                 "deep_linking": {
                     "scheme": deep_linking_scheme,
                     "host": deep_linking_host,
@@ -1087,18 +1247,41 @@ class BaseBuildCommand(BaseFlutterCommand):
             self.build_dir / ".hash" / f"template-{'2' if second_pass else '1'}"
         )
 
-        template_url = (
-            self.options.template
-            or self.get_pyproject("tool.flet.template.url")
-            or DEFAULT_TEMPLATE_URL
+        template_url = self.options.template or self.get_pyproject(
+            "tool.flet.template.url"
         )
-        hash.update(template_url)
 
         template_ref = self.options.template_ref or self.get_pyproject(
             "tool.flet.template.ref"
         )
         if not template_ref:
-            template_ref = version.Version(flet.version.flet_version).base_version
+            template_ref = flet.version.flet_version
+
+        is_local_dev = False
+        # Identity printed in status / hashed for invalidation; may differ from
+        # the path cookiecutter actually reads when caching kicks in below.
+        template_source = template_url
+        if template_url:
+            # User-provided template (git repo or local path) — use checkout
+            checkout = template_ref
+        else:
+            # Check for local dev templates first (running from source checkout)
+            local_tpl = Path(__file__).resolve().parents[5] / "templates" / "build"
+            if local_tpl.is_dir():
+                template_url = str(local_tpl)
+                template_source = template_url
+                checkout = None
+                is_local_dev = True
+            else:
+                from flet_cli.utils.template_cache import get_cached_template_zip
+
+                template_source = DEFAULT_TEMPLATE_URL.format(version=template_ref)
+                template_url = str(
+                    get_cached_template_zip(template_source, template_ref)
+                )
+                checkout = None
+
+        hash.update(template_source)
         hash.update(template_ref)
 
         template_dir = self.options.template_dir or self.get_pyproject(
@@ -1124,17 +1307,18 @@ class BaseBuildCommand(BaseFlutterCommand):
             # create a new Flutter bootstrap project directory, if non-existent
             if not second_pass:
                 self.flutter_dir.mkdir(parents=True, exist_ok=True)
-                self.update_status(
-                    "[bold blue]Creating app shell from "
-                    f'{template_url} with ref "{template_ref}"...'
-                )
+                status = f"[bold blue]Creating app shell from {template_source}"
+                if checkout:
+                    status += f' with ref "{template_ref}"'
+                status += "..."
+                self.update_status(status)
 
             try:
                 from cookiecutter.main import cookiecutter
 
                 cookiecutter(
                     template=template_url,
-                    checkout=template_ref,
+                    checkout=checkout,
                     directory=template_dir,
                     output_dir=str(self.flutter_dir.parent),
                     no_input=True,
@@ -1147,10 +1331,35 @@ class BaseBuildCommand(BaseFlutterCommand):
                 shutil.rmtree(self.flutter_dir)
                 self.cleanup(1, f"{e}")
 
+            # For local development, override flet dependency with path
+            if is_local_dev:
+                repo_root = flet.version.find_repo_root(Path(__file__).resolve().parent)
+                if repo_root:
+                    flet_pkg_path = str(repo_root / "packages" / "flet")
+                    pubspec = self.load_yaml(self.pubspec_path)
+                    pubspec["dependencies"]["flet"] = {"path": flet_pkg_path}
+                    pubspec.setdefault("dependency_overrides", {})["flet"] = {
+                        "path": flet_pkg_path
+                    }
+                    self.save_yaml(self.pubspec_path, pubspec)
+
             pyproject_pubspec = self.get_pyproject("tool.flet.flutter.pubspec")
 
             if pyproject_pubspec:
+                pyproject_pubspec = copy.deepcopy(pyproject_pubspec)
                 pubspec = self.load_yaml(self.pubspec_path)
+                # Replace individual dependency entries from pyproject rather
+                # than deep-merging them — a Dart dependency can only have one
+                # source, so merging {"path":…} with {"git":…} is invalid.
+                for section in (
+                    "dependencies",
+                    "dependency_overrides",
+                    "dev_dependencies",
+                ):
+                    if section in pyproject_pubspec:
+                        pubspec.setdefault(section, {}).update(
+                            pyproject_pubspec.pop(section)
+                        )
                 pubspec = merge_dict(pubspec, pyproject_pubspec)
                 self.save_yaml(self.pubspec_path, pubspec)
 
@@ -1736,7 +1945,7 @@ class BaseBuildCommand(BaseFlutterCommand):
             package_args.extend(["-r", f"flet=={flet.version.flet_version}"])
 
         # site-packages variable
-        if self.package_platform != "Pyodide":
+        if self.package_platform != "Emscripten":
             package_env["SERIOUS_PYTHON_SITE_PACKAGES"] = str(
                 self.build_dir / "site-packages"
             )
@@ -1790,17 +1999,23 @@ class BaseBuildCommand(BaseFlutterCommand):
             self.options.cleanup_packages, "cleanup.packages", True
         )
 
-        # TODO: should be deprecated
-        if self.get_bool_setting(None, "compile.cleanup", False):
-            cleanup_app = cleanup_packages = True
-
         if cleanup_app_files := (
             self.options.cleanup_app_files
             or self.get_pyproject(f"tool.flet.{self.config_platform}.cleanup.app_files")
             or self.get_pyproject("tool.flet.cleanup.app_files")
         ):
-            package_args.extend(["--cleanup-app-files", ",".join(cleanup_app_files)])
-            cleanup_app = True
+            if isinstance(cleanup_app_files, str):
+                cleanup_app_files = [
+                    value.strip() for value in cleanup_app_files.split(",")
+                ]
+            if isinstance(cleanup_app_files, list):
+                package_args.extend(
+                    [
+                        "--cleanup-app-files",
+                        ",".join([v.strip() for v in cleanup_app_files if v.strip()]),
+                    ]
+                )
+                cleanup_app = True
 
         if cleanup_package_files := (
             self.options.cleanup_package_files
@@ -1809,10 +2024,20 @@ class BaseBuildCommand(BaseFlutterCommand):
             )
             or self.get_pyproject("tool.flet.cleanup.package_files")
         ):
-            package_args.extend(
-                ["--cleanup-package-files", ",".join(cleanup_package_files)]
-            )
-            cleanup_packages = True
+            if isinstance(cleanup_package_files, str):
+                cleanup_package_files = [
+                    value for value in cleanup_package_files.split(",")
+                ]
+            if isinstance(cleanup_package_files, list):
+                package_args.extend(
+                    [
+                        "--cleanup-package-files",
+                        ",".join(
+                            [v.strip() for v in cleanup_package_files if v.strip()]
+                        ),
+                    ]
+                )
+                cleanup_packages = True
 
         if cleanup_app:
             package_args.append("--cleanup-app")
@@ -1930,12 +2155,12 @@ class BaseBuildCommand(BaseFlutterCommand):
         build_env = {}
 
         # site-packages variable
-        if self.package_platform != "Pyodide":
+        if self.package_platform != "Emscripten":
             build_env["SERIOUS_PYTHON_SITE_PACKAGES"] = str(
                 self.build_dir / "site-packages"
             )
 
-        if self.package_platform == "Pyodide" and not self.template_data["no_wasm"]:
+        if self.package_platform == "Emscripten" and not self.template_data["no_wasm"]:
             build_args.append("--wasm")
 
         android_signing_key_store = (
@@ -2159,7 +2384,13 @@ class BaseBuildCommand(BaseFlutterCommand):
         hash: HashStamp,
     ):
         """
-        Find first matching image file by base name and queue it for copy.
+        Find the best matching image file for the current target platform.
+
+        When multiple files share the same base name (e.g. `icon.icns`,
+        `icon.ico`, `icon.png`), the method filters out formats that are
+        incompatible with the build target before selecting the first match.
+        For example, `.icns` is skipped on Windows builds because
+        `flutter_launcher_icons` cannot decode it.
 
         Args:
             src_path: Source assets directory.
@@ -2172,17 +2403,30 @@ class BaseBuildCommand(BaseFlutterCommand):
             File name of matched image, or `None` if not found.
         """
 
-        images = glob.glob(str(src_path.joinpath(f"{image_name}.*")))
-        if len(images) > 0:
-            if self.verbose > 0:
-                console.log(
-                    f'Found "{image_name}" image at {images[0]}', style=verbose1_style
-                )
-            copy_ops.append((images[0], dest_path))
-            hash.update(images[0])
-            hash.update(Path(images[0]).stat().st_mtime)
-            return Path(images[0]).name
-        return None
+        # .icns is macOS-only and .ico is Windows-only; filter out
+        # incompatible formats so flutter_launcher_icons gets a decodable file.
+        images = list(
+            filter(
+                lambda p: not (
+                    (ext := Path(p).suffix.lower()) == ".icns"
+                    and self.target_platform != "macos"
+                    or ext == ".ico"
+                    and self.target_platform != "windows"
+                ),
+                glob.glob(str(src_path.joinpath(f"{image_name}.*"))),
+            )
+        )
+
+        if not images:
+            return None
+
+        best = images[0]
+        if self.verbose > 0:
+            console.log(f'Found "{image_name}" image at {best}', style=verbose1_style)
+        copy_ops.append((best, dest_path))
+        hash.update(best)
+        hash.update(Path(best).stat().st_mtime)
+        return Path(best).name
 
     def run(self, args, cwd, env: Optional[dict] = None, capture_output=True):
         """

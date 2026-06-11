@@ -10,7 +10,7 @@ It is based on the [flutter_code_editor](https://pub.dev/packages/flutter_code_e
 
 ## Documentation
 
-Detailed documentation to this package can be found [here](https://docs.flet.dev/codeeditor/).
+Detailed documentation to this package can be found [here](https://flet.dev/docs/controls/codeeditor/).
 
 ## Usage
 
@@ -31,4 +31,4 @@ To install the `flet-code-editor` package and add it to your project dependencie
 
 ### Examples
 
-For examples, see [these](https://github.com/flet-dev/flet/tree/main/examples/controls/code_editor).
+For examples, see [these](https://github.com/flet-dev/flet/tree/main/sdk/python/examples/extensions/code_editor).

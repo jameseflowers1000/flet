@@ -4,7 +4,12 @@ from flet.app import AppCallable, app, app_async, run, run_async
 from flet.components.component import Component
 from flet.components.component_decorator import component
 from flet.components.hooks.use_callback import use_callback
-from flet.components.hooks.use_context import create_context, use_context
+from flet.components.hooks.use_context import (
+    ContextProvider,
+    create_context,
+    use_context,
+)
+from flet.components.hooks.use_dialog import use_dialog
 from flet.components.hooks.use_effect import (
     on_mounted,
     on_unmounted,
@@ -17,6 +22,17 @@ from flet.components.hooks.use_state import use_state
 from flet.components.memo import memo
 from flet.components.observable import Observable, observable
 from flet.components.public_utils import unwrap_component
+from flet.components.router import (
+    LocationInfo,
+    Route,
+    Router,
+    is_route_active,
+    use_route_loader_data,
+    use_route_location,
+    use_route_outlet,
+    use_route_params,
+    use_view_path,
+)
 from flet.controls import alignment, border, border_radius, margin, padding
 from flet.controls.adaptive_control import AdaptiveControl
 from flet.controls.alignment import Alignment, Axis
@@ -26,7 +42,7 @@ from flet.controls.animation import (
     AnimationStyle,
     AnimationValue,
 )
-from flet.controls.base_control import BaseControl, control
+from flet.controls.base_control import BaseControl, Value, control, value
 from flet.controls.base_page import BasePage, PageMediaData, PageResizeEvent
 from flet.controls.blur import (
     Blur,
@@ -102,10 +118,10 @@ from flet.controls.core.drag_target import (
     DragWillAcceptEvent,
 )
 from flet.controls.core.draggable import Draggable
-from flet.controls.core.flet_app import FletApp
+from flet.controls.core.flet_app import FletApp, FletAppOutputEvent
 from flet.controls.core.gesture_detector import GestureDetector
 from flet.controls.core.grid_view import GridView
-from flet.controls.core.hero import Hero, HeroTag
+from flet.controls.core.hero import Hero
 from flet.controls.core.icon import Icon
 from flet.controls.core.image import Image
 from flet.controls.core.interactive_viewer import InteractiveViewer
@@ -304,7 +320,11 @@ from flet.controls.material.divider import Divider
 from flet.controls.material.dropdown import Dropdown, DropdownOption
 from flet.controls.material.dropdownm2 import DropdownM2
 from flet.controls.material.elevated_button import ElevatedButton
-from flet.controls.material.expansion_panel import ExpansionPanel, ExpansionPanelList
+from flet.controls.material.expansion_panel import (
+    ExpansionPanel,
+    ExpansionPanelList,
+    ExpansionPanelListChangeEvent,
+)
 from flet.controls.material.expansion_tile import ExpansionTile, TileAffinity
 from flet.controls.material.filled_button import FilledButton
 from flet.controls.material.filled_tonal_button import FilledTonalButton
@@ -405,6 +425,7 @@ from flet.controls.page import (
     PlatformBrightnessChangeEvent,
     RouteChangeEvent,
     ViewPopEvent,
+    ViewsPopUntilEvent,
 )
 from flet.controls.painting import (
     Paint,
@@ -419,6 +440,8 @@ from flet.controls.ref import Ref
 from flet.controls.scrollable_control import (
     OnScrollEvent,
     ScrollableControl,
+    Scrollbar,
+    ScrollbarOrientation,
     ScrollDirection,
     ScrollType,
 )
@@ -693,6 +716,7 @@ __all__ = [
     "ContextMenuDismissEvent",
     "ContextMenuSelectEvent",
     "ContextMenuTrigger",
+    "ContextProvider",
     "ContinuousRectangleBorder",
     "Control",
     "ControlEvent",
@@ -775,6 +799,7 @@ __all__ = [
     "EventHandler",
     "ExpansionPanel",
     "ExpansionPanelList",
+    "ExpansionPanelListChangeEvent",
     "ExpansionTile",
     "ExpansionTileTheme",
     "FilePicker",
@@ -789,6 +814,7 @@ __all__ = [
     "FilledTonalIconButton",
     "FilterQuality",
     "FletApp",
+    "FletAppOutputEvent",
     "FletException",
     "FletPageDisconnectedException",
     "FletUnimplementedPlatformException",
@@ -808,7 +834,6 @@ __all__ = [
     "GyroscopeReadingEvent",
     "HapticFeedback",
     "Hero",
-    "HeroTag",
     "HoverEvent",
     "Icon",
     "IconButton",
@@ -847,6 +872,7 @@ __all__ = [
     "Locale",
     "LocaleChangeEvent",
     "LocaleConfiguration",
+    "LocationInfo",
     "LoginEvent",
     "LongPressDownEvent",
     "LongPressEndEvent",
@@ -944,8 +970,10 @@ __all__ = [
     "RotateValue",
     "RotatedBox",
     "RoundedRectangleBorder",
+    "Route",
     "RouteChangeEvent",
     "RouteUrlStrategy",
+    "Router",
     "Row",
     "SafeArea",
     "Scale",
@@ -962,6 +990,8 @@ __all__ = [
     "ScrollMode",
     "ScrollType",
     "ScrollableControl",
+    "Scrollbar",
+    "ScrollbarOrientation",
     "ScrollbarTheme",
     "SearchBar",
     "SearchBarTheme",
@@ -1058,11 +1088,13 @@ __all__ = [
     "UrlTarget",
     "UserAccelerometer",
     "UserAccelerometerReadingEvent",
+    "Value",
     "ValueKey",
     "VerticalAlignment",
     "VerticalDivider",
     "View",
     "ViewPopEvent",
+    "ViewsPopUntilEvent",
     "VisualDensity",
     "Wakelock",
     "WebBrowserName",
@@ -1090,6 +1122,7 @@ __all__ = [
     "dropdown",
     "dropdownm2",
     "icons",
+    "is_route_active",
     "margin",
     "memo",
     "observable",
@@ -1102,10 +1135,17 @@ __all__ = [
     "unwrap_component",
     "use_callback",
     "use_context",
+    "use_dialog",
     "use_effect",
     "use_memo",
     "use_ref",
+    "use_route_loader_data",
+    "use_route_location",
+    "use_route_outlet",
+    "use_route_params",
     "use_state",
+    "use_view_path",
+    "value",
 ]
 
 _THEME_EXPORTS = {

@@ -1,4 +1,5 @@
 import asyncio
+import dataclasses
 import inspect
 import logging
 import traceback
@@ -34,7 +35,7 @@ class Session:
     """
     Represents a server-side Flet session.
 
-    A session owns the root [`Page`][flet.], tracks mounted controls, dispatches
+    A session owns the root :class:`~flet.Page`, tracks mounted controls, dispatches
     control events, synchronizes UI patches with the client connection, and coordinates
     deferred updates/effects.
     """
@@ -61,7 +62,8 @@ class Session:
 
         session_id = self.__id
         weakref.finalize(
-            self, lambda: logger.info(f"Session was garbage collected: {session_id}")
+            self,
+            lambda: logger.info("Session was garbage collected: %s", session_id),
         )
 
     @property
@@ -71,7 +73,7 @@ class Session:
 
         Returns:
             Active `Connection` instance. It may be `None` after
-            [`disconnect()`][(c).disconnect] until a reconnect occurs.
+            :meth:`disconnect` until a reconnect occurs.
         """
         return self.__conn
 
@@ -101,14 +103,14 @@ class Session:
         Returns the live control index for this session.
 
         Returns:
-            Weak mapping of control IDs to mounted [`BaseControl`][flet.] instances.
+            Weak mapping of control IDs to mounted :class:`~flet.BaseControl` instances.
         """
         return self.__index
 
     @property
     def page(self):
         """
-        Returns the root [`Page`][flet.] associated with this session.
+        Returns the root :class:`~flet.Page` associated with this session.
         """
         return self.__page
 
@@ -141,7 +143,7 @@ class Session:
         Args:
             conn: Active connection to bind to this session.
         """
-        logger.debug(f"Connect session: {self.id}")
+        logger.debug("Connect session: %s", self.id)
         _context_page.set(self.__page)
         self.__conn = conn
         self.__expires_at = None
@@ -177,7 +179,7 @@ class Session:
             session_timeout_seconds: Grace period before the disconnected session is
                 considered expired.
         """
-        logger.debug(f"Disconnect session: {self.id}")
+        logger.debug("Disconnect session: %s", self.id)
         self.__expires_at = datetime.now(timezone.utc) + timedelta(
             seconds=session_timeout_seconds
         )
@@ -198,7 +200,7 @@ class Session:
         unsubscribes pub/sub handlers, resolves pending invoke-method calls with
         a closure error, and dispatches the page-level `close` event.
         """
-        logger.debug(f"Closing expired session: {self.id}")
+        logger.debug("Closing expired session: %s", self.id)
         self.__closed = True
         self.__updates_ready.set()
         if self.__updates_task and not self.__updates_task.done():
@@ -237,7 +239,7 @@ class Session:
             frozen=frozen,
         )
 
-        patch_logger.debug(f"\npatch removed_controls ({len(removed_controls)}):")
+        patch_logger.debug("\npatch removed_controls (%s):", len(removed_controls))
         for c in removed_controls:
             patch_logger.debug("   %s", c)
 
@@ -254,7 +256,7 @@ class Session:
                 )
             )
 
-        patch_logger.debug(f"\npatch added_controls: ({len(added_controls)})")
+        patch_logger.debug("\npatch added_controls: (%s)", len(added_controls))
         for ac in added_controls:
             patch_logger.debug("   %s", ac)
 
@@ -305,6 +307,87 @@ class Session:
         # <operation> := [<type>, <tree_node_index>, <property|index>, <value>]
         return patch[1][3]  # [1] - 1st operation -> [3] - Page
 
+    def __is_mounted_control(self, control: BaseControl) -> bool:
+        try:
+            return control.page is self.__page
+        except RuntimeError:
+            return False
+
+    def __find_live_control(
+        self,
+        value: Any,
+        control_id: int,
+        parent: Optional[BaseControl] = None,
+        visited: Optional[set[int]] = None,
+    ) -> Optional[BaseControl]:
+        if value is None:
+            return None
+
+        if visited is None:
+            visited = set()
+
+        value_id = id(value)
+        if value_id in visited:
+            return None
+
+        current_parent = parent
+        if isinstance(value, BaseControl):
+            visited.add(value_id)
+            if parent is not None and parent is not value:
+                value._parent = weakref.ref(parent)
+            if value._i == control_id:
+                return value
+            current_parent = value
+        elif dataclasses.is_dataclass(value) or isinstance(value, (list, tuple, dict)):
+            visited.add(value_id)
+
+        if dataclasses.is_dataclass(value):
+            for field in dataclasses.fields(value):
+                if field.metadata.get("skip", False) or field.name == "_parent":
+                    continue
+                found = self.__find_live_control(
+                    getattr(value, field.name, None),
+                    control_id,
+                    current_parent,
+                    visited,
+                )
+                if found is not None:
+                    return found
+        elif isinstance(value, dict):
+            for item in value.values():
+                found = self.__find_live_control(
+                    item, control_id, current_parent, visited
+                )
+                if found is not None:
+                    return found
+        elif isinstance(value, (list, tuple)):
+            for item in value:
+                found = self.__find_live_control(
+                    item, control_id, current_parent, visited
+                )
+                if found is not None:
+                    return found
+
+        return None
+
+    def __resolve_event_control(self, control_id: int) -> Optional[BaseControl]:
+        control = self.__index.get(control_id)
+        if control is not None and self.__is_mounted_control(control):
+            return control
+
+        live_control = self.__find_live_control(self.__page, control_id)
+        if live_control is not None:
+            if control is not None and control is not live_control:
+                logger.debug(
+                    "Recovered stale control %s -> %s for event dispatch",
+                    control,
+                    live_control,
+                )
+            self.__index[control_id] = live_control
+            return live_control
+
+        return control
+
     # optimizations:
     # - disable auto-update
     # - auto-update to skip already updated items
@@ -325,15 +408,17 @@ class Session:
             event_name: Event name without the `on_` prefix.
             event_data: Raw event payload.
         """
-        control = self.__index.get(control_id)
+        control = self.__resolve_event_control(control_id)
         if not control:
-            logger.debug(f"Control with ID {control_id} not found.")
+            logger.debug("Control with ID %s not found.", control_id)
             return
 
         try:
             await control._trigger_event(event_name, event_data)
         except Exception as e:
-            logger.error(f"Unhandled error in 'on_{event_name}' handler", exc_info=True)
+            logger.error(
+                "Unhandled error in 'on_%s' handler", event_name, exc_info=True
+            )
             self.error(f"{e}\n{traceback.format_exc()}")
 
     async def invoke_method(
@@ -435,8 +520,9 @@ class Session:
             control: Control that handled the event, or `None`.
         """
         # call auto-update
-        if context.auto_update_enabled():
+        if context.auto_update_enabled() and not context.was_update_called():
             await self.__auto_update(control)
+        context.reset_update_called()
 
         # unregister unreferenced services
         self.page._services.unregister_services()
@@ -556,14 +642,17 @@ class Session:
         logger.debug("Schedule_effect(%s, %s)", hook, is_cleanup)
         if self.__conn is None and self.__expires_at is not None:
             return
-        self.__pending_effects.append((weakref.ref(hook), is_cleanup))
+        # Hold a strong reference to the hook until it runs.  A weakref would
+        # get cleared when the owning component unmounts and clears
+        # `_state.hooks` — dropping queued cleanup effects on the floor.
+        self.__pending_effects.append((hook, is_cleanup))
         self.__updates_ready.set()
 
     def start_updates_scheduler(self):
         """
         Starts the deferred updates/effects scheduler task if not already running.
         """
-        logger.debug(f"Starting updates scheduler: {self.id}")
+        logger.debug("Starting updates scheduler: %s", self.id)
         if self.__updates_task and not self.__updates_task.done():
             return
         self.__updates_task = asyncio.create_task(self.__updates_scheduler())
@@ -574,7 +663,7 @@ class Session:
 
         The scheduler waits for work signals, updates pending controls, then executes
         pending effect hook setup/cleanup callbacks. Errors inside effect processing
-        are reported to the client via [`error()`][(c).error].
+        are reported to the client via :meth:`error`.
         """
         try:
             while not self.__closed:
@@ -594,7 +683,7 @@ class Session:
 
                 for effect in pending_effects:
                     try:
-                        hook = effect[0]()
+                        hook = effect[0]
                         is_cleanup = effect[1]
                         # print(f"**** Running effect: {hook} {is_cleanup}")
                         if hook and hook.setup and not is_cleanup:

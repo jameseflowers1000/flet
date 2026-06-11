@@ -1,4 +1,4 @@
-from typing import Optional, Union
+from typing import Annotated, Optional, Union
 
 from flet.controls.adaptive_control import AdaptiveControl
 from flet.controls.base_control import control
@@ -12,6 +12,7 @@ from flet.controls.material.navigation_bar import NavigationBar
 from flet.controls.material.navigation_drawer import NavigationDrawer
 from flet.controls.transform import OffsetValue
 from flet.controls.types import ColorValue, FloatingActionButtonLocation
+from flet.utils.validation import V
 
 __all__ = ["Pagelet"]
 
@@ -22,43 +23,47 @@ class Pagelet(LayoutControl, AdaptiveControl):
     Implements the basic Material Design visual layout structure.
 
     Use it for projects that require a "page within a page" layouts with its own
-    [`AppBar`][flet.], [`BottomAppBar`][flet.], [`NavigationDrawer`][flet.],
+    :class:`~flet.AppBar`, :class:`~flet.BottomAppBar`, :class:`~flet.NavigationDrawer`,
     such as demos and galleries.
     """
 
-    content: Control
+    content: Annotated[
+        Control,
+        V.visible_control(),
+    ]
     """
-    A child Control contained by the Pagelet.
+    A child Control contained by this Pagelet.
 
     The control in the content of the Pagelet is positioned at the top-left of the
     available space between the app bar and the bottom of the Pagelet.
 
     Raises:
-        ValueError: If [`content`][(c).] is not visible.
+        ValueError: If it is not visible.
     """
 
     appbar: Optional[Union[AppBar, CupertinoAppBar]] = None
     """
-    An [`AppBar`][flet.] control to display at the top of the Pagelet.
+    An :class:`~flet.AppBar` control to display at the top of the Pagelet.
     """
 
     navigation_bar: Optional[Union[NavigationBar, CupertinoNavigationBar]] = None
     """
-    A navigation bar ([`NavigationBar`][flet.] or [`CupertinoNavigationBar`][flet.]) \
-    control to display at the bottom of the `Pagelet`.
+    A navigation bar (:class:`~flet.NavigationBar` or \
+    :class:`~flet.CupertinoNavigationBar`) control to display at the bottom of the \
+    `Pagelet`.
 
     Note:
-        If both the `navigation_bar` and [`bottom_appbar`][(c).]
+        If both the `navigation_bar` and :attr:`bottom_appbar`
         properties are specified, `navigation_bar` takes precedence and will
         be displayed.
     """
 
     bottom_appbar: Optional[BottomAppBar] = None
     """
-    A [`BottomAppBar`][flet.] control to display at the bottom of the `Pagelet`.
+    A :class:`~flet.BottomAppBar` control to display at the bottom of this Pagelet.
 
     Note:
-        If both the `bottom_appbar` and [`navigation_bar`][(c).]
+        If both the `bottom_appbar` and :attr:`navigation_bar`
         properties are specified, `bottom_appbar` takes precedence and will
         be displayed.
     """
@@ -66,50 +71,45 @@ class Pagelet(LayoutControl, AdaptiveControl):
     bottom_sheet: Optional[Control] = None
     """
     The persistent bottom sheet to show information that supplements the primary \
-    content of the Pagelet.
+    content of this Pagelet.
     """
 
     drawer: Optional[NavigationDrawer] = None
     """
-    A [`NavigationDrawer`][flet.] control to display as a panel sliding from the start \
-    edge of the page.
+    A :class:`~flet.NavigationDrawer` control to display as a panel sliding from the \
+    start edge of the page.
     """
 
     end_drawer: Optional[NavigationDrawer] = None
     """
-    A [`NavigationDrawer`][flet.] control to display as a panel sliding from the end \
-    edge of the page.
+    A :class:`~flet.NavigationDrawer` control to display as a panel sliding from the \
+    end edge of the page.
     """
 
     floating_action_button: Optional[Control] = None
     """
-    A [`FloatingActionButton`][flet.]
-    control to display on top of Pagelet content.
+    A :class:`~flet.FloatingActionButton`
+    control to display on top of this Pagelet's content.
     """
 
     floating_action_button_location: Optional[
         Union[FloatingActionButtonLocation, OffsetValue]
     ] = FloatingActionButtonLocation.END_FLOAT
     """
-    Defines a position for the `FloatingActionButton`.
+    Defines the position of the :attr:`floating_action_button`.
     """
 
     bgcolor: Optional[ColorValue] = None
     """
-    Background color of the Pagelet.
+    Background color of this Pagelet.
     """
-
-    def before_update(self):
-        super().before_update()
-        if not self.content.visible:
-            raise ValueError("content must be visible")
 
     async def show_drawer(self):
         """
         Show the drawer.
 
         Raises:
-            ValueError: If no [`drawer`][(c).] is defined.
+            ValueError: If no :attr:`drawer` is defined.
         """
         if self.drawer is None:
             raise ValueError("No drawer defined")
@@ -126,7 +126,7 @@ class Pagelet(LayoutControl, AdaptiveControl):
         Show the end drawer.
 
         Raises:
-            ValueError: If no [`end_drawer`][(c).] is defined.
+            ValueError: If no :attr:`end_drawer` is defined.
         """
         if self.end_drawer is None:
             raise ValueError("No end_drawer defined")

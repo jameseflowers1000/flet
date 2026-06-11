@@ -10,7 +10,7 @@ class Context:
     Manages the context for Flet controls, including page reference and auto-update \
     behavior.
 
-    Context instance is accessed via [`flet.context`][flet.context].
+    Context instance is accessed via :data:`flet.context`.
     """
 
     def __init__(self) -> None:
@@ -19,7 +19,7 @@ class Context:
     @property
     def page(self) -> "Page":
         """
-        Returns the current [`Page`][flet.] associated with the context.
+        Returns the current :class:`~flet.Page` associated with the context.
 
         Example:
             ```python
@@ -101,6 +101,12 @@ class Context:
         """
         self.__components_mode = True
 
+    def disable_components_mode(self):
+        """
+        Disables components mode in the current context.
+        """
+        self.__components_mode = False
+
     def is_components_mode(self) -> bool:
         """
         Returns whether the current context is in components mode.
@@ -109,6 +115,27 @@ class Context:
             `True` if in components mode, `False` otherwise.
         """
         return self.__components_mode
+
+    def mark_update_called(self):
+        """
+        Marks that `.update()` was explicitly called during the current handler.
+        """
+        _update_behavior_context_var.get()._update_called = True
+
+    def was_update_called(self) -> bool:
+        """
+        Returns whether `.update()` was explicitly called during the current handler.
+
+        Returns:
+            `True` if `.update()` was called, `False` otherwise.
+        """
+        return _update_behavior_context_var.get()._update_called
+
+    def reset_update_called(self):
+        """
+        Resets the update-called flag for the current context.
+        """
+        _update_behavior_context_var.get()._update_called = False
 
     def auto_update_enabled(self) -> bool:
         """
@@ -143,6 +170,7 @@ class UpdateBehavior:
     """
 
     _auto_update_enabled: bool = True
+    _update_called: bool = False
 
 
 _context_page = ContextVar("flet_session_page", default=None)
@@ -152,6 +180,6 @@ _update_behavior_context_var = ContextVar("update_behavior", default=UpdateBehav
 context = Context()
 """Global context object for the running Flet app.
 
-Use [`flet.context`][flet.context] to access the current page and control
+Use :data:`flet.context` to access the current page and control
 auto-update behavior inside callbacks.
 """

@@ -35,7 +35,7 @@ AppCallable = Callable[[Page], Union[Any, Awaitable[Any]]]
 """Type alias for Flet app lifecycle callbacks.
 
 Represents a callable (synchronous or asynchronous) that accepts a single argument of
-type [`Page`][flet.]. The return value is ignored.
+type :class:`~flet.Page`. The return value is ignored.
 
 Used for both `main` and `before_main` handlers.
 """
@@ -77,7 +77,7 @@ def run(
 
     Args:
         main: Application entry point. Handler (function or coroutine) must
-            have 1 parameter of instance [`Page`][flet.Page].
+            have 1 parameter of instance :class:`~flet.Page`.
         before_main: Called after `Page` is created but before `main`.
         name: Page/app name used in web URL path when applicable.
         host: Host/IP to bind the web server to.
@@ -158,7 +158,7 @@ async def run_async(
 
     Args:
         main: Application entry point. Handler (function or coroutine) must
-            have 1 parameter of instance [`Page`][flet.Page].
+            have 1 parameter of instance :class:`~flet.Page`.
         before_main: Called after `Page` is created but before `main`.
         name: Page/app name used in web URL path when applicable.
         host: Host/IP to bind the web server to.
@@ -219,9 +219,12 @@ async def run_async(
         """
 
         if url_prefix is not None:
-            print(url_prefix, page_url)
+            parts = [url_prefix, page_url]
+            if view is not None:
+                parts.append(view.value)
+            print(*parts)
         else:
-            logger.info(f"App URL: {page_url}")
+            logger.info("App URL: %s", page_url)
 
         if view == AppView.WEB_BROWSER and url_prefix is None and not force_web_server:
             open_in_browser(page_url)
@@ -438,7 +441,7 @@ async def __run_web_server(
     if port == 0:
         port = get_free_tcp_port()
 
-    logger.info(f"Starting Flet web server on port {port}...")
+    logger.info("Starting Flet web server on port %s...", port)
 
     log_level = logging.getLogger("flet").getEffectiveLevel()
     if log_level == logging.CRITICAL or log_level == logging.NOTSET:
@@ -520,7 +523,7 @@ def __get_assets_dir_path(assets_dir: Optional[str], relative_to_cwd=False):
                     .joinpath(assets_dir)
                     .resolve()
                 )
-        logger.info(f"Assets path configured: {assets_dir}")
+        logger.info("Assets path configured: %s", assets_dir)
 
     env_assets_dir = os.getenv("FLET_ASSETS_DIR")
     if env_assets_dir:

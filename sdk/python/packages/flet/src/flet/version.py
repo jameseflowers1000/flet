@@ -2,6 +2,7 @@
 
 import json
 import subprocess as sp
+import sys
 from pathlib import Path
 from typing import Optional
 
@@ -30,7 +31,7 @@ when available.
 flutter_version = ""
 """
 The Flutter SDK version used when building the flet client or packaging
-apps with [`flet build`](https://docs.flet.dev/cli/flet-build/).
+apps with [`flet build`](https://flet.dev/docs/cli/flet-build/).
 
 This value is set explicitly in CI for released packages. When running from
 source and no version is provided, it is resolved from the repository's
@@ -40,7 +41,7 @@ source and no version is provided, it is resolved from the repository's
 PYODIDE_VERSION = "0.27.7"
 """
 The Pyodide version being used when packaging
-with [`flet build web`](https://docs.flet.dev/cli/flet-build/).
+with [`flet build web`](https://flet.dev/docs/cli/flet-build/).
 """
 
 
@@ -56,7 +57,7 @@ def from_git() -> Optional[str]:
 
     try:
         result = sp.run(
-            [git_cmd, "describe", "--abbrev=0"],
+            [git_cmd, "describe", "--tags", "--abbrev=0"],
             cwd=repo_root,
             capture_output=True,
             text=True,
@@ -67,18 +68,22 @@ def from_git() -> Optional[str]:
 
     except sp.CalledProcessError as e:
         # Git is present but no tags / not a valid repo state
-        print(f"Error getting Git version: {e}")
+        print(f"Error getting Git version: {e}", file=sys.stderr)
     except OSError as e:
-        print(f"Error running Git: {e}")
+        print(f"Error running Git: {e}", file=sys.stderr)
 
     return None
 
 
 def find_repo_root(start_path: Path) -> Optional[Path]:
-    """Find the root directory of the Git repository containing the start path."""
+    """Find the root directory of the Git repository containing the start path.
+
+    Accepts both a regular clone (where `.git` is a directory) and a
+    worktree (where `.git` is a file containing `gitdir: ...`).
+    """
     current_path = start_path.resolve()
     while current_path != current_path.parent:
-        if (current_path / ".git").is_dir():
+        if (current_path / ".git").exists():
             return current_path
         current_path = current_path.parent
     return None
@@ -128,7 +133,7 @@ def get_flutter_version() -> str:
                     raise ValueError("Empty or missing 'flutter' value")
                 return v
             except Exception as e:
-                print(f"Error parsing {fvmrc_path!r}: {e}")
+                print(f"Error parsing {fvmrc_path!r}: {e}", file=sys.stderr)
 
     # If 'flutter_version' is still empty after the above (e.g., in a built package
     # where CI didn't replace it), fall back to the below default.

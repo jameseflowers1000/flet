@@ -3,7 +3,7 @@
 [![pypi](https://img.shields.io/pypi/v/flet-flashlight.svg)](https://pypi.python.org/pypi/flet-flashlight)
 [![downloads](https://static.pepy.tech/badge/flet-flashlight/month)](https://pepy.tech/project/flet-flashlight)
 [![python](https://img.shields.io/badge/python-%3E%3D3.10-%2334D058)](https://pypi.org/project/flet-flashlight)
-[![docstring coverage](https://docs.flet.dev/assets/badges/docs-coverage/flet-flashlight.svg)](https://docs.flet.dev/assets/badges/docs-coverage/flet-flashlight.svg)
+[![docstring coverage](https://flet.dev/docs/assets/badges/docs-coverage/flet-flashlight.svg)](https://flet.dev/docs/assets/badges/docs-coverage/flet-flashlight.svg)
 [![license](https://img.shields.io/badge/License-Apache_2.0-green.svg)](https://github.com/flet-dev/flet/blob/main/sdk/python/packages/flet-flashlight/LICENSE)
 
 A [Flet](https://flet.dev) extension to manage the device torch/flashlight.
@@ -14,7 +14,7 @@ It is based on the [flashlight](https://pub.dev/packages/flashlight) Flutter pac
 
 ## Documentation
 
-Detailed documentation to this package can be found [here](https://docs.flet.dev/flashlight/).
+Detailed documentation to this package can be found [here](https://flet.dev/docs/services/flashlight/).
 
 ## Platform Support
 
@@ -41,4 +41,4 @@ To install the `flet-flashlight` package and add it to your project dependencies
 
 ### Examples
 
-For examples, see [these](https://github.com/flet-dev/flet/tree/main/examples/services/flashlight).
+For examples, see [these](https://github.com/flet-dev/flet/tree/main/sdk/python/examples/extensions/flashlight).
