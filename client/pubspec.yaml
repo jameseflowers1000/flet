@@ -147,6 +147,9 @@ dependencies:
 dependency_overrides:
   flet:
     path: ../packages/flet
+  # connectivity_plus 7.1.1 uses NWPath.isUltraConstrained (macOS 26 SDK);
+  # pin until local Xcode ships that SDK.
+  connectivity_plus: 7.0.0
 
 dev_dependencies:
   flutter_test:

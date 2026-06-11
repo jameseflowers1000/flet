@@ -18,7 +18,7 @@ __all__ = [
 ]
 
 # set by CI in official builds; overridden locally for development/testing
-flet_version = "0.69.0+epyx-dev"
+flet_version = "0.85.3+epyx-dev"
 """
 The Flet version in use.
 
