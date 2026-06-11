@@ -68,6 +68,12 @@
       "languageVersion": "3.4"
     },
     {
+      "name": "cupertino_icons",
+      "rootUri": "file:///Users/jim/.pub-cache/hosted/pub.dev/cupertino_icons-1.0.9",
+      "packageUri": "lib/",
+      "languageVersion": "3.9"
+    },
+    {
       "name": "dbus",
       "rootUri": "file:///Users/jim/.pub-cache/hosted/pub.dev/dbus-0.7.12",
       "packageUri": "lib/",
@@ -264,6 +270,12 @@
       "rootUri": "file:///Users/jim/.pub-cache/hosted/pub.dev/package_info_plus_platform_interface-3.2.1",
       "packageUri": "lib/",
       "languageVersion": "2.18"
+    },
+    {
+      "name": "pasteboard",
+      "rootUri": "file:///Users/jim/.pub-cache/hosted/pub.dev/pasteboard-0.4.0",
+      "packageUri": "lib/",
+      "languageVersion": "3.4"
     },
     {
       "name": "path",

@@ -8,14 +8,8 @@
       "languageVersion": "3.3"
     },
     {
-      "name": "asn1lib",
-      "rootUri": "file:///Users/jim/.pub-cache/hosted/pub.dev/asn1lib-1.6.5",
-      "packageUri": "lib/",
-      "languageVersion": "3.0"
-    },
-    {
       "name": "async",
-      "rootUri": "file:///Users/jim/.pub-cache/hosted/pub.dev/async-2.13.0",
+      "rootUri": "file:///Users/jim/.pub-cache/hosted/pub.dev/async-2.13.1",
       "packageUri": "lib/",
       "languageVersion": "3.4"
     },
@@ -57,21 +51,15 @@
     },
     {
       "name": "connectivity_plus",
-      "rootUri": "file:///Users/jim/.pub-cache/hosted/pub.dev/connectivity_plus-7.0.0",
+      "rootUri": "file:///Users/jim/.pub-cache/hosted/pub.dev/connectivity_plus-7.1.1",
       "packageUri": "lib/",
       "languageVersion": "3.2"
     },
     {
       "name": "connectivity_plus_platform_interface",
-      "rootUri": "file:///Users/jim/.pub-cache/hosted/pub.dev/connectivity_plus_platform_interface-2.0.1",
+      "rootUri": "file:///Users/jim/.pub-cache/hosted/pub.dev/connectivity_plus_platform_interface-2.1.0",
       "packageUri": "lib/",
       "languageVersion": "2.18"
-    },
-    {
-      "name": "convert",
-      "rootUri": "file:///Users/jim/.pub-cache/hosted/pub.dev/convert-3.1.2",
-      "packageUri": "lib/",
-      "languageVersion": "3.4"
     },
     {
       "name": "cross_file",
@@ -92,20 +80,14 @@
       "languageVersion": "3.9"
     },
     {
-      "name": "dartssh2",
-      "rootUri": "file:///Users/jim/.pub-cache/hosted/pub.dev/dartssh2-2.13.0",
-      "packageUri": "lib/",
-      "languageVersion": "2.17"
-    },
-    {
       "name": "dbus",
-      "rootUri": "file:///Users/jim/.pub-cache/hosted/pub.dev/dbus-0.7.12",
+      "rootUri": "file:///Users/jim/.pub-cache/hosted/pub.dev/dbus-0.7.14",
       "packageUri": "lib/",
       "languageVersion": "2.17"
     },
     {
       "name": "device_info_plus",
-      "rootUri": "file:///Users/jim/.pub-cache/hosted/pub.dev/device_info_plus-12.3.0",
+      "rootUri": "file:///Users/jim/.pub-cache/hosted/pub.dev/device_info_plus-12.4.0",
       "packageUri": "lib/",
       "languageVersion": "3.7"
     },
@@ -122,8 +104,14 @@
       "languageVersion": "2.12"
     },
     {
+      "name": "fake_async",
+      "rootUri": "file:///Users/jim/.pub-cache/hosted/pub.dev/fake_async-1.3.3",
+      "packageUri": "lib/",
+      "languageVersion": "3.3"
+    },
+    {
       "name": "ffi",
-      "rootUri": "file:///Users/jim/.pub-cache/hosted/pub.dev/ffi-2.1.5",
+      "rootUri": "file:///Users/jim/.pub-cache/hosted/pub.dev/ffi-2.2.0",
       "packageUri": "lib/",
       "languageVersion": "3.7"
     },
@@ -164,6 +152,12 @@
       "languageVersion": "2.12"
     },
     {
+      "name": "flutter_lints",
+      "rootUri": "file:///Users/jim/.pub-cache/hosted/pub.dev/flutter_lints-3.0.2",
+      "packageUri": "lib/",
+      "languageVersion": "3.1"
+    },
+    {
       "name": "flutter_localizations",
       "rootUri": "file:///Users/jim/flutter/packages/flutter_localizations",
       "packageUri": "lib/",
@@ -189,13 +183,19 @@
     },
     {
       "name": "flutter_plugin_android_lifecycle",
-      "rootUri": "file:///Users/jim/.pub-cache/hosted/pub.dev/flutter_plugin_android_lifecycle-2.0.33",
+      "rootUri": "file:///Users/jim/.pub-cache/hosted/pub.dev/flutter_plugin_android_lifecycle-2.0.35",
+      "packageUri": "lib/",
+      "languageVersion": "3.10"
+    },
+    {
+      "name": "flutter_svg",
+      "rootUri": "file:///Users/jim/.pub-cache/hosted/pub.dev/flutter_svg-2.3.0",
       "packageUri": "lib/",
       "languageVersion": "3.9"
     },
     {
-      "name": "flutter_svg",
-      "rootUri": "file:///Users/jim/.pub-cache/hosted/pub.dev/flutter_svg-2.2.3",
+      "name": "flutter_test",
+      "rootUri": "file:///Users/jim/flutter/packages/flutter_test",
       "packageUri": "lib/",
       "languageVersion": "3.8"
     },
@@ -230,16 +230,46 @@
       "languageVersion": "3.3"
     },
     {
-      "name": "js",
-      "rootUri": "file:///Users/jim/.pub-cache/hosted/pub.dev/js-0.7.2",
+      "name": "jni",
+      "rootUri": "file:///Users/jim/.pub-cache/hosted/pub.dev/jni-1.0.0",
       "packageUri": "lib/",
-      "languageVersion": "3.7"
+      "languageVersion": "3.3"
+    },
+    {
+      "name": "jni_flutter",
+      "rootUri": "file:///Users/jim/.pub-cache/hosted/pub.dev/jni_flutter-1.0.1",
+      "packageUri": "lib/",
+      "languageVersion": "3.3"
     },
     {
       "name": "json_annotation",
-      "rootUri": "file:///Users/jim/.pub-cache/hosted/pub.dev/json_annotation-4.10.0",
+      "rootUri": "file:///Users/jim/.pub-cache/hosted/pub.dev/json_annotation-4.12.0",
       "packageUri": "lib/",
       "languageVersion": "3.9"
+    },
+    {
+      "name": "leak_tracker",
+      "rootUri": "file:///Users/jim/.pub-cache/hosted/pub.dev/leak_tracker-11.0.2",
+      "packageUri": "lib/",
+      "languageVersion": "3.2"
+    },
+    {
+      "name": "leak_tracker_flutter_testing",
+      "rootUri": "file:///Users/jim/.pub-cache/hosted/pub.dev/leak_tracker_flutter_testing-3.0.10",
+      "packageUri": "lib/",
+      "languageVersion": "3.2"
+    },
+    {
+      "name": "leak_tracker_testing",
+      "rootUri": "file:///Users/jim/.pub-cache/hosted/pub.dev/leak_tracker_testing-3.0.2",
+      "packageUri": "lib/",
+      "languageVersion": "3.2"
+    },
+    {
+      "name": "lints",
+      "rootUri": "file:///Users/jim/.pub-cache/hosted/pub.dev/lints-3.0.0",
+      "packageUri": "lib/",
+      "languageVersion": "3.0"
     },
     {
       "name": "logging",
@@ -249,15 +279,15 @@
     },
     {
       "name": "markdown",
-      "rootUri": "file:///Users/jim/.pub-cache/hosted/pub.dev/markdown-7.3.0",
+      "rootUri": "file:///Users/jim/.pub-cache/hosted/pub.dev/markdown-7.3.1",
       "packageUri": "lib/",
-      "languageVersion": "3.2"
+      "languageVersion": "3.9"
     },
     {
       "name": "matcher",
-      "rootUri": "file:///Users/jim/.pub-cache/hosted/pub.dev/matcher-0.12.18",
+      "rootUri": "file:///Users/jim/.pub-cache/hosted/pub.dev/matcher-0.12.17",
       "packageUri": "lib/",
-      "languageVersion": "3.7"
+      "languageVersion": "3.4"
     },
     {
       "name": "material_color_utilities",
@@ -296,8 +326,14 @@
       "languageVersion": "2.12"
     },
     {
+      "name": "package_config",
+      "rootUri": "file:///Users/jim/.pub-cache/hosted/pub.dev/package_config-2.2.0",
+      "packageUri": "lib/",
+      "languageVersion": "3.4"
+    },
+    {
       "name": "package_info_plus",
-      "rootUri": "file:///Users/jim/.pub-cache/hosted/pub.dev/package_info_plus-9.0.0",
+      "rootUri": "file:///Users/jim/.pub-cache/hosted/pub.dev/package_info_plus-9.0.1",
       "packageUri": "lib/",
       "languageVersion": "3.3"
     },
@@ -333,7 +369,7 @@
     },
     {
       "name": "path_provider_android",
-      "rootUri": "file:///Users/jim/.pub-cache/hosted/pub.dev/path_provider_android-2.2.22",
+      "rootUri": "file:///Users/jim/.pub-cache/hosted/pub.dev/path_provider_android-2.3.1",
       "packageUri": "lib/",
       "languageVersion": "3.9"
     },
@@ -363,15 +399,9 @@
     },
     {
       "name": "petitparser",
-      "rootUri": "file:///Users/jim/.pub-cache/hosted/pub.dev/petitparser-7.0.1",
+      "rootUri": "file:///Users/jim/.pub-cache/hosted/pub.dev/petitparser-7.0.2",
       "packageUri": "lib/",
       "languageVersion": "3.8"
-    },
-    {
-      "name": "pinenacl",
-      "rootUri": "file:///Users/jim/.pub-cache/hosted/pub.dev/pinenacl-0.6.0",
-      "packageUri": "lib/",
-      "languageVersion": "3.4"
     },
     {
       "name": "platform",
@@ -386,92 +416,80 @@
       "languageVersion": "3.0"
     },
     {
-      "name": "pointycastle",
-      "rootUri": "file:///Users/jim/.pub-cache/hosted/pub.dev/pointycastle-3.9.1",
-      "packageUri": "lib/",
-      "languageVersion": "3.2"
-    },
-    {
       "name": "provider",
       "rootUri": "file:///Users/jim/.pub-cache/hosted/pub.dev/provider-6.1.5+1",
       "packageUri": "lib/",
       "languageVersion": "2.12"
     },
     {
-      "name": "quiver",
-      "rootUri": "file:///Users/jim/.pub-cache/hosted/pub.dev/quiver-3.2.2",
-      "packageUri": "lib/",
-      "languageVersion": "2.17"
-    },
-    {
       "name": "screen_brightness",
-      "rootUri": "file:///Users/jim/.pub-cache/hosted/pub.dev/screen_brightness-2.1.7",
+      "rootUri": "file:///Users/jim/.pub-cache/hosted/pub.dev/screen_brightness-2.1.9",
       "packageUri": "lib/",
       "languageVersion": "3.0"
     },
     {
       "name": "screen_brightness_android",
-      "rootUri": "file:///Users/jim/.pub-cache/hosted/pub.dev/screen_brightness_android-2.1.3",
+      "rootUri": "file:///Users/jim/.pub-cache/hosted/pub.dev/screen_brightness_android-2.1.5",
       "packageUri": "lib/",
       "languageVersion": "3.0"
     },
     {
       "name": "screen_brightness_ios",
-      "rootUri": "file:///Users/jim/.pub-cache/hosted/pub.dev/screen_brightness_ios-2.1.2",
+      "rootUri": "file:///Users/jim/.pub-cache/hosted/pub.dev/screen_brightness_ios-2.1.3",
       "packageUri": "lib/",
       "languageVersion": "3.0"
     },
     {
       "name": "screen_brightness_macos",
-      "rootUri": "file:///Users/jim/.pub-cache/hosted/pub.dev/screen_brightness_macos-2.1.1",
+      "rootUri": "file:///Users/jim/.pub-cache/hosted/pub.dev/screen_brightness_macos-2.1.2",
       "packageUri": "lib/",
       "languageVersion": "3.0"
     },
     {
       "name": "screen_brightness_ohos",
-      "rootUri": "file:///Users/jim/.pub-cache/hosted/pub.dev/screen_brightness_ohos-2.1.2",
+      "rootUri": "file:///Users/jim/.pub-cache/hosted/pub.dev/screen_brightness_ohos-2.1.3",
       "packageUri": "lib/",
       "languageVersion": "3.0"
     },
     {
       "name": "screen_brightness_platform_interface",
-      "rootUri": "file:///Users/jim/.pub-cache/hosted/pub.dev/screen_brightness_platform_interface-2.1.0",
+      "rootUri": "file:///Users/jim/.pub-cache/hosted/pub.dev/screen_brightness_platform_interface-2.1.1",
       "packageUri": "lib/",
       "languageVersion": "3.0"
     },
     {
       "name": "screen_brightness_windows",
-      "rootUri": "file:///Users/jim/.pub-cache/hosted/pub.dev/screen_brightness_windows-2.1.0",
+      "rootUri": "file:///Users/jim/.pub-cache/hosted/pub.dev/screen_brightness_windows-2.1.1",
       "packageUri": "lib/",
       "languageVersion": "3.0"
     },
     {
       "name": "screen_retriever",
-      "rootUri": "file:///Users/jim/.pub-cache/hosted/pub.dev/screen_retriever-0.2.0",
+      "rootUri": "file:///Users/jim/.pub-cache/hosted/pub.dev/screen_retriever-0.2.1",
       "packageUri": "lib/",
       "languageVersion": "3.0"
     },
     {
       "name": "screen_retriever_linux",
-      "rootUri": "file:///Users/jim/.pub-cache/hosted/pub.dev/screen_retriever_linux-0.2.0",
+      "rootUri": "file:///Users/jim/.pub-cache/hosted/pub.dev/screen_retriever_linux-0.2.1",
       "packageUri": "lib/",
       "languageVersion": "3.0"
     },
     {
       "name": "screen_retriever_macos",
-      "rootUri": "file:///Users/jim/.pub-cache/hosted/pub.dev/screen_retriever_macos-0.2.0",
+      "rootUri": "file:///Users/jim/.pub-cache/hosted/pub.dev/screen_retriever_macos-0.2.1",
       "packageUri": "lib/",
       "languageVersion": "3.0"
     },
     {
       "name": "screen_retriever_platform_interface",
-      "rootUri": "file:///Users/jim/.pub-cache/hosted/pub.dev/screen_retriever_platform_interface-0.2.0",
+      "rootUri": "file:///Users/jim/.pub-cache/hosted/pub.dev/screen_retriever_platform_interface-0.2.1",
       "packageUri": "lib/",
       "languageVersion": "3.0"
     },
     {
       "name": "screen_retriever_windows",
-      "rootUri": "file:///Users/jim/.pub-cache/hosted/pub.dev/screen_retriever_windows-0.2.0",
+      "rootUri": "file:///Users/jim/.pub-cache/hosted/pub.dev/screen_retriever_windows-0.2.1",
       "packageUri": "lib/",
       "languageVersion": "3.0"
     },
@@ -495,7 +513,7 @@
     },
     {
       "name": "share_plus",
-      "rootUri": "file:///Users/jim/.pub-cache/hosted/pub.dev/share_plus-12.0.1",
+      "rootUri": "file:///Users/jim/.pub-cache/hosted/pub.dev/share_plus-12.0.2",
       "packageUri": "lib/",
       "languageVersion": "3.4"
     },
@@ -507,13 +525,13 @@
     },
     {
       "name": "shared_preferences",
-      "rootUri": "file:///Users/jim/.pub-cache/hosted/pub.dev/shared_preferences-2.5.4",
+      "rootUri": "file:///Users/jim/.pub-cache/hosted/pub.dev/shared_preferences-2.5.5",
       "packageUri": "lib/",
       "languageVersion": "3.9"
     },
     {
       "name": "shared_preferences_android",
-      "rootUri": "file:///Users/jim/.pub-cache/hosted/pub.dev/shared_preferences_android-2.4.20",
+      "rootUri": "file:///Users/jim/.pub-cache/hosted/pub.dev/shared_preferences_android-2.4.23",
       "packageUri": "lib/",
       "languageVersion": "3.9"
     },
@@ -531,9 +549,9 @@
     },
     {
       "name": "shared_preferences_platform_interface",
-      "rootUri": "file:///Users/jim/.pub-cache/hosted/pub.dev/shared_preferences_platform_interface-2.4.1",
+      "rootUri": "file:///Users/jim/.pub-cache/hosted/pub.dev/shared_preferences_platform_interface-2.4.2",
       "packageUri": "lib/",
-      "languageVersion": "3.2"
+      "languageVersion": "3.9"
     },
     {
       "name": "shared_preferences_web",
@@ -591,9 +609,9 @@
     },
     {
       "name": "test_api",
-      "rootUri": "file:///Users/jim/.pub-cache/hosted/pub.dev/test_api-0.7.9",
+      "rootUri": "file:///Users/jim/.pub-cache/hosted/pub.dev/test_api-0.7.7",
       "packageUri": "lib/",
-      "languageVersion": "3.7"
+      "languageVersion": "3.5"
     },
     {
       "name": "tuple",
@@ -621,13 +639,13 @@
     },
     {
       "name": "url_launcher_android",
-      "rootUri": "file:///Users/jim/.pub-cache/hosted/pub.dev/url_launcher_android-6.3.28",
+      "rootUri": "file:///Users/jim/.pub-cache/hosted/pub.dev/url_launcher_android-6.3.30",
       "packageUri": "lib/",
-      "languageVersion": "3.9"
+      "languageVersion": "3.10"
     },
     {
       "name": "url_launcher_ios",
-      "rootUri": "file:///Users/jim/.pub-cache/hosted/pub.dev/url_launcher_ios-6.4.0",
+      "rootUri": "file:///Users/jim/.pub-cache/hosted/pub.dev/url_launcher_ios-6.4.1",
       "packageUri": "lib/",
       "languageVersion": "3.10"
     },
@@ -651,7 +669,7 @@
     },
     {
       "name": "url_launcher_web",
-      "rootUri": "file:///Users/jim/.pub-cache/hosted/pub.dev/url_launcher_web-2.4.2",
+      "rootUri": "file:///Users/jim/.pub-cache/hosted/pub.dev/url_launcher_web-2.4.3",
       "packageUri": "lib/",
       "languageVersion": "3.10"
     },
@@ -663,15 +681,15 @@
     },
     {
       "name": "uuid",
-      "rootUri": "file:///Users/jim/.pub-cache/hosted/pub.dev/uuid-4.5.2",
+      "rootUri": "file:///Users/jim/.pub-cache/hosted/pub.dev/uuid-4.5.3",
       "packageUri": "lib/",
       "languageVersion": "3.0"
     },
     {
       "name": "vector_graphics",
-      "rootUri": "file:///Users/jim/.pub-cache/hosted/pub.dev/vector_graphics-1.1.19",
+      "rootUri": "file:///Users/jim/.pub-cache/hosted/pub.dev/vector_graphics-1.2.2",
       "packageUri": "lib/",
-      "languageVersion": "3.6"
+      "languageVersion": "3.9"
     },
     {
       "name": "vector_graphics_codec",
@@ -681,9 +699,9 @@
     },
     {
       "name": "vector_graphics_compiler",
-      "rootUri": "file:///Users/jim/.pub-cache/hosted/pub.dev/vector_graphics_compiler-1.1.20",
+      "rootUri": "file:///Users/jim/.pub-cache/hosted/pub.dev/vector_graphics_compiler-1.2.5",
       "packageUri": "lib/",
-      "languageVersion": "3.9"
+      "languageVersion": "3.10"
     },
     {
       "name": "vector_math",
@@ -692,16 +710,22 @@
       "languageVersion": "3.1"
     },
     {
-      "name": "wakelock_plus",
-      "rootUri": "file:///Users/jim/.pub-cache/hosted/pub.dev/wakelock_plus-1.4.0",
+      "name": "vm_service",
+      "rootUri": "file:///Users/jim/.pub-cache/hosted/pub.dev/vm_service-15.2.0",
       "packageUri": "lib/",
-      "languageVersion": "3.4"
+      "languageVersion": "3.5"
+    },
+    {
+      "name": "wakelock_plus",
+      "rootUri": "file:///Users/jim/.pub-cache/hosted/pub.dev/wakelock_plus-1.5.2",
+      "packageUri": "lib/",
+      "languageVersion": "3.10"
     },
     {
       "name": "wakelock_plus_platform_interface",
-      "rootUri": "file:///Users/jim/.pub-cache/hosted/pub.dev/wakelock_plus_platform_interface-1.3.0",
+      "rootUri": "file:///Users/jim/.pub-cache/hosted/pub.dev/wakelock_plus_platform_interface-1.5.1",
       "packageUri": "lib/",
-      "languageVersion": "3.4"
+      "languageVersion": "3.10"
     },
     {
       "name": "web",
@@ -741,9 +765,9 @@
     },
     {
       "name": "window_to_front",
-      "rootUri": "file:///Users/jim/.pub-cache/hosted/pub.dev/window_to_front-0.0.3",
+      "rootUri": "file:///Users/jim/.pub-cache/hosted/pub.dev/window_to_front-0.0.4",
       "packageUri": "lib/",
-      "languageVersion": "2.12"
+      "languageVersion": "3.0"
     },
     {
       "name": "xdg_directories",
@@ -758,19 +782,7 @@
       "languageVersion": "3.8"
     },
     {
-      "name": "xterm",
-      "rootUri": "file:///Users/jim/.pub-cache/hosted/pub.dev/xterm-4.0.0",
-      "packageUri": "lib/",
-      "languageVersion": "3.0"
-    },
-    {
-      "name": "zmodem",
-      "rootUri": "file:///Users/jim/.pub-cache/hosted/pub.dev/zmodem-0.0.6",
-      "packageUri": "lib/",
-      "languageVersion": "2.18"
-    },
-    {
-      "name": "flet_terminal",
+      "name": "flet_marching_ants",
       "rootUri": "../",
       "packageUri": "lib/",
       "languageVersion": "3.3"
